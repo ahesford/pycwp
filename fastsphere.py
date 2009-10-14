@@ -7,8 +7,8 @@ theta samples along the column dimension.
 
 import numpy
 import math
-
-import matplotlib.pyplot as plt
+import pylab
+from matplotlib import ticker
 
 def readbmat (fname, type = numpy.complex128, dimen = 2):
 	'''
@@ -103,10 +103,23 @@ def linpat (angle, pattern, column):
 	'''
 	Plot the pattern of a specified column using provided angle indices.
 	'''
+	majorLocator = ticker.MultipleLocator (90)
+	majorFormatter = ticker.FormatStrFormatter ('%d')
+	minorLocator = ticker.MultipleLocator (15)
+
 	# Normalize the pattern by the global maximum
 	b = numpy.abs(pattern[:,column]) / numpy.amax (numpy.abs (pattern))
 
-	return plt.semilogy (angle, b)
+	# Plot the line and grab the line structure
+	line = pylab.semilogy (angle, b)
+	ax = pylab.gca ()
+
+	# Set fancy ticking on the axis
+	ax.xaxis.set_major_locator (majorLocator)
+	ax.xaxis.set_major_formatter (majorFormatter)
+	ax.xaxis.set_minor_locator (minorLocator)
+
+	return line
 
 def mse (x, y):
 	'''
