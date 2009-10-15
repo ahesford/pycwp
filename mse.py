@@ -6,7 +6,7 @@ import fastsphere
 import numpy
 
 def usage (progname = 'mse.py'):
-	print "Usage: %s [-h] [-d dimension] -c <cmpfile> [...] -r <reffile>" % progname
+	print "Usage: %s [-h] [-d dimension] [-n] -c <cmpfile> [...] -r <reffile>" % progname
 
 def main (argv = None):
 	if argv is None:
@@ -16,8 +16,9 @@ def main (argv = None):
 	reffile = None
 	cmpfile = []
 	dim = 2
+	normalize = False
 
-	optlist, args = getopt.getopt (argv, 'r:c:d:h')
+	optlist, args = getopt.getopt (argv, 'nr:c:d:h')
 
 	# Parse the options list
 	for opt in optlist:
@@ -27,6 +28,8 @@ def main (argv = None):
 			cmpfile.append (opt[1])
 		elif opt[0] == '-d':
 			dim = int(opt[1])
+		elif opt[0] == '-n':
+			normalize = True
 		else:
 			usage (progname)
 			return 128
@@ -37,10 +40,12 @@ def main (argv = None):
 
 	# Read the reference file
 	ref = fastsphere.readbmat (reffile, dimen=dim)
+	if normalize: ref = ref / fastsphere.complexmax (ref)
 
 	# Read each comparison file and report the MSE
 	for idx, fpair in enumerate (cmpfile):
 		cmp = fastsphere.readbmat (fpair, dimen=dim)
+		if normalize: cmp = cmp / fastsphere.complexmax (cmp)
 		print "MSE for file %d: %0.6g" % (idx, fastsphere.mse (cmp, ref))
 
 	return 0
