@@ -10,9 +10,9 @@ import math
 import pylab
 from matplotlib import ticker
 
-def readbmat (fname, type = numpy.complex128, dimen = 2):
+def readbmat (fname, dimen = 2, type = None):
 	'''
-	Read a binary, complex matrix file of the specified type and dimensionality.
+	Read a binary, complex matrix file, auto-sensing the precision
 	'''
 	infile = open (fname, mode='rb')
 
@@ -22,8 +22,26 @@ def readbmat (fname, type = numpy.complex128, dimen = 2):
 	# Conveniently precompute the number of elements to read
 	nelts = numpy.prod (dimspec)
 
-	# Read the binary values into the array
-	data = numpy.fromfile (infile, dtype = type, count = nelts)
+	# Store the location of the start of the data
+	floc = infile.tell()
+
+	# If the type was provided, don't try to auto-sense
+	if type is not None:
+		data = numpy.fromfile (infile, dtype = type, count = -1)
+		if data.size != nelts: data = None;
+		return data
+
+	# Read the all binary values into the array as complex double
+	data = numpy.fromfile (infile, dtype = numpy.complex128, count = -1)
+
+	# If the read didn't pick up enough elements, try complex float
+	if data.size != nelts:
+		# Back to the start of the data
+		infile.seek (floc)
+		data = numpy.fromfile (infile, dtype = numpy.complex64, count = -1)
+		
+		# Read still failed to agree with header, return nothing
+		if data.size != nelts: return None
 
 	# Rework the array as a numpy array with the proper shape
 	data = data.reshape (dimspec, order = 'F')
