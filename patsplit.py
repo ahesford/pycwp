@@ -32,8 +32,7 @@ def main (argv = None):
 	mat = fastsphere.readbmat (fname)
 
 	# Reshape each column and write it
-	for i in range(mat.shape[1]):
-		col = mat[:,i]
+	for i, col in enumerate(mat.transpose()):
 		if shape is not None:
 			col = col.reshape (shape, order = 'F')
 		fastsphere.writebmat (col, fname + '.%03d' % i)

@@ -127,20 +127,15 @@ def gaussleg (m, tol = 1e-9):
 				break
 	return nodes, weights
 
-def complexmax (a, order = 'C'):
+def complexmax (a):
 	'''
 	Compute the maximum element of a complex array like MATLAB does.
 	'''
-	maxidx = 0
-	maxval = 0
-	b = a.flatten (order)
-	
-	for i,v in enumerate(b):
-		if abs(v) > maxval:
-			maxval = abs(v)
-			maxidx = i
-	
-	return b[maxidx]
+	# Flatten the array. Can this be done without duplicating storage?
+	b = a.flatten()
+
+	# Return the maximum value
+	return reduce (lambda x, y: abs(x) > abs(y) and x or y, b)
 
 def linpat (angle, pattern, column):
 	'''
@@ -168,8 +163,8 @@ def mse (x, y):
 	'''
 	Report the mean squared error between the matrix x and the matrix y.
 	'''
-	err = numpy.sum (numpy.abs(x - y).flatten()**2)
-	err /= numpy.sum (numpy.abs(y).flatten()**2)
+	err = numpy.sum (numpy.abs(x - y)**2)
+	err /= numpy.sum (numpy.abs(y)**2)
 
 	return math.sqrt(err)
 
