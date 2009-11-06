@@ -52,8 +52,9 @@ def main (argv = None):
 	(theta, T) = fastsphere.focusedbeam (f, c, w, l, z)
 	theta = [thr * 180 / pi for thr in theta]
 
-	for i in range(len(theta)):
-		print "%0.10f %0.10f %0.10f %0.10f" % (real(T[i]), imag(T[i]), theta[i], phi)
+	# Print the angles in ascending order
+	for c, t in zip(T[::-1], theta[::-1]):
+		print "%0.10f %0.10f %0.10f %0.10f" % (real(c), imag(c), t, phi)
 
 	if plot:
 		pylab.plot (theta, real(T), theta, imag(T), '--', theta, abs(T), '--o')
