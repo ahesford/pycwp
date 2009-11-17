@@ -6,7 +6,7 @@ from numpy import *
 
 import pylab
 
-from ajh import focusing
+from pyajh import focusing
 
 def usage (progname = 'elevbeam.py'):
 	print 'Usage: %s [-h] [-p] [-f freq] [-c speed] [-a phi]' % progname + \

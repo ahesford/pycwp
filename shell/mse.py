@@ -4,7 +4,7 @@ import sys
 import getopt
 import numpy
 
-from ajh import mio, cutil
+from pyajh import mio, cutil
 
 def usage (progname = 'mse.py'):
 	print "Usage: %s [-h] [-d dimension] [-n] -c <cmpfile> [...] -r <reffile>" % progname

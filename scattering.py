@@ -7,8 +7,8 @@ import numpy
 import math
 import pylab
 
-from ajh.mio import readbmat
-from ajh.cutil import gaussleg
+from pyajh.mio import readbmat
+from pyajh.cutil import gaussleg
 
 from matplotlib import ticker
 

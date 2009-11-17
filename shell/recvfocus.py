@@ -2,7 +2,7 @@
 
 import sys
 
-from ajh import mio, focusing
+from pyajh import mio, focusing
 
 def usage (progname = 'recvfocus.py'):
 	print "Usage: %s <input> <output>"

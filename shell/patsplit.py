@@ -3,7 +3,7 @@
 import sys
 import numpy
 
-from ajh import mio
+from pyajh import mio
 
 def usage (progname = 'patsplit.py'):
 	print "Usage: %s [-h] <file> [x,y]" % progname
