@@ -8,7 +8,7 @@ import numpy.fft as fft
 
 import scipy.interpolate as intp
 
-def focusedbeam (f, c0, w, x_f, z_off):
+def focusedbeam (f, c0, w, x_f, shft = 0.0, z_off = 0.0):
 	'''
 	Compute the coefficients for an elevation-focused beam with a the
 	following paramters:
@@ -17,7 +17,8 @@ def focusedbeam (f, c0, w, x_f, z_off):
 		c0:    Background sound speed (m/s)
 		w:     Aperture width (m)
 		x_f:   Focus length (m)
-		z_off: Height offset (m)
+		shft:  A transverse focus shift (m) [Default: 0]
+		z_off: Height offset (m) [Default: 0]
 	'''
 	# Wave number and wavelength
 	k0 = 2.0 * math.pi * f / c0
@@ -52,7 +53,8 @@ def focusedbeam (f, c0, w, x_f, z_off):
 	T = fft.fftshift (fft.fft (fft.fftshift (t)))
 
 	# Use a propagation phase factor
-	prop = numpy.exp (1j * 2.0 * math.pi * x_f * numpy.sqrt((f/c0)**2 - vz**2))
+	prop = numpy.exp (1j * 2.0 * math.pi *
+			(x_f + shft) * numpy.sqrt((f/c0)**2 - vz**2))
 	# Zero-out the evanescent parts
 	prop = (abs(vz) >= abs(f/c0)).choose(prop,0)
 
