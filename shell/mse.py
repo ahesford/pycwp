@@ -2,8 +2,9 @@
 
 import sys
 import getopt
-import fastsphere
 import numpy
+
+from ajh import mio, cutil
 
 def usage (progname = 'mse.py'):
 	print "Usage: %s [-h] [-d dimension] [-n] -c <cmpfile> [...] -r <reffile>" % progname
@@ -39,14 +40,14 @@ def main (argv = None):
 		return 128
 
 	# Read the reference file
-	ref = fastsphere.readbmat (reffile, dimen=dim)
-	if normalize: ref = ref / fastsphere.complexmax (ref)
+	ref = mio.readbmat (reffile, dimen=dim)
+	if normalize: ref = ref / cutil.complexmax (ref)
 
 	# Read each comparison file and report the MSE
 	for idx, fpair in enumerate (cmpfile):
-		cmp = fastsphere.readbmat (fpair, dimen=dim)
-		if normalize: cmp = cmp / fastsphere.complexmax (cmp)
-		print "MSE for file %d: %0.6g" % (idx, fastsphere.mse (cmp, ref))
+		cmp = mio.readbmat (fpair, dimen=dim)
+		if normalize: cmp = cmp / cutil.complexmax (cmp)
+		print "MSE for file %d: %0.6g" % (idx, cutil.mse (cmp, ref))
 
 	return 0
 

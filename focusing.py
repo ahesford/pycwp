@@ -1,0 +1,88 @@
+'''
+Routines for dealing with focused beams in three dimensions.
+'''
+
+import numpy
+import math
+import numpy.fft as fft
+
+import scipy.interpolate as intp
+
+def focusedbeam (f, c0, w, x_f, z_off):
+	'''
+	Compute the coefficients for an elevation-focused beam with a the
+	following paramters:
+
+		f:     Frequency (Hz)
+		c0:    Background sound speed (m/s)
+		w:     Aperture width (m)
+		x_f:   Focus length (m)
+		z_off: Height offset (m)
+	'''
+	# Wave number and wavelength
+	k0 = 2.0 * math.pi * f / c0
+	wl = c0 / f
+	
+	# Elevation spatial sampling frequency
+	nusz = 2.0 * f / c0
+	
+	# Sample spacing in z
+	delz = 1 / nusz
+	
+	# The number of samples to use in z
+	nz = math.trunc (4.0 * (w + abs(z_off)) * nusz)
+
+	# SD of Gaussian amplitude
+	sigma = w / (2.0 * math.sqrt (math.pi));
+	
+	# Find the largest power of 2 greater than nz to optimize the FFT
+	nz = 2**math.ceil(math.log(nz,2))
+	
+	# The spatial frequency vector
+	vz = numpy.arange (-nz/2, nz/2) * nusz / nz
+	# The spatial sampling vector
+	za = numpy.arange (-nz/2, nz/2) * delz
+
+	# Build the spatial samples: phase first
+	t = numpy.exp(-1j * k0 * numpy.sqrt(x_f**2 + (za - z_off)**2))
+	# Build the spatial samples: now the envelope
+	t *= delz * math.sqrt(2.0) * numpy.exp(-(za - z_off)**2 / (2 * sigma**2)) 
+
+	# Find the Fourier transform
+	T = fft.fftshift (fft.fft (fft.fftshift (t)))
+
+	# Use a propagation phase factor
+	prop = numpy.exp (1j * 2.0 * math.pi * x_f * numpy.sqrt((f/c0)**2 - vz**2))
+	# Zero-out the evanescent parts
+	prop = (abs(vz) >= abs(f/c0)).choose(prop,0)
+
+	# Apply the masked propagation factor
+	T *= prop
+
+	# Record the angular samples
+	theta = [math.acos (wl * vze) for vze in vz]
+	
+	return (theta, T)
+
+def recvfocus (mat, thr, coeffs, theta):
+	'''
+	Apply receive focusing to a 3-D samples, with polar angles given 
+	by thr, to generate a 2-D pattern. The focusing coefficients are
+	defined over the polar angles theta.
+	'''
+
+	# Reverse the coefficients if theta is non-increasing.
+	if theta[1] < theta[0]:
+		theta.reverse()
+		coeffs.reverse()
+
+	# Build the interpolation function.
+	cfunc = intp.interp1d (theta, coeffs, kind='quadratic',
+			bounds_error=False, fill_value=0.+0j)
+
+	# Compute the new coefficients.
+	nc = cfunc (thr)
+
+	# Return the focused array.
+	return numpy.dot(mat, nc)
+

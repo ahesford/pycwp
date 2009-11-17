@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 
 import sys
-import fastsphere
 import numpy
+
+from ajh import mio
 
 def usage (progname = 'patsplit.py'):
 	print "Usage: %s [-h] <file> [x,y]" % progname
@@ -29,13 +30,13 @@ def main (argv = None):
 		shape = tuple ([int(x) for x in argv[0].split(',')])
 
 	# Read the matrix
-	mat = fastsphere.readbmat (fname)
+	mat = mio.readbmat (fname)
 
 	# Reshape each column and write it
 	for i, col in enumerate(mat.transpose()):
 		if shape is not None:
 			col = col.reshape (shape, order = 'F')
-		fastsphere.writebmat (col, fname + '.%03d' % i)
+		mio.writebmat (col, fname + '.%03d' % i)
 
 	return 0
 

@@ -5,7 +5,8 @@ import getopt
 from numpy import *
 
 import pylab
-import fastsphere
+
+from ajh import focusing
 
 def usage (progname = 'elevbeam.py'):
 	print 'Usage: %s [-h] [-p] [-f freq] [-c speed] [-a phi]' % progname + \
@@ -49,7 +50,7 @@ def main (argv = None):
 			usage (progname)
 			return 128
 	
-	(theta, T) = fastsphere.focusedbeam (f, c, w, l, z)
+	(theta, T) = focusing.focusedbeam (f, c, w, l, z)
 	theta = [thr * 180 / pi for thr in theta]
 
 	# Print the angles in ascending order
