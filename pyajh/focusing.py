@@ -8,6 +8,8 @@ import numpy.fft as fft
 
 import scipy.interpolate as intp
 
+from pyajh import cutil
+
 def focusedbeam (f, c0, w, x_f, shft = 0.0, z_off = 0.0):
 	'''
 	Compute the coefficients for an elevation-focused beam with a the
@@ -88,3 +90,22 @@ def recvfocus (mat, thr, coeffs, theta):
 	# Return the focused array.
 	return numpy.dot(mat, nc)
 
+def focusfield (k, x, z, coeffs, theta, normalize=False):
+	'''
+	Compute the field for plane waves with amplitudes given by coeffs,
+	elevation angles given by theta, wave number k, transverse position
+	x and elevation position z. Optionally normalize the field.
+	'''
+
+	# Set up the blank field storage
+	fld = numpy.zeros(x.shape, dtype=complex)
+
+	# Add each plane wave to the overall field
+	for (c, t) in zip(coeffs, theta):
+		fld += c * numpy.exp(1j * k * (x * math.sin(t) + z * math.cos(t)))
+
+	# Normalize the field if desired
+	if normalize:
+		fld /= cutil.complexmax(fld)
+
+	return fld
