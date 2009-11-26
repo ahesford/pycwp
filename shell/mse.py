@@ -47,7 +47,9 @@ def main (argv = None):
 	for idx, fpair in enumerate (cmpfile):
 		cmp = mio.readbmat (fpair, dimen=dim)
 		if normalize: cmp = cmp / cutil.complexmax (cmp)
-		print "MSE for file %d: %0.6g" % (idx, cutil.mse (cmp, ref))
+		print cutil.mse (cmp, ref),
+
+	print ""
 
 	return 0
 
