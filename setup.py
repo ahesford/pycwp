@@ -6,7 +6,7 @@ Setup script.
 from distutils.core import setup
 
 setup(name = "pyajh",
-		version = "1.2",
+		version = "1.3",
 		description = "Useful numerical routines",
 		long_description = ("Routines to manipulate binary matrix files " +
 			"and scattering patterns, and simple numerical routines."),
