@@ -14,12 +14,6 @@ def writebmat (mat, fname):
 	# Pull the shape for writing
 	mshape = numpy.array (mat.shape, dtype='int32')
 
-	# If the shape is one-dimensional, add a one to the end
-	if len(mshape) < 2:
-		mshape = list(mat.shape)
-		mshape.append (1)
-		mshape = numpy.array (mshape, dtype='int32')
-
 	# Write the size header
 	mshape.tofile (outfile)
 	# Write the matrix body in FORTRAN order
