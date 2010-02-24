@@ -20,7 +20,7 @@ def writebmat (mat, fname):
 	mat.flatten('F').tofile (outfile)
 	outfile.close ()
 
-def readbmat (fname, dimen = 2, type = None):
+def readbmat (fname, dimen = 2, type = None, size = None):
 	'''
 	Read a binary, complex matrix file, auto-sensing the precision
 	'''
@@ -28,6 +28,7 @@ def readbmat (fname, dimen = 2, type = None):
 
 	# Read the dimension specification from the file
 	dimspec = numpy.fromfile (infile, dtype=numpy.int32, count=dimen)
+	if size is not None: dimspec = size
 
 	# Conveniently precompute the number of elements to read
 	nelts = numpy.prod (dimspec)
