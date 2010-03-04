@@ -24,39 +24,36 @@ def readbmat (fname, dimen = 2, type = None, size = None):
 	'''
 	Read a binary, complex matrix file, auto-sensing the precision
 	'''
-	infile = open (fname, mode='rb')
+	# If the type was not provided, try a sequence of values
+	if type is None:
+		# The default list of types to try
+		typelist = (numpy.complex128, numpy.complex64,
+				numpy.float64, numpy.float32)
+		# Try each type and short-circuit if the correct one is found
+		for tp in typelist:
+			data = readbmat(fname, dimen, tp, size)
+			if data is not None: return data
 
+	# The type was provided, so do the read
+	infile = open (fname, mode='rb')
+	
 	# Read the dimension specification from the file
 	dimspec = numpy.fromfile (infile, dtype=numpy.int32, count=dimen)
+	# Override the read size with the provided size
 	if size is not None: dimspec = size
-
-	# Conveniently precompute the number of elements to read
+	
+	# The number of elements to be read
 	nelts = numpy.prod (dimspec)
 
-	# Store the location of the start of the data
-	floc = infile.tell()
+	# Read the number of elements provided and close the file
+	data = numpy.fromfile (infile, dtype = type, count = nelts)
+	infile.close()
 
-	# If the type was provided, don't try to auto-sense
-	if type is not None:
-		data = numpy.fromfile (infile, dtype = type, count = -1)
-		if data.size != nelts: data = None;
-	else:
-		# Try complex doubles
-		data = numpy.fromfile (infile, dtype = numpy.complex128, count = -1)
-		
-		# If the read didn't pick up enough elements, try complex float
-		if data.size != nelts:
-			# Back to the start of the data
-			infile.seek (floc)
-			data = numpy.fromfile (infile, dtype = numpy.complex64, count = -1)
-			
-			# Read still failed to agree with header, return nothing
-			if data.size != nelts: data = None;
-			else: data = numpy.array (data, dtype = numpy.complex128)
-			
-	infile.close ()
-
+	# The read failed to capture all requested elements, return nothing
+	if data.size != nelts or data is None: return None
+	
 	# Rework the array as a numpy array with the proper shape
-	if data is not None: data = data.reshape (dimspec, order = 'F')
+	# Fortran order is assumed
+	data = data.reshape (dimspec, order = 'F')
 
 	return data
