@@ -5,7 +5,7 @@ import math
 import numpy.fft as fft
 import scipy.special as spec
 
-from pyajh import cutil
+from pyajh import cutil, harmonic
 
 class SHTransform:
 	'''
@@ -59,7 +59,7 @@ class SHTransform:
 
 		for theta, out in zip (self.thetas, outtr):
 			# Compute the normalized associated Legendre polynomials
-			legpol = cutil.spharm(self.deg-1, self.deg-1, theta)
+			legpol = harmonic.legassoc(self.deg-1, self.deg-1, theta)
 			# Transpose the matrix for iterations
 			legpol = legpol.transpose()
 
@@ -85,7 +85,7 @@ class SHTransform:
 			scale = 2. * math.pi * weight / self.nphi
 
 			# Compute the associated Legendre polynomials
-			legpol = cutil.spharm(self.deg-1, self.deg-1, theta)
+			legpol = harmonic.legassoc(self.deg-1, self.deg-1, theta)
 			# Transpose the matrix for iterations
 			legpol = legpol.transpose()
 
