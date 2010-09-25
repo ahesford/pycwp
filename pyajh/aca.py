@@ -22,6 +22,7 @@ def matrix(eltfunc, nr, nc, tol = 1e-6):
 	u = []
 	v = []
 	zabs = 0.
+	zhist = []
 
 	# Loop through the algorithm
 	for k in xrange(maxrank):
@@ -64,4 +65,7 @@ def matrix(eltfunc, nr, nc, tol = 1e-6):
 
 		if nrmsq <= tol * zabs: break
 
-	return np.array(u), np.array(v)
+		# Store the convergence history of the ACA
+		zhist.append(math.sqrt(nrmsq / zabs))
+
+	return np.array(u), np.array(v), zhist
