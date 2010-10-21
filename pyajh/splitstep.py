@@ -43,16 +43,13 @@ def genprop(k0, nx, ny, dx):
 	# Get the coordinate indices for the slab
 	slice = np.mgrid[-nx/2:nx/2,-ny/2:ny/2]
 
-	# Compute the spatial frequencies
+	# Compute the transverse wave numbers
 	kx = 2. * math.pi * slice[0] / (nx * dx)
 	ky = 2. * math.pi * slice[1] / (ny * dx)
-
-	# Prohibit evanescent waves
 	ksq = kx**2 + ky**2
-	ksq = (ksq < k0**2).choose(0, k0**2 - ksq)
 
 	# Return the propagator, with frequencies shifted for proper alignment
-	return fft.fftshift(np.exp(1j * np.sqrt(ksq) * float(dx)))
+	return fft.fftshift(np.exp(1j * np.sqrt(complex(k0)**2 - ksq) * float(dx)))
 
 def genatten(atten, nt, nx, ny):
 	'''
