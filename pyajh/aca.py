@@ -1,3 +1,7 @@
+'''
+Routines to construct and recompress ACA approximations to matrices.
+'''
+
 import numpy as np
 import numpy.linalg as la
 import math
