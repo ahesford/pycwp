@@ -1,20 +1,20 @@
 #!/usr/bin/env python
 """
-Setup script.
+PyAJH: Userful numerical routines for Pyhon
+
+The PyAJH library is maintained by Andrew J. Hesford to provide useful
+software in Python for computational wave physics and the manipulation
+of binary matrix files.
 """
 
-from distutils.core import setup
+DOCLINES = __doc__.split("\n")
 
-setup(name = "pyajh",
-		version = "1.8",
-		description = "Useful numerical routines",
-		long_description = ("Routines to manipulate binary matrix files " +
-			"and scattering patterns, and simple numerical routines."),
-		author = "Andrew J. Hesford",
-		author_email = "ahesford@me.com",
-		platforms = ["any"],
-		
-		license = "BSD",
+from setuptools import setup
 
+setup(name = "pyajh", version = "1.8",
+		description = DOCLINES[0],
+		long_description = "\n".join(DOCLINES[2:]),
+		author = "Andrew J. Hesford", author_email = "ahesford@me.com",
+		platforms = ["any"], license = "BSD", 
 		packages = ["pyajh"],
 		)
