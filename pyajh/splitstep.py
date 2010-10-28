@@ -70,13 +70,15 @@ def genatten(atten, nt, nx, ny):
 
 	return np.exp(-atten * (1. - w))
 
-def genscreen(ks, k0, dx):
+def genscreen(obj, k0, dx):
 	'''
 	Generate the phase screen used to correct for differences from the
-	average wave number. The true wave number is defined in a meshgrid
-	arrangement on a single slab of thickness dx.
+	average wave number. The background wave number k0 should be unitless,
+	and the object contrast obj is the square of the ratio of the true wave
+	number to the background wave number, minus 1. The slab thickness dx
+	should be in wavelengths.
 	'''
-	return np.exp(0.5j * float(dx) * ((ks**2 - k0**2) / k0))
+	return np.exp(0.5j * float(dx) * k0 * obj)
 
 def propfield(fld, prop):
 	'''
