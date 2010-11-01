@@ -34,11 +34,14 @@ def incslab(k0, x, y, zh, src):
 
 	return np.exp(1j * k0 * r - 2 * rhosq / rsq) / r
 
-def genprop(k0, nx, ny, dx):
+def genprop(k0, nx, ny, dx, dz = None):
 	'''
 	Generate the propagator used to advance the field through a homogeneous
 	slab of dimensions (nx, ny) and with height dx and wave number k0.
 	'''
+
+	# Make the grid isotropic if slab thickness isn't specified
+	if dz is None: dz = dx
 
 	# Get the coordinate indices for the slab
 	slice = np.mgrid[-nx/2:nx/2,-ny/2:ny/2]
@@ -49,7 +52,7 @@ def genprop(k0, nx, ny, dx):
 	ksq = kx**2 + ky**2
 
 	# Return the propagator, with frequencies shifted for proper alignment
-	return fft.fftshift(np.exp(1j * np.sqrt(complex(k0)**2 - ksq) * float(dx)))
+	return fft.fftshift(np.exp(1j * np.sqrt(complex(k0)**2 - ksq) * float(dz)))
 
 def genatten(atten, nt, nx, ny):
 	'''
