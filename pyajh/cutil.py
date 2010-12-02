@@ -112,8 +112,20 @@ def complexmax (a):
 	Compute the maximum element of a complex array like MATLAB does.
 	'''
 	# Return the maximum value of a numpy matrix.
-	# Use the flattened representation afforded by the matrix.
-	return reduce (lambda x, y: abs(x) > abs(y) and x or y, a.flat)
+	return a.flat[numpy.argmax(numpy.abs(a))]
+
+def psnr (x, y):
+	'''
+	The peak SNR, in dB, of a matrix x relative to the matrix y.
+	This assumes x = y + N, where N is noise and y is signal.
+	'''
+	# Compute the average per-pixel squared error
+	err = numpy.sum (numpy.abs(x - y)**2) / numpy.prod(x.shape)
+	# Compute the square of the maximum signal value
+	maxval = numpy.max(numpy.abs(y))**2
+
+	# Compute the peak SNR in dB
+	return 10. * math.log10(maxval / err)
 
 def mse (x, y):
 	'''
