@@ -7,7 +7,7 @@ import numpy
 from pyajh import mio, cutil
 
 def usage (progname = 'mse.py'):
-	print "Usage: %s [-h] [-d dimension] [-n] <cmpfile> [...] <reffile>" % progname
+	print "Usage: %s [-h] [-n] <cmpfile> [...] <reffile>" % progname
 
 def main (argv = None):
 	if argv is None:
@@ -16,16 +16,13 @@ def main (argv = None):
 
 	reffile = None
 	cmpfile = None
-	dim = 2
 	normalize = False
 
-	optlist, args = getopt.getopt (argv, 'nd:h')
+	optlist, args = getopt.getopt (argv, 'nh')
 
 	# Parse the options list
 	for opt in optlist:
-		if opt[0] == '-d':
-			dim = int(opt[1])
-		elif opt[0] == '-n':
+		if opt[0] == '-n':
 			normalize = True
 		else:
 			usage (progname)
@@ -43,12 +40,12 @@ def main (argv = None):
 		return 128
 
 	# Read the reference file
-	ref = mio.readbmat (reffile, dimen=dim)
+	ref = mio.readbmat (reffile)
 	if normalize: ref = ref / cutil.complexmax (ref)
 
 	# Read each comparison file and report the MSE
 	for idx, fpair in enumerate (cmpfile):
-		cmp = mio.readbmat (fpair, dimen=dim)
+		cmp = mio.readbmat (fpair)
 		if normalize: cmp = cmp / cutil.complexmax (cmp)
 		print idx, cutil.mse (cmp, ref)
 
