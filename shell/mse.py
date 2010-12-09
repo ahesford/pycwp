@@ -2,20 +2,62 @@
 
 import sys
 import getopt
-import numpy
+import numpy as np
 
 from pyajh import mio, cutil
 
 def usage (progname = 'mse.py'):
 	print "Usage: %s [-h] [-n] <cmpfile> [...] <reffile>" % progname
 
+
+def chunkmax (infile, dtype, csize, nchunk):
+	'''
+	Perform a chunk-by-chunk scan of the file infile to identify the
+	maximum value. Seek to the beginning of the data block when finished.
+	'''
+
+	maxval = 0.0
+
+	fpos = infile.tell()
+
+	for i in range(nchunk):
+		vals = np.fromfile(infile, dtype=dtype, count=csize)
+		maxval = max(maxval, cutil.complexmax(vals))
+
+	infile.seek(fpos)
+	return maxval
+
+
+def chunkerr (infiles, nfacts, csize, nchunk):
+	'''
+	Perform a chunk-by-chunk comparison of the files. If nfacts is
+	provided for each file and is not None, the data is normalized
+	by the corresponding factor. The last file is the reference.
+	'''
+
+	err = np.array([0.] * len(infiles[:-1]))
+	den = 0.
+
+	for i in range(nchunk):
+		# Read data chunks from all of the files
+		vals = [np.fromfile(mf, dtype=mt, count=csize) for ms, mt, mf in infiles]
+
+		# Normalize each chunk
+		if nfacts is not None:
+			vals = [v / nf for v, nf in zip(vals, nfacts)]
+
+		# Update the numerator and denominator
+		err += np.array([np.sum(np.abs(v - vals[-1])**2) for v in vals[:-1]])
+		den += np.sum(np.abs(vals[-1])**2)
+
+	# Return the error
+	return np.sqrt(err / den)
+
 def main (argv = None):
 	if argv is None:
 		argv = sys.argv[1:]
 		progname = sys.argv[0]
 
-	reffile = None
-	cmpfile = None
 	normalize = False
 
 	optlist, args = getopt.getopt (argv, 'nh')
@@ -28,28 +70,37 @@ def main (argv = None):
 			usage (progname)
 			return 128
 
-	# The last argument, if it exists, is the reference file
-	try: reffile = args[-1]
-	except IndexError: reffile = None
-
-	# All other non-flag arguments are for comparison
-	cmpfile = args[:-1]
-
-	if reffile is None or len(cmpfile) == 0:
+	# There must be at least two files to compare
+	if len(args) < 2:
 		usage (progname)
 		return 128
 
-	# Read the reference file
-	ref = mio.readbmat (reffile)
-	if normalize: ref = ref / cutil.complexmax (ref)
+	# Attempt to open all files for comparison and grab the matrix types
+	mfiles = [open(name, 'rb') for name in args]
+	mtypes = [mio.getmattype(f) for f in mfiles]
 
-	# Read each comparison file and report the MSE
-	for idx, fpair in enumerate (cmpfile):
-		cmp = mio.readbmat (fpair)
-		if normalize: cmp = cmp / cutil.complexmax (cmp)
-		print idx, cutil.mse (cmp, ref)
+	# Stitch together the file and type information
+	mtypes = [(t[0], t[1], f) for f, t in zip(mfiles, mtypes)]
 
-	print ""
+	# Check that the matrix sizes match
+	for ms, mt, mf in mtypes[:-1]:
+		if ms.tolist() != mtypes[-1][0].tolist():
+			raise IndexError('File %s does not match shape of file %s' %
+					(mf.name, mtypes[-1][-1].name))
+
+	# Grab the file chunk size as a slab in three dimensions or a column in two
+	csize, nchunk = np.prod(mtypes[-1][0][:-1]), mtypes[-1][0][-1]
+
+	# Find the normalizing factors, if desired
+	if normalize: nfacts = [chunkmax(mf, mt, csize, nchunk) for ms, mt, mf in mtypes]
+	else: nfacts = None
+
+	# Compute the MSE for each file relative to the reference
+	err = chunkerr (mtypes, nfacts, csize, nchunk)
+
+	# Report the MSE for each pair
+	for idx, e in enumerate (err):
+		print idx, e
 
 	return 0
 

@@ -6,49 +6,63 @@ import numpy as np
 import math
 import os
 
-def getmattype (fname, dim = None, dtype = None):
+def getmattype (infile, dim = None, dtype = None):
 	'''
-	Attempt to determine the datatype and dimension of a binary matrix file.
-	The dimension and datatype may also be fixed independently to either
-	identify the other, unspecified parameter or to check file validity.
+	Try to read the header for the provided matrix file, returning an array
+	depicting the size and the data type of the records. The file will
+	point to the data beyond the header. The data type and dimension may
+	be provided to avoid auto detection.
 	'''
 
-	# Set the range of dimensions if one wasn't provided
-	if dim is None: dimrange = [1, 3]
-	else: dimrange = [dim] * 2
+	# Read the maximum header, which has five elements for a grouped FMM map
+	hdr = np.fromfile (infile, dtype=np.int32, count=5)
 
-	# Attempt to read the header
-	infile = open (fname, mode='rb')
-	dimspec = np.fromfile (infile, dtype=np.int32, count=dimrange[-1])
-	infile.close()
+	# Make sure that the grouped FMM map has dimension three, if specified
+	if hdr[0] == 0 and dim and dim != 3:
+		raise ValueError('Matrix is a grouped FMM map but dimension is not 3.')
+	elif hdr[0] == 0: dim = 3
 
-	# A dictionary describing auto-sensed data types.
-	# Override this if a default datatype was provided.
-	if dtype is None:
-		datatypes = { np.float32().nbytes : np.float32,
-				np.complex64().nbytes : np.complex64,
-				np.complex128().nbytes : np.complex128 }
-	else: datatypes = { dtype().nbytes : dtype }
+	# Try to limit the pool of auto-sensed data types, if possible
+	try: datatypes = { dtype().nbytes : dtype }
+	except: datatypes = { np.float32().nbytes : np.float32,
+			np.complex64().nbytes : np.complex64,
+			np.complex128().nbytes : np.complex128 }
 
-	for dimen in range(dimrange[0], dimrange[-1] + 1):
-		# Grab the file size, minus the header size
-		fsize = os.stat(fname)[6] - dimen * np.int32().nbytes
+	# Set the range of dimensions to check
+	if dim is None: dimrange = range(1, 4)
+	else: dimrange = [dim]
 
-		# Grab the number of bytes per record
-		nbytes = fsize / np.prod(dimspec[:dimen])
+	# Loop through each possible dimension, checking data types
+	for dimen in dimrange:
+		# Set the appropriate header size and matrix size
+		if hdr[0] == 0: 
+			hdrlen = 5
+			matsize = np.array([hdr[4] * hv for hv in hdr[1:dimen+1]])
+		else: 
+			hdrlen = dimen
+			matsize = hdr[:dimen]
 
-		# Try next dimension if the number of records doesn't line up
-		if nbytes * np.prod(dimspec[:dimen]) != fsize: continue
+		# Check the size of the file, minus the header
+		fsize = os.stat(infile.name)[6] - hdrlen * np.int32().nbytes;
 
-		# Return the record type if it exists, otherwise try again
-		try:
+		# Grab the number of bytes per record and
+		# check that the record size lines up
+		nbytes = fsize / np.prod(matsize)
+		if nbytes * np.prod(matsize) != fsize: continue
+
+		# Try to grab the data type of the records
+		try: 
 			dtype = datatypes[nbytes]
-			return (dimen, dtype)
+			break
 		except KeyError: continue
+	else: raise TypeError('Could not determine data type in file.')
 
-	# Successful identification should have short circuited this
-	raise TypeError('Could not determine data type in file.')
+	# Seek to the end of the header if it isn't five elements long
+	if hdr[0] != 0: infile.seek(len(matsize) * np.int32().nbytes)
 
+	# Return the matrix size and data type
+	return (matsize, dtype)
+		
 
 def writebmat (mat, fname):
 	'''
@@ -65,26 +79,23 @@ def writebmat (mat, fname):
 	mat.flatten('F').tofile (outfile)
 	outfile.close ()
 
+
 def readbmat (fname, dim = None, dtype = None, size = None):
 	'''
 	Read a binary, complex matrix file, auto-sensing the precision
 	'''
 
-	# The type was provided, so do the read
+	# Open the file
 	infile = open (fname, mode='rb')
 
-	# Check the validity of the file contents,
-	# or auto-sense the dimension and data record length
-	dim, dtype = getmattype (fname, dim, dtype)
+	# Read the matrix header and determine the data type
+	matsize, dtype = getmattype (infile, dim, dtype)
 	
-	# Read the dimension specification from the file
-	dimspec = np.fromfile (infile, dtype=np.int32, count=dim)
-
 	# Override the read size with the provided size
-	if size is not None: dimspec = size
+	if size is not None: matsize = size
 	
 	# The number of elements to be read
-	nelts = np.prod (dimspec)
+	nelts = np.prod (matsize)
 
 	# Read the number of elements provided and close the file
 	data = np.fromfile (infile, dtype = dtype, count = nelts)
@@ -96,6 +107,6 @@ def readbmat (fname, dim = None, dtype = None, size = None):
 	
 	# Rework the array as a np array with the proper shape
 	# Fortran order is assumed
-	data = data.reshape (dimspec, order = 'F')
+	data = data.reshape (matsize, order = 'F')
 
 	return data
