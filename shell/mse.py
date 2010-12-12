@@ -22,7 +22,7 @@ def chunkmax (infile, dtype, csize, nchunk):
 
 	for i in range(nchunk):
 		vals = np.fromfile(infile, dtype=dtype, count=csize)
-		maxval = max(maxval, cutil.complexmax(vals))
+		maxval = cutil.complexmax(np.array([maxval, cutil.complexmax(vals)]))
 
 	infile.seek(fpos)
 	return maxval
