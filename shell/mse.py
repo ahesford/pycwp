@@ -3,6 +3,7 @@
 import sys
 import getopt
 import numpy as np
+from itertools import izip
 
 from pyajh import mio, cutil
 
@@ -10,48 +11,47 @@ def usage (progname = 'mse.py'):
 	print "Usage: %s [-h] [-n] <cmpfile> [...] <reffile>" % progname
 
 
-def chunkmax (infile, dtype, csize, nchunk):
+def filemax (infile):
 	'''
-	Perform a chunk-by-chunk scan of the file infile to identify the
-	maximum value. Seek to the beginning of the data block when finished.
+	Perform a slice-by-slice scan of infile and identify the maximum value.
 	'''
 
-	maxval = 0.0
-
-	fpos = infile.tell()
-
-	for i in range(nchunk):
-		vals = np.fromfile(infile, dtype=dtype, count=csize)
-		maxval = cutil.complexmax(np.array([maxval, cutil.complexmax(vals)]))
-
-	infile.seek(fpos)
-	return maxval
+	return cutil.complexmax(np.array([cutil.complexmax(s)
+		for idx, s in mio.readslicer(infile)]))
 
 
-def chunkerr (infiles, nfacts, csize, nchunk):
+def errslice (infiles, nfacts):
 	'''
-	Perform a chunk-by-chunk comparison of the files. If nfacts is
-	provided for each file and is not None, the data is normalized
-	by the corresponding factor. The last file is the reference.
+	Perform a slice-by-slice comparison of the inputs infiles. If nfacts is
+	provided for each file and is not None, the data is normalized by the
+	corresponding factor. The last file is the reference.
 	'''
 
 	err = np.array([0.] * len(infiles[:-1]))
 	den = 0.
 
-	for i in range(nchunk):
-		# Read data chunks from all of the files
-		vals = [np.fromfile(mf, dtype=mt, count=csize) for ms, mt, mf in infiles]
+	# Prepare the file-slicer generators
+	slgens = [mio.readslicer(fn) for fn in infiles]
 
-		# Normalize each chunk
+	# Loop through each slice as it is read
+	for slices in izip(*slgens):
+		# Strip out the slice index
+		data = [s[1] for s in slices]
+
+		# Normalize each chunk, if desired
 		if nfacts is not None:
-			vals = [v / nf for v, nf in zip(vals, nfacts)]
+			data = [d / nf for d, nf in izip(data, nfacts)]
+
+		# The last file is the reference
+		ref = data[-1]
 
 		# Update the numerator and denominator
-		err += np.array([np.sum(np.abs(v - vals[-1])**2) for v in vals[:-1]])
-		den += np.sum(np.abs(vals[-1])**2)
+		err += np.array([np.sum(np.abs(d - ref)**2) for d in data[:-1]])
+		den += np.sum(np.abs(ref)**2)
 
 	# Return the error
 	return np.sqrt(err / den)
+
 
 def main (argv = None):
 	if argv is None:
@@ -75,28 +75,20 @@ def main (argv = None):
 		usage (progname)
 		return 128
 
-	# Attempt to open all files for comparison and grab the matrix types
-	mfiles = [open(name, 'rb') for name in args]
-	mtypes = [mio.getmattype(f) for f in mfiles]
+	# Attempt to open all files and grab the matrix dimensions and types
+	msizes = [mio.getmattype(open(name, 'rb'))[0] for name in args]
 
-	# Stitch together the file and type information
-	mtypes = [(t[0], t[1], f) for f, t in zip(mfiles, mtypes)]
-
-	# Check that the matrix sizes match
-	for ms, mt, mf in mtypes[:-1]:
-		if ms.tolist() != mtypes[-1][0].tolist():
-			raise IndexError('File %s does not match shape of file %s' %
-					(mf.name, mtypes[-1][-1].name))
-
-	# Grab the file chunk size as a slab in three dimensions or a column in two
-	csize, nchunk = np.prod(mtypes[-1][0][:-1]), mtypes[-1][0][-1]
+	# Check that the matrix shapes match
+	for mf, ms in zip(args, msizes[:-1]):
+		if ms.tolist() != msizes[-1].tolist():
+			raise IndexError('File %s has wrong shape' % mf)
 
 	# Find the normalizing factors, if desired
-	if normalize: nfacts = [chunkmax(mf, mt, csize, nchunk) for ms, mt, mf in mtypes]
+	if normalize: nfacts = [filemax(mf) for mf in args]
 	else: nfacts = None
 
 	# Compute the MSE for each file relative to the reference
-	err = chunkerr (mtypes, nfacts, csize, nchunk)
+	err = errslice (args, nfacts)
 
 	# Report the MSE for each pair
 	for idx, e in enumerate (err):

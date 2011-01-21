@@ -110,10 +110,44 @@ def readbmat (fname, dim = None, dtype = None, slice = None):
 
 	# The read failed to capture all requested elements, raise an exception
 	if data.size != nelts or data is None:
-		return ValueError('Failed to read requested data.')
+		raise ValueError('Failed to read requested data.')
 	
 	# Rework the array as a np array with the proper shape
 	# Fortran order is assumed
 	data = data.reshape (matsize, order = 'F')
 
 	return data
+
+
+def readslicer (fname, dim = None, dtype = None, slices = None):
+	'''
+	A generator that will read and return each slice of a file one-by-one.
+	An optional (inclusive) range limits the slices read.
+	'''
+
+	# Open the file
+	infile = open(fname, mode='rb')
+
+	# Read the matrix header and determine the data type
+	matsize, dtype = getmattype(infile, dim, dtype)
+
+	# The number of elements to read per slice
+	nelts = np.prod(matsize[:-1])
+
+	if slices is not None:
+		# Seek to the desired starting slice
+		infile.seek(nelts * slices[0] * dtype().nbytes, 1)
+		# Set the number of slices to read
+		slrange = range(slices[0], slices[1] + 1)
+	else: slrange = range(matsize[-1])
+
+	# Slice along the last index
+	for idx in slrange:
+		data = np.fromfile(infile, dtype = dtype, count = nelts)
+		if data.size != nelts or data is None:
+			raise ValueError('Failed to read requested data.')
+		yield (idx, data.reshape(matsize[:-1], order = 'F'))
+
+	# Close the file and return
+	infile.close()
+	return
