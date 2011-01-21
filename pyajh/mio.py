@@ -80,9 +80,14 @@ def writebmat (mat, fname):
 	outfile.close ()
 
 
-def readbmat (fname, dim = None, dtype = None, size = None):
+def readbmat (fname, dim = None, dtype = None, slice = None):
 	'''
-	Read a binary, complex matrix file, auto-sensing the precision
+	Read a binary, complex matrix file, auto-sensing the precision and
+	dimension. The dimension and precision can be manually specified if
+	desired. Slice, if specified, should be a list restricting the read to
+	a number of slices in the last (least-rapidly-varying) dimension of the
+	array. The list specifies the starting and ending array slice,
+	inclusive.
 	'''
 
 	# Open the file
@@ -90,11 +95,13 @@ def readbmat (fname, dim = None, dtype = None, size = None):
 
 	# Read the matrix header and determine the data type
 	matsize, dtype = getmattype (infile, dim, dtype)
-	
-	# Override the read size with the provided size
-	if size is not None: matsize = size
-	
-	# The number of elements to be read
+
+	# Seek to the starting slice and overrid the matrix size
+	if slice is not None:
+		infile.seek(slice[0] * np.prod(matsize[:-1]) * dtype().nbytes, 1) 
+		matsize[-1] = slice[1] - slice[0] + 1
+
+	# The number of elements to read
 	nelts = np.prod (matsize)
 
 	# Read the number of elements provided and close the file
