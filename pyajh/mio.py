@@ -8,19 +8,21 @@ import os
 
 def getmattype (infile, dim = None, dtype = None):
 	'''
-	Try to read the header for the provided matrix file, returning an array
-	depicting the size and the data type of the records. The file will
-	point to the data beyond the header. The data type and dimension may
-	be provided to avoid auto detection.
+	Read a header from the provided array data file to determine the size
+	and data type of the array therein. The file will be left pointing to
+	the data beyond the header. The data type and dimension may be provided
+	to avoid auto detection.
 	'''
 
-	# Read the maximum header, which has five elements for a grouped FMM map
-	hdr = np.fromfile (infile, dtype=np.int32, count=5)
+	# The maximum allowed dimension
+	maxdim = max(dim, 3)
 
-	# Make sure that the grouped FMM map has dimension three, if specified
-	if hdr[0] == 0 and dim and dim != 3:
-		raise ValueError('Matrix is a grouped FMM map but dimension is not 3.')
-	elif hdr[0] == 0: dim = 3
+	# Record the size of the file
+	fsize = os.stat(infile.name)[6]
+
+	# Read the maximum-length header, which is two more integeris
+	# than the max dimension for grouped files
+	hdr = np.fromfile(infile, dtype=np.int32, count=maxdim+2)
 
 	# Try to limit the pool of auto-sensed data types, if possible
 	try: datatypes = { dtype().nbytes : dtype }
@@ -29,26 +31,26 @@ def getmattype (infile, dim = None, dtype = None):
 			np.complex128().nbytes : np.complex128 }
 
 	# Set the range of dimensions to check
-	if dim is None: dimrange = range(1, 4)
+	if dim is None: dimrange = range(1, maxdim + 1)
 	else: dimrange = [dim]
 
 	# Loop through each possible dimension, checking data types
 	for dimen in dimrange:
 		# Set the appropriate header size and matrix size
 		if hdr[0] == 0: 
-			hdrlen = 5
-			matsize = np.array([hdr[4] * hv for hv in hdr[1:dimen+1]])
+			hdrlen = dimen + 2
+			matsize = np.array([hdr[dimen+1] * hv for hv in hdr[1:dimen+1]])
 		else: 
 			hdrlen = dimen
 			matsize = hdr[:dimen]
 
 		# Check the size of the file, minus the header
-		fsize = os.stat(infile.name)[6] - hdrlen * np.int32().nbytes;
+		dsize = fsize - hdrlen * np.int32().nbytes;
 
 		# Grab the number of bytes per record and
 		# check that the record size lines up
-		nbytes = fsize / np.prod(matsize)
-		if nbytes * np.prod(matsize) != fsize: continue
+		nbytes = dsize / np.prod(matsize)
+		if nbytes * np.prod(matsize) != dsize: continue
 
 		# Try to grab the data type of the records
 		try: 
@@ -57,8 +59,8 @@ def getmattype (infile, dim = None, dtype = None):
 		except KeyError: continue
 	else: raise TypeError('Could not determine data type in file.')
 
-	# Seek to the end of the header if it isn't five elements long
-	if hdr[0] != 0: infile.seek(len(matsize) * np.int32().nbytes)
+	# Seek to the end of the header
+	infile.seek(hdrlen * np.int32().nbytes)
 
 	# Return the matrix size and data type
 	return (matsize, dtype)
@@ -80,14 +82,11 @@ def writebmat (mat, fname):
 	outfile.close ()
 
 
-def readbmat (fname, dim = None, dtype = None, slice = None):
+def readbmat (fname, dim = None, dtype = None):
 	'''
-	Read a binary, complex matrix file, auto-sensing the precision and
-	dimension. The dimension and precision can be manually specified if
-	desired. Slice, if specified, should be a list restricting the read to
-	a number of slices in the last (least-rapidly-varying) dimension of the
-	array. The list specifies the starting and ending array slice,
-	inclusive.
+	Memory map a binary, complex matrix file, auto-sensing the precision
+	and dimension. The dimension and precision can be manually specified if
+	desired. The map is read-only and must be copied to modify.
 	'''
 
 	# Open the file
@@ -96,27 +95,12 @@ def readbmat (fname, dim = None, dtype = None, slice = None):
 	# Read the matrix header and determine the data type
 	matsize, dtype = getmattype (infile, dim, dtype)
 
-	# Seek to the starting slice and overrid the matrix size
-	if slice is not None:
-		infile.seek(slice[0] * np.prod(matsize[:-1]) * dtype().nbytes, 1) 
-		matsize[-1] = slice[1] - slice[0] + 1
-
-	# The number of elements to read
-	nelts = np.prod (matsize)
-
-	# Read the number of elements provided and close the file
-	data = np.fromfile (infile, dtype = dtype, count = nelts)
+	# Create the read-only memory map and close the source file
+	datamap = np.memmap(infile, offset=infile.tell(), dtype=dtype, mode='r')
 	infile.close()
 
-	# The read failed to capture all requested elements, raise an exception
-	if data.size != nelts or data is None:
-		raise ValueError('Failed to read requested data.')
-	
-	# Rework the array as a np array with the proper shape
-	# Fortran order is assumed
-	data = data.reshape (matsize, order = 'F')
-
-	return data
+	# Reshape the map in FORTRAN order
+	return datamap.reshape (matsize, order = 'F')
 
 
 def readslicer (fname, dim = None, dtype = None, slices = None):
