@@ -86,7 +86,7 @@ def readbmat (fname, dim = None, dtype = None):
 	'''
 	Memory map a binary, complex matrix file, auto-sensing the precision
 	and dimension. The dimension and precision can be manually specified if
-	desired. The map is read-only and must be copied to modify.
+	desired. The map is copy-on-write, so changes will not be saved.
 	'''
 
 	# Open the file
@@ -96,7 +96,7 @@ def readbmat (fname, dim = None, dtype = None):
 	matsize, dtype = getmattype (infile, dim, dtype)
 
 	# Create the read-only memory map and close the source file
-	datamap = np.memmap(infile, offset=infile.tell(), dtype=dtype, mode='r')
+	datamap = np.memmap(infile, offset=infile.tell(), dtype=dtype, mode='c')
 	infile.close()
 
 	# Reshape the map in FORTRAN order
