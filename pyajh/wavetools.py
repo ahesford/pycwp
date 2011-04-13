@@ -1,8 +1,11 @@
 '''
-Routines to use CG-FFT for scattering from objects in two and three dimensions.
+Routines useful for wave physics computations, including CG-FFT, phase and 
+magnitude correction for comparison of k-space (FDTD) and integral equation
+solvers, and Green's functions.
 '''
 
 import math
+import cmath
 import numpy as np
 import scipy as sp
 import numpy.fft as fft
@@ -135,3 +138,46 @@ def solve(itfunc, grf, obj, rhs, **kwargs):
 	p = p.reshape(obj.shape, order='F')
 
 	return p, info
+
+def kcomp(inc, src, dx):
+	'''
+	Compute the phase shift and magnitude scaling factors, relative to an
+	integral equation solution with negative time convention, for an
+	incident field computed as a frequency component of an FDTD solution
+	using the positive time convention. Returns (mag, phase) such that the
+	total fields between the IE and FDTD solutions are related by
+
+		IE = mag * abs(FDTD) * exp(1j * (phase - angle(FDTD))).
+
+	The incident field is taken as a z = 0 slab defined on a grid, and the
+	source location should be specified using grid coordinates. The grid
+	spacing, dx (in wavelengths), is uniform in the x, y and z coordinates.
+
+	The reference point in the incident slab is the (x,y) project of the
+	source location. Thus, for src = [i, j, k], the value of the Green's
+	function for a distance k * dx is compared to the value of the incident
+	field at point inc[i,j].
+	'''
+
+	# Compute the value of the Green's function at the point of projection
+	# onto the plane
+	gval = green3d (2 * math.pi, dx * src[-1])
+
+	# Compute the magnitude scaling
+	mag = np.abs(gval / inc[src[0]][src[1]])
+
+	# Compute the phase shift
+	delta = cmath.phase(gval) + cmath.phase(inc[src[0]][src[1]])
+
+	return mag, delta
+
+def kscale(inc, scat, mag, delta):
+	'''
+	Scale (with contant mag), phase-shift (with offset delta), and combine
+	the incident and scattered field (inc and scat, respectively) produced
+	using a k-space (FDTD) method with positive time convention to produce
+	a total field to compare with an integral equation solution using the
+	negative time convention.
+	'''
+
+	return mag * np.abs(inc + scat) * np.exp(1j * (delta - np.angle(inc + scat)))
