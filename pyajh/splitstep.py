@@ -123,7 +123,7 @@ def compguess(k0, dx, inc, atn, objfile, fmt = 'SplitStep.%03d.field'):
 	prop = genprop (k0, pgrid[0], pgrid[1], dx)
 
 	# Write the incident field as the first slab in the desired data type
-	mio.writebmat(np.array(inc[xmin:xmax,ymin:ymax], dtype = dtype), fmt % hdr[2])
+	mio.writebmat(inc[xmin:xmax,ymin:ymax].astype(dtype), fmt % hdr[2])
 	print('Wrote ' + fmt % hdr[2])
 
 	# Copy the incident field
@@ -144,7 +144,7 @@ def compguess(k0, dx, inc, atn, objfile, fmt = 'SplitStep.%03d.field'):
 		fld *= screen * atn
 
 		# Write the slab in the desired data type
-		mio.writebmat(np.array(fld[xmin:xmax,ymin:ymax], dtype=dtype), fmt % idx)
+		mio.writebmat(fld[xmin:xmax,ymin:ymax].astype(dtype), fmt % idx)
 		print('Wrote ' + fmt % idx)
 
 	return hdr[2]
