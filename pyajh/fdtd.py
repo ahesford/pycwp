@@ -7,13 +7,17 @@ class PML:
 	either by boundary conditions or exchange with another medium.
 	'''
 
-	def __init__(self, c, dim, dt, h, sigma):
+	def __init__(self, c, dim, dt, h, sig, smap):
 		'''
 		Initialize a PML with a homogeneous soudn speed c. The tuple
 		dim gives the 3-dimensional shape of the region, including each
 		boundary face. The time step dt and the spatial step h are
-		scalars. The list sigma should contain the 1-D attenuation
-		profiles along each of the x, y and z axes.
+		scalars. The list sig should contain the 1-D attenuation
+		profile for the boundary layer in one side of the PML. The
+		i-element list smap of lists specifies which edges of the PML
+		will be attenuated; smap[i][0] == True to attenuate the left
+		edge along axis i, and smap[i][1] == True to attenuate the
+		right edge along axis i.
 		'''
 
 		# Copy the parameters of the PML
@@ -22,22 +26,27 @@ class PML:
 		self.dt = dt
 
 		# Initialize the pressure components in the PML
-		self.px = np.zeros(dim)
-		self.py = np.zeros(dim)
-		self.pz = np.zeros(dim)
+		self.px, self.py, self.pz = [np.zeros(dim) for i in range(3)]
 
 		# Initialize the velocity components in the PML
 		self.ux = np.zeros((dim[0] - 1, dim[1], dim[2]))
 		self.uy = np.zeros((dim[0], dim[1] - 1, dim[2]))
 		self.uz = np.zeros((dim[0], dim[1], dim[2] - 1))
 
-		# Set the proper dimensions of the sigma profiles
-		sgdim = [[dim[0], 1, 1], [1, dim[1], 1], [1, 1, dim[2]]]
-		# Set the tiling repetitions in each dimension
-		sgtil = [[t / d for t, d in zip(dim, s)] for s in sgdim]
-		# Perform the tiling to yield the full attenuation profiles
-		sigma = [np.tile(np.array(s).reshape(d), t)
-				for s, d, t in zip(sigma, sgdim, sgtil)]
+		# Initialize the attenuation profiles
+		sigma = [np.zeros(dim) for i in range(3)]
+		# Append a zero value to the inside of the sigma profile
+		sig = list(sig) + [0.]
+
+		# Compute the indices starting from the left edges
+		left = np.mgrid[:dim[0], :dim[1], :dim[2]]
+		# Compute the indices starting from the right edges
+		right = np.mgrid[dim[0]-1:-1:-1, dim[1]-1:-1:-1, dim[2]-1:-1:-1]
+
+		# Add in the PML profiles as specified in the map
+		for s, m, cl, cr in zip(sigma, smap, left, right):
+			if m[0]: s += cl.choose(sig, mode='clip')
+			if m[1]: s += cr.choose(sig, mode='clip')
 
 		# Compute the scaling factors for pressure
 		self.txp, self.typ, self.tzp = [[1. / dt - 0.5 * s,
@@ -206,15 +215,14 @@ class FDTD:
 	bounded by a perfectly matched layer.
 	'''
 
-	def __init__(self, c, cbg, dt, h, l, sigma, srcfunc):
+	def __init__(self, c, cbg, dt, h, sigma, srcfunc):
 		'''
 		Initialize the Helmholtz and first-order solvers with variable
 		sound-speed grid c, background PML sound speed cbg, time step
-		dt, spatial step h, PML thickness l, and PML attenuation
-		profiles sigma = [sx, sy, sz]. The parameters should describe
-		the one-dimensional variation along the respective attenuation
-		axis. The coroutine srcfunc specifies the source term over the
-		same grid as the sound speed.
+		dt, spatial step h, and a 1-D profile sigma describing
+		attenuation from the outer edge to the inner edge of the PML.
+		The coroutine srcfunc specifies the source term over the same
+		grid as the sound speed.
 		'''
 
 		# Force boundary overlaps to have background sound speed
@@ -229,34 +237,27 @@ class FDTD:
 		# Note that the boundary overlaps the PML
 		self.helmholtz = Helmholtz(c, dt, h, srcfunc)
 
-		# Note the size of the total grid, excluding overlap
-		self.tsize = tuple([d + 2 * (l - 1) for d in c.shape])
-
 		# Copy the PML thickness
-		self.l = l
+		self.l = len(sigma)
+
+		# Note the size of the total grid, excluding overlap
+		self.tsize = tuple([d + 2 * (self.l - 1) for d in c.shape])
 
 		# The shapes of the PMLs along each axis
-		shapes = [[((i == j) and [l + 1] or [t])[0]
+		shapes = [[((i == j) and [self.l + 1] or [t])[0]
 			for j, t in enumerate(self.tsize)]
 			for i in range(len(self.tsize))]
 
-		# Initialize attenuation profiles along entire axes lengths
-		atten = [list(s[:l]) + [0] * (t - 2 * l) + list(reversed(s[-l:]))
-				for t, s in zip(self.tsize, sigma)]
-
-		# The attenuation profiles as arguments to the PML class
-		aprofs = [[[a for a in atten] for i in range(2)] for j in range(3)]
-		# Override the shorter dimensions as appropriate
-		for i, (ap, at) in enumerate(zip(aprofs, atten)):
-			# The left edge
-			ap[0][i] = at[:l+1]
-			# The right edge
-			ap[1][i] = at[-l-1:]
+		# The attenuation edge maps for the PMLs
+		# Don't attenuate from the edge shared with the Helmholtz region
+		left, right = [True, False], [False, True]
+		amaps = [[[((i == j) and [s] or [[True]*2])[0] for j in range(3)]
+				for s in [left, right]] for i in range(3)]
 
 		# The PML list contains three lists, holding, respectively, the
 		# left and right sides of the x, y and z PMLs
-		self.pml = [[PML(cbg, dim, dt, h, a) for a in aax]
-				for dim, aax in zip(shapes, aprofs)]
+		self.pml = [[PML(cbg, dim, dt, h, sigma, a) for a in aax]
+				for dim, aax in zip(shapes, amaps)]
 
 
 	def pmlbdy(self):
