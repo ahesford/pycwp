@@ -175,6 +175,12 @@ class Helmholtz:
 		self.p[1][:,:,1:-1] += self.rsq[:,:,1:-1] * (self.p[0][:,:,2:]
 				+ self.p[0][:,:,:-2])
 
+		# Mark the current time step as the previous
+		self.p[-1] = self.p[0]
+
+		# Mark the next time step as the current
+		self.p[0] = self.p[1]
+
 
 	def boundary(self, xl = 0., xr = 0., yl = 0., yr = 0., zl = 0., zr = 0.):
 		'''
@@ -193,18 +199,6 @@ class Helmholtz:
 		# Enforce the left and right z-boundaries for each component
 		self.p[0][:,:,0] = zl
 		self.p[0][:,:,-1] = zr
-
-
-	def advance(self):
-		'''
-		Shift the fields to prepare for another update.
-		'''
-
-		# Mark the current time step as the previous
-		self.p[-1] = self.p[0]
-
-		# Mark the next time step as the current
-		self.p[0] = self.p[1]
 
 
 
@@ -260,9 +254,9 @@ class FDTD:
 				for dim, aax in zip(shapes, amaps)]
 
 
-	def pmlbdy(self):
+	def exchange(self):
 		'''
-		Establish the proper boundary valuee in each PML.
+		Exchange the boundary values between the PML and Helmholtz regions.
 		'''
 
 		# Shorthand for PML thickness offset
@@ -279,6 +273,17 @@ class FDTD:
 		self.pml[1][1].boundary(yl = p[:,-l-1,:])
 		self.pml[2][0].boundary(zr = p[:,:,l])
 		self.pml[2][1].boundary(zl = p[:,:,-l-1])
+
+		# Reduce the PML thickness index
+		l = self.l - 1
+
+		# Copy the PML pressures to the Helmholtz boundary
+		self.helmholtz.boundary (p[l,l:-l,l:-l], p[-l-1,l:-l,l:-l],
+				p[l:-l,l,l:-l], p[l:-l,-l-1,l:-l],
+				p[l:-l,l:-l,l], p[l:-l,l:-l,-l-1])
+
+		# Return the total pressure
+		return p
 
 
 	def pressure(self):
@@ -313,32 +318,13 @@ class FDTD:
 		Update the Helmholtz and PML fields.
 		'''
 
-		# Shorthand for the PML thickness offset
-		l = self.l - 1
-
-		# Copy the PML pressures to the Helmholtz boundary
-		self.helmholtz.boundary (self.pml[0][0].pressure()[-2,l:-l,l:-l],
-				self.pml[0][1].pressure()[1,l:-l,l:-l],
-				self.pml[1][0].pressure()[l:-l,-2,l:-l],
-				self.pml[1][1].pressure()[l:-l,1,l:-l],
-				self.pml[2][0].pressure()[l:-l,l:-l,-2],
-				self.pml[2][1].pressure()[l:-l,l:-l,1])
-		# The pressure in the Helmholtz region is now complete
-
 		# Update the Helmholtz pressure away from the forced boundaries
 		self.helmholtz.update()
-
-		# Copy the Helmholtz pressures to the PML boundaries
-		self.pmlbdy()
-		# The pressure in the PML regions are now complete
 
 		# Update the PML fields away from the forced boundaries
 		for pleft, pright in self.pml:
 			pleft.update()
 			pright.update()
 
-		# Make the pre-computed next Helmholtz step the current step
-		self.helmholtz.advance()
-
-		# Return the pressure
-		return self.pressure()
+		# Return the pressure after exchanging boundary values
+		return self.exchange()
