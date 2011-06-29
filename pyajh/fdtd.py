@@ -235,18 +235,23 @@ class FDTD:
 		self.l = len(sigma)
 
 		# Note the size of the total grid, excluding overlap
-		self.tsize = tuple([d + 2 * (self.l - 1) for d in c.shape])
+		self.tsize = tuple(d + 2 * (self.l - 1) for d in c.shape)
+		# Note the size of the Helmholtz grid
+		self.hsize = c.shape[:]
+
+		tg, hg, lp = self.tsize, self.hsize, self.l + 1
 
 		# The shapes of the PMLs along each axis
-		shapes = [[((i == j) and [self.l + 1] or [t])[0]
-			for j, t in enumerate(self.tsize)]
-			for i in range(len(self.tsize))]
+		shapes = [list(hg[:i]) + [lp] + list(tg[i+1:]) for i in range(3)]
 
-		# The attenuation edge maps for the PMLs
-		# Don't attenuate from the edge shared with the Helmholtz region
+		# Placeholders for the PML attenuation maps
 		left, right = [True, False], [False, True]
-		amaps = [[[((i == j) and [s] or [[True]*2])[0] for j in range(3)]
-				for s in [left, right]] for i in range(3)]
+		tedges, fedges = [[True]*2]*3, [[False]*2]*3
+
+		# Note which edges will be attenuated using PMLs
+		# Don't attenuate edges shared with other regions
+		amaps = [[fedges[:i] + [s] + tedges[i+1:]
+			for s in [left, right]] for i in range(3)]
 
 		# The PML list contains three lists, holding, respectively, the
 		# left and right sides of the x, y and z PMLs
@@ -259,28 +264,43 @@ class FDTD:
 		Exchange the boundary values between the PML and Helmholtz regions.
 		'''
 
-		# Shorthand for PML thickness offset
+		# Shorthand for PML thickness offset indices
 		l = self.l
+		lm = self.l - 1
+		lp = self.l + 1
 
 		# Create array to hold total pressure value
 		p = self.pressure()
 
-		# Set the boundary values for each PML; boundaries not shared
-		# with the Helmholtz region default to Dirichlet conditions
-		self.pml[0][0].boundary(xr = p[l,:,:])
-		self.pml[0][1].boundary(xl = p[-l-1,:,:])
-		self.pml[1][0].boundary(yr = p[:,l,:])
-		self.pml[1][1].boundary(yl = p[:,-l-1,:])
-		self.pml[2][0].boundary(zr = p[:,:,l])
-		self.pml[2][1].boundary(zl = p[:,:,-l-1])
+		# Set the boundary values for each PML
 
-		# Reduce the PML thickness index
-		l = self.l - 1
+		# The x-axis PMLs: interior x surface set from Helmholtz
+		self.pml[0][0].boundary(xr = p[l,:,:])
+		self.pml[0][1].boundary(xl = p[-lp,:,:])
+
+		# The y-axis PMLs: interior y surface set from Helmholtz
+		# The x surfaces are set from the x-axis PMLs
+		self.pml[1][0].boundary(xl = p[lm, :lp, :], xr = p[-l, :lp, :],
+				yr = p[lm:-lm, l, :])
+		self.pml[1][1].boundary(xl = p[lm, -lp:, :], xr = p[-l, -lp:, :],
+				yl = p[lm:-lm, -lp, :])
+
+		# The z-axis PMLs: interior z surface set from Helmholtz
+		# The x and y surfaces are set from the x- and y-axis PMLs
+		self.pml[2][0].boundary(
+				xl = p[lm, lm:-lm, :lp],  xr = p[-l, lm:-lm, :lp], 
+				yl = p[lm:-lm, lm, :lp],  yr = p[lm:-lm, -l, :lp], 
+				zr = p[lm:-lm, lm:-lm, l])
+		self.pml[2][1].boundary(
+				xl = p[lm, lm:-lm, -lp:],  xr = p[-l, lm:-lm, -lp:], 
+				yl = p[lm:-lm, lm, -lp:],  yr = p[lm:-lm, -l, -lp:], 
+				zl = p[lm:-lm, lm:-lm, -lp])
 
 		# Copy the PML pressures to the Helmholtz boundary
-		self.helmholtz.boundary (p[l,l:-l,l:-l], p[-l-1,l:-l,l:-l],
-				p[l:-l,l,l:-l], p[l:-l,-l-1,l:-l],
-				p[l:-l,l:-l,l], p[l:-l,l:-l,-l-1])
+		self.helmholtz.boundary (
+				p[lm, lm:-lm, lm:-lm], p[-l, lm:-lm, lm:-lm],
+				p[lm:-lm, lm, lm:-lm], p[lm:-lm, -l, lm:-lm],
+				p[lm:-lm, lm:-lm, lm], p[lm:-lm, lm:-lm, -l])
 
 		# Return the total pressure
 		return p
@@ -304,11 +324,11 @@ class FDTD:
 		p[:l,:,:] = self.pml[0][0].pressure()[:l,:,:]
 		p[-l:,:,:] = self.pml[0][1].pressure()[-l:,:,:]
 		# Copy the PML pressure from the left and right y edges
-		p[:,:l,:] = self.pml[1][0].pressure()[:,:l,:]
-		p[:,-l:,:] = self.pml[1][1].pressure()[:,-l:,:]
+		p[l:-l,:l,:] = self.pml[1][0].pressure()[1:-1,:l,:]
+		p[l:-l,-l:,:] = self.pml[1][1].pressure()[1:-1,-l:,:]
 		# Copy the PML pressure from the left and right z edges
-		p[:,:,:l] = self.pml[2][0].pressure()[:,:,:l]
-		p[:,:,-l:] = self.pml[2][1].pressure()[:,:,-l:]
+		p[l:-l,l:-l,:l] = self.pml[2][0].pressure()[1:-1,1:-1,:l]
+		p[l:-l,l:-l,-l:] = self.pml[2][1].pressure()[1:-1,1:-1,-l:]
 		
 		return p
 
