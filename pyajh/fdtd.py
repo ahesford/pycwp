@@ -1,5 +1,20 @@
 import numpy as np
 
+def findiff(a, axis=0):
+	'''
+	Computes the finite difference along the specified axis.
+	'''
+
+	if axis == 0:
+		return a[1:,:,:] - a[:-1,:,:]
+	elif axis == 1:
+		return a[:,1:,:] - a[:,:-1,:]
+	elif axis == 2:
+		return a[:,:,1:] - a[:,:,:-1]
+
+	raise ValueError('Axis must be 0, 1, or 2')
+
+
 class PML:
 	'''
 	A class to encapsulate first-order pressure and particle velocity
@@ -14,7 +29,7 @@ class PML:
 		boundary face. The time step dt and the spatial step h are
 		scalars. The list sig should contain the 1-D attenuation
 		profile for the boundary layer in one side of the PML. The
-		i-element list smap of lists specifies which edges of the PML
+		i-element list smap of lists specifies which edges of the PM
 		will be attenuated; smap[i][0] == True to attenuate the left
 		edge along axis i, and smap[i][1] == True to attenuate the
 		right edge along axis i.
@@ -25,13 +40,17 @@ class PML:
 		self.h = h
 		self.dt = dt
 
-		# Initialize the pressure components in the PML
-		self.px, self.py, self.pz = [np.zeros(dim) for i in range(3)]
+		# Initialize the total pressure everywhere in the PML
+		self.p = np.zeros(dim)
+
+		# The pressure components are defined away from the boundary
+		dml = [d - 2 for d in dim]
+		self.px, self.py, self.pz = [np.zeros(dml) for i in range(3)]
 
 		# Initialize the velocity components in the PML
-		self.ux = np.zeros((dim[0] - 1, dim[1], dim[2]))
-		self.uy = np.zeros((dim[0], dim[1] - 1, dim[2]))
-		self.uz = np.zeros((dim[0], dim[1], dim[2] - 1))
+		self.ux = np.zeros([dim[0] - 1] + dml[1:])
+		self.uy = np.zeros([dml[0], dim[1] - 1, dml[2]])
+		self.uz = np.zeros(dml[:2] + [dim[2] - 1])
 
 		# Initialize the attenuation profiles
 		sigma = [np.zeros(dim) for i in range(3)]
@@ -48,24 +67,25 @@ class PML:
 			if m[0]: s += cl.choose(sig, mode='clip')
 			if m[1]: s += cr.choose(sig, mode='clip')
 
+		# Functions to compute the scaling factors
+		stm = lambda t, s : 1. / t - 0.5 * s
+		stp = lambda t, s : 1. / t + 0.5 * s
+
 		# Compute the scaling factors for pressure
-		self.txp, self.typ, self.tzp = [[1. / dt - 0.5 * s,
-			1. / dt + 0.5 * s] for s in sigma]
+		# Include the boundary terms for averaging the velocity scaling
+		self.txp = [f(dt, sigma[0][:, 1:-1, 1:-1]) for f in [stm, stp]]
+		self.typ = [f(dt, sigma[1][1:-1, :, 1:-1]) for f in [stm, stp]]
+		self.tzp = [f(dt, sigma[2][1:-1, 1:-1, :]) for f in [stm, stp]]
 
 		# The velocity factors are averaged from the pressure factors
 		self.txu = [0.5 * (t[1:,:,:] + t[:-1,:,:]) for t in self.txp]
 		self.tyu = [0.5 * (t[:,1:,:] + t[:,:-1,:]) for t in self.typ]
 		self.tzu = [0.5 * (t[:,:,1:] + t[:,:,:-1]) for t in self.tzp]
 
-
-	def pressure(self):
-		'''
-		Return the sum of the three pressure components in the PML. If
-		left is true, return the left PML pressure; otherwise, return
-		the right PML pressure.
-		'''
-
-		return self.px + self.py + self.pz
+		# Strip away boundary values from the pressure factors
+		self.txp = [t[1:-1,:,:] for t in self.txp]
+		self.typ = [t[:,1:-1,:] for t in self.typ]
+		self.tzp = [t[:,:,1:-1] for t in self.tzp]
 
 
 	def update(self):
@@ -74,9 +94,6 @@ class PML:
 		pressure everywhere away from each boundary. The boundaries are
 		all forced separately.
 		'''
-
-		# Grab the total pressure throughout the PML
-		p = self.pressure()
 
 		# Scale the previous velocity and pressure components
 		self.ux *= self.txu[0] / self.txu[1]
@@ -88,38 +105,36 @@ class PML:
 		self.pz *= self.tzp[0] / self.tzp[1]
 
 		# Add pressure derivatives to the velocity components
-		self.ux -= (p[1:,:,:] - p[:-1,:,:]) / (self.txu[1] * self.h)
-		self.uy -= (p[:,1:,:] - p[:,:-1,:]) / (self.tyu[1] * self.h)
-		self.uz -= (p[:,:,1:] - p[:,:,:-1]) / (self.tzu[1] * self.h)
+		self.ux -= findiff(self.p[:, 1:-1, 1:-1], 0) / (self.txu[1] * self.h)
+		self.uy -= findiff(self.p[1:-1, :, 1:-1], 1) / (self.tyu[1] * self.h)
+		self.uz -= findiff(self.p[1:-1, 1:-1, :], 2) / (self.tzu[1] * self.h)
 
 		# Add velocity derivatives to the pressure components
-		self.px[1:-1,:,:] -= self.csq * (self.ux[1:,:,:] 
-				- self.ux[:-1,:,:]) / (self.txp[1][1:-1,:,:] * self.h)
-		self.py[:,1:-1,:] -= self.csq * (self.uy[:,1:,:] 
-				- self.uy[:,:-1,:]) / (self.typ[1][:,1:-1,:] * self.h)
-		self.pz[:,:,1:-1] -= self.csq * (self.uz[:,:,1:] 
-				- self.uz[:,:,:-1]) / (self.tzp[1][:,:,1:-1] * self.h)
+		self.px -= self.csq * findiff(self.ux, 0) / (self.txp[1] * self.h)
+		self.py -= self.csq * findiff(self.uy, 1) / (self.typ[1] * self.h)
+		self.pz -= self.csq * findiff(self.uz, 2) / (self.tzp[1] * self.h)
+
+		# Update the total pressure samples away from the boundaries
+		self.p[1:-1, 1:-1, 1:-1] = self.px + self.py + self.pz
 
 	
 	def boundary(self, xl = 0., xr = 0., yl = 0., yr = 0., zl = 0., zr = 0.):
 		'''
-		Enforce boundary conditions at the left (0-index) and right
-		(-1-index) boundaries in each plane. The boundary value is
-		divided by three to be equally distributed among each of the
-		three pressure components.
+		Enforce pressure boundary conditions at the left (0-index) and
+		right (-1-index) boundaries in each plane.
 		'''
 
-		# Enforce the left and right x-boundaries for each component
-		self.px[0,:,:] = self.py[0,:,:] = self.pz[0,:,:] = xl / 3.
-		self.px[-1,:,:] = self.py[-1,:,:] = self.pz[-1,:,:] = xr / 3.
+		# Enforce the left and right x-boundaries
+		self.p[0,:,:] = xl
+		self.p[-1,:,:] = xr
 
 		# Enforce the left and right y-boundaries for each component
-		self.px[:,0,:] = self.py[:,0,:] = self.pz[:,0,:] = yl / 3.
-		self.px[:,-1,:] = self.py[:,-1,:] = self.pz[:,-1,:] = yr / 3.
+		self.p[:,0,:] = yl
+		self.p[:,-1,:] = yr
 
 		# Enforce the left and right z-boundaries for each component
-		self.px[:,:,0] = self.py[:,:,0] = self.pz[:,:,0] = zl / 3.
-		self.px[:,:,-1] = self.py[:,:,-1] = self.pz[:,:,-1] = zr / 3.
+		self.p[:,:,0] = zl
+		self.p[:,:,-1] = zr
 
 
 
@@ -168,12 +183,12 @@ class Helmholtz:
 				- self.csq * self.dt**2 * self.source.next())
 
 		# Perform the current-time, neighboring updates
-		self.p[1][1:-1,:,:] += self.rsq[1:-1,:,:] * (self.p[0][2:,:,:]
-				+ self.p[0][:-2,:,:])
-		self.p[1][:,1:-1,:] += self.rsq[:,1:-1,:] * (self.p[0][:,2:,:]
-				+ self.p[0][:,:-2,:])
-		self.p[1][:,:,1:-1] += self.rsq[:,:,1:-1] * (self.p[0][:,:,2:]
-				+ self.p[0][:,:,:-2])
+		self.p[1][1:-1,:,:] += (self.rsq[1:-1,:,:]
+				* (self.p[0][2:,:,:] + self.p[0][:-2,:,:]))
+		self.p[1][:,1:-1,:] += (self.rsq[:,1:-1,:]
+				* (self.p[0][:,2:,:] + self.p[0][:,:-2,:]))
+		self.p[1][:,:,1:-1] += (self.rsq[:,:,1:-1]
+				* (self.p[0][:,:,2:] + self.p[0][:,:,:-2]))
 
 		# Mark the current time step as the previous
 		self.p[-1] = self.p[0]
@@ -321,14 +336,14 @@ class FDTD:
 		# Fill the Helmholtz pressure in the center
 		p[l:-l,l:-l,l:-l] = self.helmholtz.p[0][1:-1,1:-1,1:-1]
 		# Copy the PML pressure from the left and right x edges
-		p[:l,:,:] = self.pml[0][0].pressure()[:l,:,:]
-		p[-l:,:,:] = self.pml[0][1].pressure()[-l:,:,:]
+		p[:l,:,:] = self.pml[0][0].p[:l,:,:]
+		p[-l:,:,:] = self.pml[0][1].p[-l:,:,:]
 		# Copy the PML pressure from the left and right y edges
-		p[l:-l,:l,:] = self.pml[1][0].pressure()[1:-1,:l,:]
-		p[l:-l,-l:,:] = self.pml[1][1].pressure()[1:-1,-l:,:]
+		p[l:-l,:l,:] = self.pml[1][0].p[1:-1,:l,:]
+		p[l:-l,-l:,:] = self.pml[1][1].p[1:-1,-l:,:]
 		# Copy the PML pressure from the left and right z edges
-		p[l:-l,l:-l,:l] = self.pml[2][0].pressure()[1:-1,1:-1,:l]
-		p[l:-l,l:-l,-l:] = self.pml[2][1].pressure()[1:-1,1:-1,-l:]
+		p[l:-l,l:-l,:l] = self.pml[2][0].p[1:-1,1:-1,:l]
+		p[l:-l,l:-l,-l:] = self.pml[2][1].p[1:-1,1:-1,-l:]
 		
 		return p
 
