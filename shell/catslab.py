@@ -6,7 +6,7 @@ import numpy as np
 
 from pyajh import mio
 
-def usage (progname = 'mse.py'):
+def usage (progname = 'catslab.py'):
 	print >> sys.stderr, "Usage: %s [-h] [-t xl,xh,yl,yh] <slab1> [...] <slabN>" % progname
 
 def main (argv = None):

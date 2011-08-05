@@ -5,14 +5,18 @@ def findiff(a, axis=0):
 	Computes the finite difference along the specified axis.
 	'''
 
-	if axis == 0:
-		return a[1:,:,:] - a[:-1,:,:]
-	elif axis == 1:
-		return a[:,1:,:] - a[:,:-1,:]
-	elif axis == 2:
-		return a[:,:,1:] - a[:,:,:-1]
+	if axis < 0 or axis > 2: raise ValueError('Axis must be 0, 1, or 2')
 
-	raise ValueError('Axis must be 0, 1, or 2')
+	# Set up the slicing objects for pulling out the desired difference
+	slices = [[slice(None)] * 3] * 2
+
+	# Now modify the +1 and -1 slices along the desired axis
+	slices[0][axis] = slice(1, None)
+	slices[1][axis] = slice(-1)
+
+	# Compute the difference
+	return a[slices[0]] - a[slices[1]]
+
 
 
 class PML:
