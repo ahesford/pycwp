@@ -35,17 +35,11 @@ def main (argv = None):
 	# Convert the slice notation to actual slice types
 	slices = [slicer(s) for s in slicestr.split(',')]
 
-	# Grab the input matrix data and slice as desired
+	# Grab and slice the matrix from the desired input file
 	mat = mio.readbmat(argv.pop(0))[slices]
 
-	if len(argv) > 0:
-		# Write the output file...
-		mio.writebmat(mat, argv[0])
-	else: 
-		# ...or write to stdout
-		np.array(mat.shape, dtype='int32').tofile(sys.stdout)
-		mat.flatten('F').tofile(sys.stdout)
-		sys.stdout.close()
+	# Write the output to the desired file or to stdout
+	mio.writebmat(mat, (len(argv) > 0 and [argv[0]] or [sys.stdout])[0])
 
 	return 0
 

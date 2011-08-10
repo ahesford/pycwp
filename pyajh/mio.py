@@ -18,7 +18,7 @@ def getmattype (infile, dim = None, dtype = None):
 	maxdim = max(dim, 3)
 
 	# Record the size of the file
-	fsize = os.stat(infile.name)[6]
+	fsize = os.fstat(infile.fileno())[6]
 
 	# Read the maximum-length header, which is two more integeris
 	# than the max dimension for grouped files
@@ -64,13 +64,17 @@ def getmattype (infile, dim = None, dtype = None):
 
 	# Return the matrix size and data type
 	return (matsize, dtype)
-		
 
-def writebmat (mat, fname):
+
+def writebmat (mat, outfile):
 	'''
-	Write a binary matrix file in the provided precision.
+	Write a binary matrix file in the provided precision. The parameter
+	outfile may be a string, in which case it is the name of the output
+	file to be overwritten; or it may be an already-open file object.
 	'''
-	outfile = open (fname, mode='wb')
+
+	# Open the output file if it isn't already open
+	if isinstance(outfile, (str, unicode)): outfile = open (outfile, mode='wb')
 
 	# Pull the shape for writing
 	mshape = np.array (mat.shape, dtype='int32')
@@ -82,15 +86,17 @@ def writebmat (mat, fname):
 	outfile.close ()
 
 
-def readbmat (fname, dim = None, dtype = None):
+def readbmat (infile, dim = None, dtype = None):
 	'''
 	Memory map a binary, complex matrix file, auto-sensing the precision
 	and dimension. The dimension and precision can be manually specified if
-	desired. The map is copy-on-write, so changes will not be saved.
+	desired. The map is copy-on-write, so changes will not be saved. The
+	parameter infile may be a string, in which case it is the name of the
+	input file; or it may be an already-open file object.
 	'''
 
-	# Open the file
-	infile = open (fname, mode='rb')
+	# Open the input file if it isn't already open
+	if isinstance(infile, (str, unicode)): infile = open (infile, mode='rb')
 
 	# Read the matrix header and determine the data type
 	matsize, dtype = getmattype (infile, dim, dtype)
@@ -103,14 +109,16 @@ def readbmat (fname, dim = None, dtype = None):
 	return datamap.reshape (matsize, order = 'F')
 
 
-def readslicer (fname, dim = None, dtype = None, slices = None):
+def readslicer (infile, dim = None, dtype = None, slices = None):
 	'''
 	A generator that will read and return each slice of a file one-by-one.
-	An optional (inclusive) range limits the slices read.
+	An optional (inclusive) range limits the slices read. The parameter
+	infile may be a string, in which case it is the name of the input file;
+	or it may be an already-open file object.
 	'''
 
-	# Open the file
-	infile = open(fname, mode='rb')
+	# Open the input file if it isn't already open
+	if isinstance(infile, (str, unicode)): infile = open(infile, mode='rb')
 
 	# Read the matrix header and determine the data type
 	matsize, dtype = getmattype(infile, dim, dtype)
