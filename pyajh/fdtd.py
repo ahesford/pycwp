@@ -149,12 +149,11 @@ class Helmholtz:
 	exchanges with other media.
 	'''
 
-	def __init__(self, c, dt, h, srcfunc):
+	def __init__(self, c, dt, h, srcfunc, srcidx):
 		'''
 		Initialize the sound-speed c, time step dt and spatial step h.
 		The coroutine srcfunc should provide a time-dependent function
-		that describes the source over the same grid as the sound
-		speed.
+		that describes the point-source response at index srcidx.
 		'''
 
 		# Make a copy of the sound-speed map and parameters
@@ -164,16 +163,16 @@ class Helmholtz:
 
 		# The source is a generator created by a coroutine
 		self.source = srcfunc()
+		self.srcslice = [slice(i,i+1) for i in srcidx]
+		self.srcscale = (self.dt * self.c[srcidx[0], srcidx[1], srcidx[2]])**2
 
 		# The pre-computed scale factors make updates more efficient
-		self.rsq = (self.c * self.dt / self.h)**2
-		self.csq = self.c**2
+		# Strip out the unnecessary boundaries
+		self.rsq = (self.c[1:-1,1:-1,1:-1] * self.dt / self.h)**2
 
-		# Initialize the pressure at three initial time steps
-		# The current time step is p[0]
-		# The next time step is p[1]
-		# The previous time step is p[-1] (in this case, p[2])
-		self.p = [np.zeros_like(self.c) for i in range(3)]
+		# Initialize the pressure at two time steps
+		# The current time step is pa[0]; the previous/next is pa[1]
+		self.pa = [np.zeros_like(self.c) for i in range(2)]
 
 
 	def update(self):
@@ -182,23 +181,31 @@ class Helmholtz:
 		boundaries are forced separately.
 		'''
 
-		# Perform the previous-time updates
-		self.p[1] = ((2. - 6. * self.rsq) * self.p[0] - self.p[-1]
-				- self.csq * self.dt**2 * self.source.next())
+		# Remember that rsq has had the boundaries stripped
 
-		# Perform the current-time, neighboring updates
-		self.p[1][1:-1,:,:] += (self.rsq[1:-1,:,:]
-				* (self.p[0][2:,:,:] + self.p[0][:-2,:,:]))
-		self.p[1][:,1:-1,:] += (self.rsq[:,1:-1,:]
-				* (self.p[0][:,2:,:] + self.p[0][:,:-2,:]))
-		self.p[1][:,:,1:-1] += (self.rsq[:,:,1:-1]
-				* (self.p[0][:,:,2:] + self.p[0][:,:,:-2]))
+		# Grab the next source value away from the boundaries
+		srcval = self.srcscale * self.source.next()
 
-		# Mark the current time step as the previous
-		self.p[-1] = self.p[0]
+		# Perform the time updates, overwriting previous time with next 
+		self.pa[1][1:-1,1:-1,1:-1] = ((2. - 6. * self.rsq) * 
+				self.pa[0][1:-1,1:-1,1:-1] - self.pa[1][1:-1,1:-1,1:-1])
 
-		# Mark the next time step as the current
-		self.p[0] = self.p[1]
+		# Add in the source value at the desired location
+		self.pa[1][self.srcslice] += srcval
+
+		# Perform the spatial updates
+		self.pa[1][1:-1,1:-1,1:-1] += self.rsq * (
+				self.pa[0][2:,1:-1,1:-1] + self.pa[0][:-2,1:-1,1:-1] + 
+				self.pa[0][1:-1,2:,1:-1] + self.pa[0][1:-1,:-2,1:-1] + 
+				self.pa[0][1:-1,1:-1,2:] + self.pa[0][1:-1,1:-1,:-2])
+
+		# Cycle the current and next/previous times
+		self.pa = [self.pa[1], self.pa[0]]
+
+
+	def p(self):
+		''' Return the current pressure field.'''
+		return self.pa[0]
 
 
 	def boundary(self, xl = 0., xr = 0., yl = 0., yr = 0., zl = 0., zr = 0.):
@@ -208,16 +215,16 @@ class Helmholtz:
 		'''
 
 		# Enforce the left and right x-boundaries for each component
-		self.p[0][0,:,:] = xl
-		self.p[0][-1,:,:] = xr
+		self.pa[0][0,:,:] = xl
+		self.pa[0][-1,:,:] = xr
 
 		# Enforce the left and right y-boundaries for each component
-		self.p[0][:,0,:] = yl
-		self.p[0][:,-1,:] = yr
+		self.pa[0][:,0,:] = yl
+		self.pa[0][:,-1,:] = yr
 
 		# Enforce the left and right z-boundaries for each component
-		self.p[0][:,:,0] = zl
-		self.p[0][:,:,-1] = zr
+		self.pa[0][:,:,0] = zl
+		self.pa[0][:,:,-1] = zr
 
 
 
@@ -228,7 +235,7 @@ class FDTD:
 	bounded by a perfectly matched layer.
 	'''
 
-	def __init__(self, c, cbg, dt, h, sigma, srcfunc):
+	def __init__(self, c, cbg, dt, h, sigma, srcfunc, srcidx):
 		'''
 		Initialize the Helmholtz and first-order solvers with variable
 		sound-speed grid c, background PML sound speed cbg, time step
@@ -248,7 +255,7 @@ class FDTD:
 
 		# Initialize the Helmholtz region
 		# Note that the boundary overlaps the PML
-		self.helmholtz = Helmholtz(c, dt, h, srcfunc)
+		self.helmholtz = Helmholtz(c, dt, h, srcfunc, srcidx)
 
 		# Copy the PML thickness
 		self.l = len(sigma)
@@ -338,7 +345,7 @@ class FDTD:
 		p = np.zeros(self.tsize)
 
 		# Fill the Helmholtz pressure in the center
-		p[l:-l,l:-l,l:-l] = self.helmholtz.p[0][1:-1,1:-1,1:-1]
+		p[l:-l,l:-l,l:-l] = self.helmholtz.p()[1:-1,1:-1,1:-1]
 		# Copy the PML pressure from the left and right x edges
 		p[:l,:,:] = self.pml[0][0].p[:l,:,:]
 		p[-l:,:,:] = self.pml[0][1].p[-l:,:,:]
