@@ -432,13 +432,6 @@ __kernel void xbdy(__global float * const pc, __global float * const left,
 		pc[ipidx + xoff] = vals.s1;
 	}
 }
-
-/* Determine the default local work-group size. This should be called with a
- * global size that matches the global size for the problem of interest. */
-__kernel void getlsize(__global uint * const lsizes) {
-	lsizes[0] = get_local_size(0);
-	lsizes[1] = get_local_size(1);
-}
 	'''
 
 	def __init__(self, c, dt, h, srcfunc, srcidx, context=None):
@@ -477,32 +470,18 @@ __kernel void getlsize(__global uint * const lsizes) {
 		self.source = srcfunc()
 		self.srcidx = cla.vec.make_uint3(*srcidx)
 
-		# Make the uint3 vector for the problem dimensions
+		# Grab the problem dimensions
 		self.grid = c.shape[:]
 		self.dimvec = cla.vec.make_uint3(*self.grid)
+		self.gsize = tuple(g - 2 for g in self.grid[:2])
 
-		# Determine the local size for the desired grid dimensions
-		lsize = cla.empty(self.queue, (2,), dtype=np.uint32)
-		self.fdcl.getlsize(self.queue, self.grid[:2], None, lsize.data)
-		self.lsize = lsize.get().tolist()
+		# Determine the maximum work items for the kernel
+		maxwork = self.fdcl.helm.get_work_group_info(
+				cl.kernel_work_group_info.WORK_GROUP_SIZE,
+				self.context.devices[0])
 
-		# Determine the local memory available on the device
-		locmem = self.context.devices[0].get_info(cl.device_info.LOCAL_MEM_SIZE)
-
-		# Scale back the local dimensions if necessary
-		lmf = lambda x : np.float32().nbytes * reduce(lambda y, z: y * z, x)
-		while (locmem > lmf(self.lsize) and 
-				self.lsize[0] > 1 and self.lsize[1] > 1):
-			self.lsize[1] >>= 1
-			if locmem < lmf(self.lsize): break
-			self.lsize[0] >>= 1
-
-		# Convert the local size to a tuple
-		self.lsize = tuple(self.lsize)
-
-		# Define the local memory tile
-		self.ltile = cl.LocalMemory(np.float32().nbytes * 
-				reduce(lambda x, y: x * y, self.lsize))
+		# Conservatively allocate a local memory tile
+		self.ltile = cl.LocalMemory(5 * (maxwork + 2))
 
 
 	def boundary(self, xl, xr, yl, yr, zl, zr):
@@ -545,7 +524,7 @@ __kernel void getlsize(__global uint * const lsizes) {
 		v = np.float32(self.source.next())
 
 		# Invoke the OpenCL kernel
-		self.fdcl.helm (self.queue, self.grid[:2], self.lsize, self.pa[1],
+		self.fdcl.helm (self.queue, self.gsize, None, self.pa[1],
 				self.pa[0], self.csq, self.dt, self.h,
 				self.dimvec, v, self.srcidx, self.ltile)
 
