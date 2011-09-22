@@ -2,10 +2,9 @@
 General-purpose numerical routines used in other parts of the module.
 '''
 
-import numpy
-import math
+import numpy, math
 from scipy import special as spec
-from pyajh.geom import sph2cart
+from .geom import sph2cart
 
 def translator (r, s, phi, theta, l):
 	'''

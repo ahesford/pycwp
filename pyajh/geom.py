@@ -1,5 +1,4 @@
-import math
-import numpy as np
+import math, numpy as np
 
 def gridcoords(i, nc, dc, dim=3):
 	'''

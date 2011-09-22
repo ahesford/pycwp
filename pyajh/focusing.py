@@ -2,13 +2,9 @@
 Routines for dealing with focused beams in three dimensions.
 '''
 
-import numpy
-import math
-import numpy.fft as fft
+import numpy, math, numpy.fft as fft, scipy.interpolate as intp
 
-import scipy.interpolate as intp
-
-from pyajh import cutil
+from . import cutil
 
 def focusedbeam (f, c0, w, x_f, shft = 0.0, z_off = 0.0):
 	'''

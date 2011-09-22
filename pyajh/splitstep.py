@@ -2,10 +2,9 @@
 Routines to compute split-step propagation through slices of media.
 '''
 
-import numpy as np
-import numpy.fft as fft
-import math
-from pyajh import mio
+import math, numpy as np, numpy.fft as fft
+
+from . import mio
 
 def slicecoords(nx, ny, dx):
 	'''

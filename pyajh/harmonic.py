@@ -2,8 +2,7 @@
 General-purpose numerical routines used in other parts of the module.
 '''
 
-import numpy as np
-import math
+import math, numpy as np
 from scipy import special as spec
 
 def legassoc (n, m, th):

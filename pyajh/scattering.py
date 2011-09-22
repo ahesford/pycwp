@@ -3,12 +3,10 @@ Routines for reading and displaying scattering patterns in two or three
 dimensions.
 '''
 
-import numpy
-import math
-import pylab
+import numpy, math, pylab
 
-from pyajh.mio import readbmat
-from pyajh.cutil import gaussleg
+from .mio import readbmat
+from .cutil import gaussleg
 
 from matplotlib import ticker
 

@@ -4,13 +4,8 @@ magnitude correction for comparison of k-space (FDTD) and integral equation
 solvers, and Green's functions.
 '''
 
-import math
-import cmath
-import numpy as np
-import scipy as sp
-import numpy.fft as fft
-import scipy.special as spec
-import scipy.sparse.linalg as la
+import math, cmath, numpy as np, scipy as sp
+import numpy.fft as fft, scipy.special as spec, scipy.sparse.linalg as la
 from numpy.linalg import norm
 
 def green3d(k, r):

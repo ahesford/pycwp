@@ -2,9 +2,7 @@
 Routines for reading and writing binary matrix files in FORTRAN-order.
 '''
 
-import numpy as np
-import math
-import os
+import os, math, numpy as np
 
 def getmattype (infile, dim = None, dtype = None):
 	'''

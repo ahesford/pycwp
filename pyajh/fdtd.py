@@ -1,5 +1,4 @@
-import numpy as np
-import pyopencl as cl, pyopencl.array as cla
+import numpy as np, pyopencl as cl, pyopencl.array as cla
 
 def findiff(a, axis=0):
 	'''

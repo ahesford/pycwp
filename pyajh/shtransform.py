@@ -1,11 +1,8 @@
-import numpy
-import scipy
-import math
+import numpy, math, numpy.fft as fft
 
-import numpy.fft as fft
-import scipy.special as spec
+from scipy import special as spec
 
-from pyajh import cutil, harmonic
+from . import cutil, harmonic
 
 class SHTransform:
 	'''
