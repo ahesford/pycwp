@@ -3,16 +3,16 @@ from mako.template import Template
 from . import fdtd
 
 helmsrc = '''
-/* This OpenCL kernel computes a single time step of the acoustic FDTD using
- * shared memory for efficiency. It is based on the NVIDIA sample for
- * general-purpose finite-difference schemes but has been specialized and is
- * intended for use with PyOpenCL and the pyajh Helmholtz solver class.*/
+<%
+	# Determine the strides of the 3-D grids in FORTRAN order.
+	stride = [1, dim[0], dim[0] * dim[1]]
+%>
 
 #define MIN(x,y) (((x) < (y)) ? (x) : (y))
 #define MAX(x,y) (((x) > (y)) ? (x) : (y))
 #define MINP(x,y) MIN(x, MAX(0, y))
 
-/* Arguments:
+/* Helmholtz OpenCL kernel for a single time step. Arguments:
  * pn, in/out, the 3-D grid representing the next and previous time steps.
  * pc, input, the 3-D grid representing the current time step.
  * csq, input, the global 3-D grid of squared sound-speed values.
@@ -36,11 +36,6 @@ __kernel void helm(__global float * const pn, __global float * const pc,
 
 	/* The local compute grid. */
 	uint2 ldim = (uint2) (get_local_size(0), get_local_size(1));
-
-<%
-	# Determine the strides of the grids in FORTRAN order.
-	strides = [1, dim[0], dim[0] * dim[1]]
-%>
 
 	/* The leading dimension of the local work tile. */
 	const uint ldw = ldim.x + 2;
@@ -66,19 +61,19 @@ __kernel void helm(__global float * const pn, __global float * const pc,
 	inbounds = (i < ${dim[0] - 1}) && (j < ${dim[1] - 1});
 
 	/* The current slab is the first one. */
-	idx = i * ${strides[0]} + j * ${strides[1]};
+	idx = i * ${stride[0]} + j * ${stride[1]};
 
 	cur = pc[idx];
-	zr = pc[idx + ${strides[2]}];
+	zr = pc[idx + ${stride[2]}];
 
 % for k in range(2, dim[2]):
 	/* Cycle to the next slab. */
-	idx += ${strides[2]};
+	idx += ${stride[2]};
 	zl = cur;
 	cur = zr;
 
 	/* Only read the values if they are in bounds. */
-	zr = pc[idx + ${strides[2]}];
+	zr = pc[idx + ${stride[2]}];
 	prev = pn[idx];
 	rv = cscale * csq[idx];
 
@@ -89,12 +84,12 @@ __kernel void helm(__global float * const pn, __global float * const pc,
 
 	/* Also grab needed boundary values. */
 	if (lj == 1) {
-		tile[ltgt - ldw] = pc[idx - ${strides[1]}];
-		tile[ltgt + ldim.y * ldw] = pc[idx + ldim.y * ${strides[1]}];
+		tile[ltgt - ldw] = pc[idx - ${stride[1]}];
+		tile[ltgt + ldim.y * ldw] = pc[idx + ldim.y * ${stride[1]}];
 	}
 	if (li == 1) {
-		tile[ltgt - 1] = pc[idx - ${strides[0]}];
-		tile[ltgt + ldim.x] = pc[idx + ldim.x * ${strides[0]}];
+		tile[ltgt - 1] = pc[idx - ${stride[0]}];
+		tile[ltgt + ldim.x] = pc[idx + ldim.x * ${stride[0]}];
 	}
 
 	/* Ensure buffer is filled. */
@@ -122,79 +117,41 @@ __kernel void helm(__global float * const pn, __global float * const pc,
 % endfor
 }
 
-/* Copy the left (low-index) and right (high-index) values in the z boundary
- * planes to the pressure array pc. The global compute grid (x,y) should equal
- * or exceed the (x,y) dimensions of the pressure grid. */
-__kernel void zbdy(__global float * const pc,
-			__global float * const left, __global float * const right) {
-	/* The position of the work item in the global grid. */
-	const uint xpos = get_global_id(0);
-	const uint ypos = get_global_id(1);
+<%
+	# Local grid and stride arrays describe the quicker-varying index
+	# first, the slower-varying dimension second, and the constant-index
+	# dimension last
+	bdygrids, bdystrides = [[[a[i] for i in range(len(a)) if i != j] + [a[j]] 
+				for j in range(len(a))] for a in [dim, stride]]
+	bdynames = [d + 'bdy' for d in ['x', 'y', 'z']]
+%>
 
-	/* Precompute the starting offset of the last slab. */
-	const uint zoff = ${(dim[2] - 1) * dim[1] * dim[0]};
+% for n, g, s in zip(bdynames, bdygrids, bdystrides):
+	__kernel void ${n} (__global float * const pc,
+		__global float * const left, __global float * const right) {
+		/* Get the work-item position in the boundary slice. */
+		const uint2 pos = (uint2) (get_global_id(0), get_global_id(1));
 
-	/* The in-plane linear index for the cell. */
-	const uint ipidx = ypos * ${dim[0]} + xpos;
+		/* Precompute the offset of the right slab. */
+		const uint roff = ${(g[-1] - 1) * s[-1]};
 
-	/* Copy the values if the item points to an in-bounds cell. */
-	if (xpos < ${dim[0]} && ypos < ${dim[1]}) {
-		const float2 vals = (float2) (left[ipidx], right[ipidx]);
-		pc[ipidx] = vals.s0;
-		pc[ipidx + zoff] = vals.s1;
+		/* Store the in-plane linear index of the cell. */
+		uint ipidx;
+
+		/* Only work in the boundaries of the slab. */
+		if (pos.s0 < ${g[0]} && pos.s1 < ${g[1]}) {
+			/* Build the index into the boundary slab. */
+			ipidx = pos.s1 * ${g[0]} + pos.s0;
+			/* Grab the left and right boundary values. */
+			const float2 vals = (float2) (left[ipidx], right[ipidx]);
+			/* Now compute the base index in the global grid. */
+			ipidx = pos.s1 * ${s[1]} + pos.s0 * ${s[0]};
+			pc[ipidx] = vals.s0;
+			pc[ipidx + roff] = vals.s1;
+		}
 	}
-}
-
-/* Copy the left (low-index) and right (high-index) values in the y boundary
- * planes to the pressure array pc. The global compute grid (x,y) should equal
- * or exceed the (x,z) dimensions of the pressure grid. */
-__kernel void ybdy(__global float * const pc,
-			__global float * const left, __global float * const right) {
-	/* The position of the work item in the global grid. */
-	const uint xpos = get_global_id(0);
-	const uint zpos = get_global_id(1);
-
-	/* Precompute the starting offset of the last y-row. */
-	const uint yoff = ${(dim[2] - 1) * dim[0]};
-
-	/* The in-plane linear index for each cell. */
-	uint ipidx;
-
-	/* Private storage of the values to copy. */
-	if (xpos < ${dim[0]} && zpos < ${dim[2]}) {
-		ipidx = zpos * ${dim[0]} + xpos;
-		const float2 vals = (float2) (left[ipidx], right[ipidx]);
-		ipidx = zpos * ${dim[0] * dim[1]} + xpos;
-		pc[ipidx] = vals.s0;
-		pc[ipidx + yoff] = vals.s1;
-	}
-}
-
-/* Copy the left (low-index) and right (high-index) values in the x boundary
- * planes to the pressure array pc. The global compute grid (x,y) should equal
- * or exceed the (y,z) dimensions of the pressure grid. */
-__kernel void xbdy(__global float * const pc,
-			__global float * const left, __global float * const right) {
-	/* The position of the work item in the global grid. */
-	const uint ypos = get_global_id(0);
-	const uint zpos = get_global_id(1);
-
-	/* Precompute the starting offset of the last x-row. */
-	const uint xoff = ${dim[0] - 1};
-
-	/* The in-plane linear index for each cell. */
-	uint ipidx;
-
-	/* Private storage of the values to copy. */
-	if (ypos < ${dim[1]} && zpos < ${dim[2]}) {
-		ipidx = zpos * ${dim[1]} + ypos;
-		const float2 vals = (float2) (left[ipidx], right[ipidx]);
-		ipidx *= ${dim[0]};
-		pc[ipidx] = vals.s0;
-		pc[ipidx + xoff] = vals.s1;
-	}
-}
-	'''
+% endfor
+'''
 
 class Helmholtz(fdtd.Helmholtz):
 	'''
