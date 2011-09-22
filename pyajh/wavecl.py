@@ -210,7 +210,7 @@ class Helmholtz(fdtd.Helmholtz):
 				self.context.devices[0])
 
 		# Conservatively allocate a local memory tile
-		self.ltile = cl.LocalMemory(5 * (maxwork + 2))
+		self.ltile = cl.LocalMemory(5 * (maxwork + 2) * np.float32().nbytes)
 
 
 	def boundary(self, xl, xr, yl, yr, zl, zr):
