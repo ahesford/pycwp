@@ -8,15 +8,21 @@ helmsrc = '''
  * general-purpose finite-difference schemes but has been specialized and is
  * intended for use with PyOpenCL and the pyajh Helmholtz solver class.*/
 
-/* Arguments: pn, in/out, the 3-D grid representing the next and previous time steps.
+#define MIN(x,y) (((x) < (y)) ? (x) : (y))
+#define MAX(x,y) (((x) > (y)) ? (x) : (y))
+#define MINP(x,y) MIN(x, MAX(0, y))
+
+/* Arguments:
+ * pn, in/out, the 3-D grid representing the next and previous time steps.
  * pc, input, the 3-D grid representing the current time step.
  * csq, input, the global 3-D grid of squared sound-speed values.
  * srcval, input, the value of the point source term.
- * ltile, input, a local cache for the current time step in a work group. 
+ * ltile, input, a local cache for the current time step in a work group.
  *
- * The global work grid should be 2-D and have at least as many work items in
- * each dimension as the number of non-boundary elements in the corresponding
- * dimension of the global pressure grid. */
+ * The pn, pc and csq 3-D arrays should be stored in FORTRAN order.
+ *
+ * The global work grid should be 2-D and have as many work items in each
+ * dimension as there are non-boundary elements in a constant-z slab. */
 __kernel void helm(__global float * const pn, __global float * const pc,
 			    __global float * const csq, const float srcval,
 			    __local float * const tile) {
@@ -24,9 +30,12 @@ __kernel void helm(__global float * const pn, __global float * const pc,
 	const uint i = get_global_id(0) + 1;
 	const uint j = get_global_id(1) + 1;
 
-	/* The local compute position and grid size. */
-	const uint2 lpos = (uint2) (get_local_id(0), get_local_id(1));
-	const uint2 ldim = (uint2) (get_local_size(0), get_local_size(1));
+	/* The local compute position. */
+	const uint li = get_local_id(0) + 1;
+	const uint lj = get_local_id(1) + 1;
+
+	/* The local compute grid. */
+	uint2 ldim = (uint2) (get_local_size(0), get_local_size(1));
 
 <%
 	# Determine the strides of the grids in FORTRAN order.
@@ -37,7 +46,7 @@ __kernel void helm(__global float * const pn, __global float * const pc,
 	const uint ldw = ldim.x + 2;
 
 	/* The local target cell of the work item. Avoids boundary layers. */
-	const uint ltgt = (lpos.y + 1) * ldw + lpos.x + 1;
+	const uint ltgt = lj * ldw + li;
 
 	/* The scaling for the squared sound speed. */
 	const float cscale = ${(dt / dh)**2};
@@ -46,7 +55,11 @@ __kernel void helm(__global float * const pn, __global float * const pc,
 	uint idx = 0;
 	bool updsrc, inbounds;
 
-	/* Check if the target cell contains the source. */
+	/* Truncate the local cache dimension to avoid input overruns. */
+	ldim.y = MINP(ldim.y, ${dim[1] - 1} - j);
+	ldim.x = MINP(ldim.x, ${dim[0] - 1} - i);
+
+	/* Check if the target cell contains the source in some slab. */
 	updsrc = (i == ${srcidx[0]}) && (j == ${srcidx[1]});
 
 	/* Check if the target cell is within the boundaries. */
@@ -55,11 +68,8 @@ __kernel void helm(__global float * const pn, __global float * const pc,
 	/* The current slab is the first one. */
 	idx = i * ${strides[0]} + j * ${strides[1]};
 
-	/* Only read the value if it is in bounds. */
-	if (inbounds) {
-		cur = pc[idx];
-		zr = pc[idx + ${strides[2]}];
-	}
+	cur = pc[idx];
+	zr = pc[idx + ${strides[2]}];
 
 % for k in range(2, dim[2]):
 	/* Cycle to the next slab. */
@@ -68,23 +78,21 @@ __kernel void helm(__global float * const pn, __global float * const pc,
 	cur = zr;
 
 	/* Only read the values if they are in bounds. */
-	if (inbounds) {
-		zr = pc[idx + ${strides[2]}];
-		prev = pn[idx];
-		rv = cscale * csq[idx];
-	}
+	zr = pc[idx + ${strides[2]}];
+	prev = pn[idx];
+	rv = cscale * csq[idx];
 
 	barrier (CLK_LOCAL_MEM_FENCE);
 
 	/* Add the value to the buffer tile. */
-	if (inbounds) tile[ltgt] = cur;
+	tile[ltgt] = cur;
 
 	/* Also grab needed boundary values. */
-	if (lpos.y == 0 && inbounds) {
+	if (lj == 1) {
 		tile[ltgt - ldw] = pc[idx - ${strides[1]}];
 		tile[ltgt + ldim.y * ldw] = pc[idx + ldim.y * ${strides[1]}];
 	}
-	if (lpos.x == 0 && inbounds) {
+	if (li == 1) {
 		tile[ltgt - 1] = pc[idx - ${strides[0]}];
 		tile[ltgt + ldim.x] = pc[idx + ldim.x * ${strides[0]}];
 	}
@@ -96,12 +104,10 @@ __kernel void helm(__global float * const pn, __global float * const pc,
 	value = (2. - 6. * rv) * cur - prev;
 
 	/* Grab the in-plane shifted cells. */
-	if (inbounds) {
-		xl = tile[ltgt - 1];
-		xr = tile[ltgt + 1];
-		yl = tile[ltgt - ldw];
-		yr = tile[ltgt + ldw];
-	}
+	xl = tile[ltgt - 1];
+	xr = tile[ltgt + 1];
+	yl = tile[ltgt - ldw];
+	yr = tile[ltgt + ldw];
 
 	/* Perfrom the spatial updates. */
 	value += rv * (zr + zl + xr + xl + yr + yl);
@@ -111,6 +117,7 @@ __kernel void helm(__global float * const pn, __global float * const pc,
 		if (updsrc) value += srcval * rv * ${dh**2};
 	% endif
 
+	/* Only write the output for cells inside the boundaries. */
 	if (inbounds) pn[idx] = value;
 % endfor
 }
