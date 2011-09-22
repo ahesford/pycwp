@@ -8,10 +8,6 @@ helmsrc = '''
 	stride = [1, dim[0], dim[0] * dim[1]]
 %>
 
-#define MIN(x,y) (((x) < (y)) ? (x) : (y))
-#define MAX(x,y) (((x) > (y)) ? (x) : (y))
-#define MINP(x,y) MIN(x, MAX(0, y))
-
 /* Helmholtz OpenCL kernel for a single time step. Arguments:
  * pn, in/out, the 3-D grid representing the next and previous time steps.
  * pc, input, the 3-D grid representing the current time step.
@@ -51,8 +47,8 @@ __kernel void helm(__global float * const pn, __global float * const pc,
 	bool updsrc, inbounds;
 
 	/* Truncate the local cache dimension to avoid input overruns. */
-	ldim.y = MINP(ldim.y, ${dim[1] - 1} - j);
-	ldim.x = MINP(ldim.x, ${dim[0] - 1} - i);
+	ldim = min(ldim, max((uint2) (0),
+		(uint2) (${dim[0] - 1}, ${dim[1] - 1}) - (uint2) (i, j)));
 
 	/* Check if the target cell contains the source in some slab. */
 	updsrc = (i == ${srcidx[0]}) && (j == ${srcidx[1]});
@@ -83,14 +79,12 @@ __kernel void helm(__global float * const pn, __global float * const pc,
 	tile[ltgt] = cur;
 
 	/* Also grab needed boundary values. */
-	if (lj == 1) {
-		tile[ltgt - ldw] = pc[idx - ${stride[1]}];
-		tile[ltgt + ldim.y * ldw] = pc[idx + ldim.y * ${stride[1]}];
-	}
-	if (li == 1) {
-		tile[ltgt - 1] = pc[idx - ${stride[0]}];
-		tile[ltgt + ldim.x] = pc[idx + ldim.x * ${stride[0]}];
-	}
+	% for i, (li, ls, st) in enumerate(zip(['li', 'lj'], ['1', 'ldw'], stride[:2])):
+		if (${li} == 1) {
+			tile[ltgt - ${ls}] = pc[idx - ${st}];
+			tile[ltgt + ldim.s${i} * ${ls}] = pc[idx + ldim.s${i} * ${st}];
+		}
+	% endfor
 
 	/* Ensure buffer is filled. */
 	barrier (CLK_LOCAL_MEM_FENCE);
@@ -99,10 +93,10 @@ __kernel void helm(__global float * const pn, __global float * const pc,
 	value = (2. - 6. * rv) * cur - prev;
 
 	/* Grab the in-plane shifted cells. */
-	xl = tile[ltgt - 1];
-	xr = tile[ltgt + 1];
-	yl = tile[ltgt - ldw];
-	yr = tile[ltgt + ldw];
+	% for ax, step in zip(['x', 'y'], ['1', 'ldw']):
+		${ax}l = tile[ltgt - ${step}];
+		${ax}r = tile[ltgt + ${step}];
+	% endfor
 
 	/* Perfrom the spatial updates. */
 	value += rv * (zr + zl + xr + xl + yr + yl);
