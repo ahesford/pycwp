@@ -1,5 +1,5 @@
 import numpy as np, pyopencl as cl, pyopencl.array as cla
-
+from mako.template import Template
 from . import fdtd
 
 helmsrc = '''
@@ -8,26 +8,17 @@ helmsrc = '''
  * general-purpose finite-difference schemes but has been specialized and is
  * intended for use with PyOpenCL and the pyajh Helmholtz solver class.*/
 
-#define MIN(x,y) (((x) > (y)) ? (y) : (x))
-#define MAX(x,y) (((x) > (y)) ? (x) : (y))
-
 /* Arguments: pn, in/out, the 3-D grid representing the next and previous time steps.
  * pc, input, the 3-D grid representing the current time step.
  * csq, input, the global 3-D grid of squared sound-speed values.
- * dt, input, the time step.
- * dh, input, the isotropic spatial step.
- * dim, input, the (x,y,z) dimensions of the global grid.
  * srcval, input, the value of the point source term.
- * srcidx, input, the (x,y,z) coordinates of the point source.
  * ltile, input, a local cache for the current time step in a work group. 
  *
  * The global work grid should be 2-D and have at least as many work items in
  * each dimension as the number of non-boundary elements in the corresponding
  * dimension of the global pressure grid. */
 __kernel void helm(__global float * const pn, __global float * const pc,
-			    __global float * const csq, const float dt,
-			    const float dh, const uint3 dim,
-			    const float srcval, const uint3 srcidx,
+			    __global float * const csq, const float srcval,
 			    __local float * const tile) {
 	/* The target cell of the work item. Avoids boundary layers. */
 	const uint i = get_global_id(0) + 1;
@@ -37,8 +28,10 @@ __kernel void helm(__global float * const pn, __global float * const pc,
 	const uint2 lpos = (uint2) (get_local_id(0), get_local_id(1));
 	const uint2 ldim = (uint2) (get_local_size(0), get_local_size(1));
 
-	/* Determine the strides of the grids in FORTRAN order. */
-	const uint3 strides = (uint3) (1, dim.x, dim.x * dim.y);
+<%
+	# Determine the strides of the grids in FORTRAN order.
+	strides = [1, dim[0], dim[0] * dim[1]]
+%>
 
 	/* The leading dimension of the local work tile. */
 	const uint ldw = ldim.x + 2;
@@ -47,102 +40,98 @@ __kernel void helm(__global float * const pn, __global float * const pc,
 	const uint ltgt = (lpos.y + 1) * ldw + lpos.x + 1;
 
 	/* The scaling for the squared sound speed. */
-	const float cscale = (dt / dh) * (dt / dh);
+	const float cscale = ${(dt / dh)**2};
 
 	float rv, value, zr, zl, xr, xl, yr, yl, cur, prev;
-	uint idx = 0, k;
+	uint idx = 0;
 	bool updsrc, inbounds;
 
-	/* Limit the local cache dimension to avoid input overruns. */
-	ldim.y = MIN(ldim.y, MAX(0, dim.y - 1 - j));
-	ldim.x = MIN(ldim.x, MAX(0, dim.x - 1 - i));
-
 	/* Check if the target cell contains the source. */
-	updsrc = (i == srcidx.x) && (j == srcidx.y);
+	updsrc = (i == ${srcidx[0]}) && (j == ${srcidx[1]});
 
 	/* Check if the target cell is within the boundaries. */
-	inbounds = (i < dim.x - 1) && (j < dim.y - 1);
+	inbounds = (i < ${dim[0] - 1}) && (j < ${dim[1] - 1});
 
 	/* The current slab is the first one. */
-	idx = i * strides.x + j * strides.y;
+	idx = i * ${strides[0]} + j * ${strides[1]};
 
 	/* Only read the value if it is in bounds. */
 	if (inbounds) {
 		cur = pc[idx];
-		zr = pc[idx + strides.z];
+		zr = pc[idx + ${strides[2]}];
 	}
 
-	/* Loop through all non-boundary slices sequentially. */
-	for (k = 2; k < dim.z; ++k) {
-		/* Cycle to the next slab. */
-		idx += strides.z;
-		zl = cur;
-		cur = zr;
+% for k in range(2, dim[2]):
+	/* Cycle to the next slab. */
+	idx += ${strides[2]};
+	zl = cur;
+	cur = zr;
 
-		/* Only read the values if they are in bounds. */
-		if (inbounds) {
-			zr = pc[idx + strides.z];
-			prev = pn[idx];
-			rv = cscale * csq[idx];
-		}
+	/* Only read the values if they are in bounds. */
+	if (inbounds) {
+		zr = pc[idx + ${strides[2]}];
+		prev = pn[idx];
+		rv = cscale * csq[idx];
+	}
 
-		barrier (CLK_LOCAL_MEM_FENCE);
+	barrier (CLK_LOCAL_MEM_FENCE);
 
-		/* Add the value to the buffer tile. */
-		if (inbounds) tile[ltgt] = cur;
+	/* Add the value to the buffer tile. */
+	if (inbounds) tile[ltgt] = cur;
 
-		/* Also grab needed boundary values. */
-		if (lpos.y == 0 && inbounds) {
-			tile[ltgt - ldw] = pc[idx - strides.y];
-			tile[ltgt + ldim.y * ldw] = pc[idx + ldim.y * strides.y];
-		}
-		if (lpos.x == 0 && inbounds) {
-			tile[ltgt - 1] = pc[idx - strides.x];
-			tile[ltgt + ldim.x] = pc[idx + ldim.x * strides.x];
-		}
+	/* Also grab needed boundary values. */
+	if (lpos.y == 0 && inbounds) {
+		tile[ltgt - ldw] = pc[idx - ${strides[1]}];
+		tile[ltgt + ldim.y * ldw] = pc[idx + ldim.y * ${strides[1]}];
+	}
+	if (lpos.x == 0 && inbounds) {
+		tile[ltgt - 1] = pc[idx - ${strides[0]}];
+		tile[ltgt + ldim.x] = pc[idx + ldim.x * ${strides[0]}];
+	}
 
-		/* Ensure buffer is filled. */
-		barrier (CLK_LOCAL_MEM_FENCE);
+	/* Ensure buffer is filled. */
+	barrier (CLK_LOCAL_MEM_FENCE);
 
-		/* Perform the temporal update. */
-		value = (2. - 6. * rv) * cur - prev;
+	/* Perform the temporal update. */
+	value = (2. - 6. * rv) * cur - prev;
 
-		/* Grab the in-plane shifted cells. */
-		if (inbounds) {
-			xl = tile[ltgt - 1];
-			xr = tile[ltgt + 1];
-			yl = tile[ltgt - ldw];
-			yr = tile[ltgt + ldw];
-		}
-		
-		/* Perfrom the spatial updates. */
-		value += rv * (zr + zl + xr + xl + yr + yl);
+	/* Grab the in-plane shifted cells. */
+	if (inbounds) {
+		xl = tile[ltgt - 1];
+		xr = tile[ltgt + 1];
+		yl = tile[ltgt - ldw];
+		yr = tile[ltgt + ldw];
+	}
 
+	/* Perfrom the spatial updates. */
+	value += rv * (zr + zl + xr + xl + yr + yl);
+
+	% if k - 1 == srcidx[2]:
 		/* Update the source location. */
-		if (updsrc && ((k - 1) == srcidx.z))
-			value += srcval * rv * dh * dh;
+		if (updsrc) value += srcval * rv * ${dh**2};
+	% endif
 
-		if (inbounds) pn[idx] = value;
-	}
+	if (inbounds) pn[idx] = value;
+% endfor
 }
 
 /* Copy the left (low-index) and right (high-index) values in the z boundary
  * planes to the pressure array pc. The global compute grid (x,y) should equal
  * or exceed the (x,y) dimensions of the pressure grid. */
-__kernel void zbdy(__global float * const pc, __global float * const left,
-			    __global float * const right, const uint3 dim) {
+__kernel void zbdy(__global float * const pc,
+			__global float * const left, __global float * const right) {
 	/* The position of the work item in the global grid. */
 	const uint xpos = get_global_id(0);
 	const uint ypos = get_global_id(1);
 
 	/* Precompute the starting offset of the last slab. */
-	const uint zoff = (dim.z - 1) * dim.x * dim.y;
+	const uint zoff = ${(dim[2] - 1) * dim[1] * dim[0]};
 
 	/* The in-plane linear index for the cell. */
-	const uint ipidx = ypos * dim.x + xpos;
+	const uint ipidx = ypos * ${dim[0]} + xpos;
 
 	/* Copy the values if the item points to an in-bounds cell. */
-	if (xpos < dim.x && ypos < dim.y) {
+	if (xpos < ${dim[0]} && ypos < ${dim[1]}) {
 		const float2 vals = (float2) (left[ipidx], right[ipidx]);
 		pc[ipidx] = vals.s0;
 		pc[ipidx + zoff] = vals.s1;
@@ -152,23 +141,23 @@ __kernel void zbdy(__global float * const pc, __global float * const left,
 /* Copy the left (low-index) and right (high-index) values in the y boundary
  * planes to the pressure array pc. The global compute grid (x,y) should equal
  * or exceed the (x,z) dimensions of the pressure grid. */
-__kernel void ybdy(__global float * const pc, __global float * const left,
-			    __global float * const right, const uint3 dim) {
+__kernel void ybdy(__global float * const pc,
+			__global float * const left, __global float * const right) {
 	/* The position of the work item in the global grid. */
 	const uint xpos = get_global_id(0);
 	const uint zpos = get_global_id(1);
 
 	/* Precompute the starting offset of the last y-row. */
-	const uint yoff = (dim.y - 1) * dim.x;
+	const uint yoff = ${(dim[2] - 1) * dim[0]};
 
 	/* The in-plane linear index for each cell. */
 	uint ipidx;
 
 	/* Private storage of the values to copy. */
-	if (xpos < dim.x && zpos < dim.z) {
-		ipidx = zpos * dim.x + xpos;
+	if (xpos < ${dim[0]} && zpos < ${dim[2]}) {
+		ipidx = zpos * ${dim[0]} + xpos;
 		const float2 vals = (float2) (left[ipidx], right[ipidx]);
-		ipidx = zpos * dim.x * dim.y + xpos;
+		ipidx = zpos * ${dim[0] * dim[1]} + xpos;
 		pc[ipidx] = vals.s0;
 		pc[ipidx + yoff] = vals.s1;
 	}
@@ -177,23 +166,23 @@ __kernel void ybdy(__global float * const pc, __global float * const left,
 /* Copy the left (low-index) and right (high-index) values in the x boundary
  * planes to the pressure array pc. The global compute grid (x,y) should equal
  * or exceed the (y,z) dimensions of the pressure grid. */
-__kernel void xbdy(__global float * const pc, __global float * const left,
-			    __global float * const right, const uint3 dim) {
+__kernel void xbdy(__global float * const pc,
+			__global float * const left, __global float * const right) {
 	/* The position of the work item in the global grid. */
 	const uint ypos = get_global_id(0);
 	const uint zpos = get_global_id(1);
 
 	/* Precompute the starting offset of the last x-row. */
-	const uint xoff = dim.x - 1;
+	const uint xoff = ${dim[0] - 1};
 
 	/* The in-plane linear index for each cell. */
 	uint ipidx;
 
 	/* Private storage of the values to copy. */
-	if (ypos < dim.y && zpos < dim.z) {
-		ipidx = zpos * dim.y + ypos;
+	if (ypos < ${dim[1]} && zpos < ${dim[2]}) {
+		ipidx = zpos * ${dim[1]} + ypos;
 		const float2 vals = (float2) (left[ipidx], right[ipidx]);
-		ipidx *= dim.x;
+		ipidx *= ${dim[0]};
 		pc[ipidx] = vals.s0;
 		pc[ipidx + xoff] = vals.s1;
 	}
@@ -217,8 +206,12 @@ class Helmholtz(fdtd.Helmholtz):
 		'''
 
 		# Copy the finite-difference parameters
-		# They must be of type float32 to work with the OpenCL kernel
-		self.dt, self.h = np.float32(dt), np.float32(h)
+		self.dt, self.h = dt, h
+		self.grid = c.shape[:]
+
+		# Copy the source location and initialize the generator
+		self.srcidx = srcidx[:]
+		self.source = srcfunc()
 
 		# Copy or create the PyOpenCL context
 		if context is not None: self.context = context
@@ -227,8 +220,16 @@ class Helmholtz(fdtd.Helmholtz):
 		# Create a command queue for the context
 		self.queue = cl.CommandQueue(self.context)
 
-		# Compile the OpenCL kernels in the program
-		self.fdcl = cl.Program(self.context, helmsrc).build()
+		# Build a Mako template for the source code
+		t = Template(helmsrc, output_encoding='ascii')
+
+		# Render the source template for the specific problem
+		# and compile the OpenCL kernels in the program
+		self.fdcl = cl.Program(self.context, t.render(dim=self.grid,
+			srcidx=self.srcidx, dt=self.dt, dh = self.h)).build()
+
+		# Build the 2-D compute grid size
+		self.gsize = tuple(g - 2 for g in self.grid[:2])
 
 		mf = cl.mem_flags
 		# Allocate the CL buffer for the squared sound speed
@@ -238,15 +239,6 @@ class Helmholtz(fdtd.Helmholtz):
 		# The size is the same as the sound-speed map
 		self.pa = [cl.Buffer(self.context, mf.READ_WRITE,
 			size=self.csq.size) for i in range(2)]
-
-		# Make the source generator and a uint3 vector for the location
-		self.source = srcfunc()
-		self.srcidx = cla.vec.make_uint3(*srcidx)
-
-		# Grab the problem dimensions
-		self.grid = c.shape[:]
-		self.dimvec = cla.vec.make_uint3(*self.grid)
-		self.gsize = tuple(g - 2 for g in self.grid[:2])
 
 		# Determine the maximum work items for the kernel
 		maxwork = self.fdcl.helm.get_work_group_info(
@@ -284,7 +276,7 @@ class Helmholtz(fdtd.Helmholtz):
 					hostbuf=v[1].flatten('F').astype(np.float32))
 
 			# Invoke the value-copying function
-			f(self.queue, d, None, self.pa[0], l, r, self.dimvec)
+			f(self.queue, d, None, self.pa[0], l, r)
 
 
 	def update(self):
@@ -297,9 +289,8 @@ class Helmholtz(fdtd.Helmholtz):
 		v = np.float32(self.source.next())
 
 		# Invoke the OpenCL kernel
-		self.fdcl.helm (self.queue, self.gsize, None, self.pa[1],
-				self.pa[0], self.csq, self.dt, self.h,
-				self.dimvec, v, self.srcidx, self.ltile)
+		self.fdcl.helm(self.queue, self.gsize, None, self.pa[1],
+				self.pa[0], self.csq, v, self.ltile)
 
 		# Cycle the next and current pressures
 		self.pa = [self.pa[1], self.pa[0]]
