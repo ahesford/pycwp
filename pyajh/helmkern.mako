@@ -1,15 +1,16 @@
 <%
+	# Define a function to compute the product of elements in a list
+	# Empty lists return a produce of unity
+	prod = lambda x: reduce(lambda y, z: y * z, x)
+
 	# Determine the strides of the 3-D grids in FORTRAN order.
-	stride = [1, dim[0], dim[0] * dim[1]]
+	stride = [prod([1] + list(dim[:i])) for i in range(len(dim))]
 
 	# The indices of the computational grid
 	indices = ['x', 'y']
 
-	# Convenient Python string arrays referring to corresponding kernel variables
-	gi = ['gi.' + s for s in indices]
-	li = ['li.' + s for s in indices]
-	ldim = ['ldim.' + s for s in indices]
-	ldw = ['ldw.' + s for s in indices]
+	# Convenient shorthand for global memory pointers
+	gfp = '__global float *'
 %>
 
 <%def name="funcVec(tp, dim, func)">
@@ -35,9 +36,8 @@
  *
  * The global work grid should be 2-D and have as many work items in each
  * dimension as there are non-boundary elements in a constant-z slab. */
-__kernel void helm(__global float * const pn, __global float * const pc,
-			    __global float * const rsq, const float srcval,
-			    __local float * const tile) {
+__kernel void helm(${gfp} const pn, ${gfp} const pc, ${gfp} rsq,
+			const float srcval, __local float * const tile) {
 	/* The target cell in local and global coordinates. Avoids boundaries. */
 	const uint3 gi = ${funcVec("uint", 3, "get_global_id")} + (uint3) (1);
 	const uint3 li = ${funcVec("uint", 3, "get_local_id")} + (uint3) (1);
@@ -47,6 +47,14 @@ __kernel void helm(__global float * const pn, __global float * const pc,
 
 	/* The strides of the local work tile. */
 	const uint3 ldw = (uint3) (1, ldim.x + 2, (ldim.x + 2) * (ldim.y + 2));
+
+	<%
+		# Python strings referring to corresponding kernel variables
+		gi = ['gi.' + s for s in indices]
+		li = ['li.' + s for s in indices]
+		ldim = ['ldim.' + s for s in indices]
+		ldw = ['ldw.' + s for s in indices]
+	%>
 
 	/* The local target cell of the work item. Avoids boundary layers. */
 	const uint ltgt = ${zipreduce('+', '*', li, ldw)};
@@ -117,37 +125,41 @@ __kernel void helm(__global float * const pn, __global float * const pc,
 % endfor
 }
 
-<%
-	# Local grid and stride arrays describe the quicker-varying index
-	# first, the slower-varying dimension second, and the constant-index
-	# dimension last
-	bdygrids, bdystrides = [[[a[i] for i in range(len(a)) if i != j] + [a[j]]
-				for j in range(len(a))] for a in [dim, stride]]
-	bdynames = [d + 'bdy' for d in ['x', 'y', 'z']]
-%>
-
-% for n, g, s in zip(bdynames, bdygrids, bdystrides):
-	__kernel void ${n} (__global float * const pc,
-		__global float * const left, __global float * const right) {
-		/* Get the work-item position in the boundary slice. */
+<%def name="boundary(name, bdim, bstr)">
+	__kernel void ${name} (${gfp} const pc, ${gfp} const l, ${gfp} const r) {
+		/* Find the work-item position in the boundary slice. */
 		const uint2 pos = (uint2) (get_global_id(0), get_global_id(1));
 
-		/* Precompute the offset of the right slab. */
-		const uint roff = ${(g[-1] - 1) * s[-1]};
+		<%
+			# Python strings referring to corresponding kernel variables
+			pos = ['pos.' + s for s in indices]
+		%>
+
+		/* Compute the offset of the right slab. */
+		const uint roff = ${(bdim[-1] - 1) * bstr[-1]};
 
 		/* Store the in-plane linear index of the cell. */
 		uint ipidx;
 
-		/* Only work in the boundaries of the slab. */
-		if (pos.s0 < ${g[0]} && pos.s1 < ${g[1]}) {
-			/* Build the index into the boundary slab. */
-			ipidx = pos.s1 * ${g[0]} + pos.s0;
-			/* Grab the left and right boundary values. */
-			const float2 vals = (float2) (left[ipidx], right[ipidx]);
-			/* Now compute the base index in the global grid. */
-			ipidx = pos.s1 * ${s[1]} + pos.s0 * ${s[0]};
+		if (${zipreduce('&&', '<', pos, bdim)}) {
+			/* Grab the value in the boundary slabs. */
+			ipidx = ${zipreduce('+', '*', pos, [1] + bdim)};
+			const float2 vals = (float2) (l[ipidx], r[ipidx]);
+			/* Compute the global index and assign the values. */
+			ipidx = ${zipreduce('+', '*', pos, bstr)};
 			pc[ipidx] = vals.s0;
 			pc[ipidx + roff] = vals.s1;
 		}
 	}
+</%def>
+
+% for i, n in enumerate(['xbdy', 'ybdy', 'zbdy']):
+	<%
+		# Move the length and stride corresponding to the current
+		# index to the end of the list for function expansion
+		exclude = lambda a, j: [a[k] for k in range(len(a)) if k != j]
+		bdim = exclude(dim, i) + [dim[i]]
+		bstr = exclude(stride, i) + [stride[i]]
+	%>
+	${boundary(n, bdim, bstr)}
 % endfor
