@@ -36,7 +36,7 @@ class Helmholtz(fdtd.Helmholtz):
 		self.queue = cl.CommandQueue(self.context)
 
 		# Build a Mako template for the source code
-		t = Template(Helmholtz._kernel, output_encoding='ascii')
+		t = Template(filename=Helmholtz._kernel, output_encoding='ascii')
 
 		# Render the source template for the specific problem
 		# and compile the OpenCL kernels in the program

@@ -1,7 +1,28 @@
 <%
 	# Determine the strides of the 3-D grids in FORTRAN order.
 	stride = [1, dim[0], dim[0] * dim[1]]
+
+	# The indices of the computational grid
+	indices = ['x', 'y']
+
+	# Convenient Python string arrays referring to corresponding kernel variables
+	gi = ['gi.' + s for s in indices]
+	li = ['li.' + s for s in indices]
+	ldim = ['ldim.' + s for s in indices]
+	ldw = ['ldw.' + s for s in indices]
 %>
+
+<%def name="funcVec(tp, dim, func)">
+	(${tp}${dim}) (${','.join(func + '(%d)' % d for d in range(dim))})
+</%def>
+
+<%def name="vec(tp, items)">
+	(${tp}) (${','.join(str(i) for i in items)})
+</%def>
+
+<%def name="zipreduce(outop, inop, left, right)">
+	${outop.join('(%s %s %s)' % (str(l), inop, str(r)) for l, r in zip(left, right))}
+</%def>
 
 /* Helmholtz OpenCL kernel for a single time step. Arguments:
  * pn, in/out, the 3-D grid representing the next and previous time steps.
@@ -17,39 +38,32 @@
 __kernel void helm(__global float * const pn, __global float * const pc,
 			    __global float * const rsq, const float srcval,
 			    __local float * const tile) {
-	/* The target cell of the work item. Avoids boundary layers. */
-	const uint i = get_global_id(0) + 1;
-	const uint j = get_global_id(1) + 1;
-
-	/* The local compute position. */
-	const uint li = get_local_id(0) + 1;
-	const uint lj = get_local_id(1) + 1;
+	/* The target cell in local and global coordinates. Avoids boundaries. */
+	const uint3 gi = ${funcVec("uint", 3, "get_global_id")} + (uint3) (1);
+	const uint3 li = ${funcVec("uint", 3, "get_local_id")} + (uint3) (1);
 
 	/* The local compute grid. */
-	uint2 ldim = (uint2) (get_local_size(0), get_local_size(1));
+	uint3 ldim = ${funcVec("uint", 3, "get_local_size")};
 
-	/* The leading dimension of the local work tile. */
-	const uint ldw = ldim.x + 2;
+	/* The strides of the local work tile. */
+	const uint3 ldw = (uint3) (1, ldim.x + 2, (ldim.x + 2) * (ldim.y + 2));
 
 	/* The local target cell of the work item. Avoids boundary layers. */
-	const uint ltgt = lj * ldw + li;
+	const uint ltgt = ${zipreduce('+', '*', li, ldw)};
 
 	float rv, value, zr, zl, xr, xl, yr, yl, cur, prev;
-	uint idx = 0;
-	bool updsrc, inbounds;
 
 	/* Truncate the local cache dimension to avoid input overruns. */
-	ldim = min(ldim, max((uint2) (0),
-		(uint2) (${dim[0] - 1}, ${dim[1] - 1}) - (uint2) (i, j)));
+	ldim = min(ldim, max((uint3) (0), ${vec("uint3", [d - 1 for d in dim])} - gi));
 
 	/* Check if the target cell contains the source in some slab. */
-	updsrc = (i == ${srcidx[0]}) && (j == ${srcidx[1]});
+	const bool updsrc = ${zipreduce('&&', '==', gi, srcidx)};
 
 	/* Check if the target cell is within the boundaries. */
-	inbounds = (i < ${dim[0] - 1}) && (j < ${dim[1] - 1});
+	const bool inbounds = ${zipreduce('&&', '<', gi, [d - 1 for d in dim])};
 
 	/* The current slab is the first one. */
-	idx = i * ${stride[0]} + j * ${stride[1]};
+	uint idx = ${zipreduce('+', '*', gi, stride)};
 
 	cur = pc[idx];
 	zr = pc[idx + ${stride[2]}];
@@ -71,10 +85,10 @@ __kernel void helm(__global float * const pn, __global float * const pc,
 	tile[ltgt] = cur;
 
 	/* Also grab needed boundary values. */
-	% for i, (li, ls, st) in enumerate(zip(['li', 'lj'], ['1', 'ldw'], stride[:2])):
-		if (${li} == 1) {
-			tile[ltgt - ${ls}] = pc[idx - ${st}];
-			tile[ltgt + ldim.s${i} * ${ls}] = pc[idx + ldim.s${i} * ${st}];
+	% for (lidx, llen, lstr, str) in zip(li, ldim, ldw, stride):
+		if (${lidx} == 1) {
+			tile[ltgt - ${lstr}] = pc[idx - ${str}];
+			tile[ltgt + ${llen} * ${lstr}] = pc[idx + ${llen} * ${str}];
 		}
 	% endfor
 
@@ -85,7 +99,7 @@ __kernel void helm(__global float * const pn, __global float * const pc,
 	value = (2. - 6. * rv) * cur - prev;
 
 	/* Grab the in-plane shifted cells. */
-	% for ax, step in zip(['x', 'y'], ['1', 'ldw']):
+	% for ax, step in zip(indices, ldw):
 		${ax}l = tile[ltgt - ${step}];
 		${ax}r = tile[ltgt + ${step}];
 	% endfor
