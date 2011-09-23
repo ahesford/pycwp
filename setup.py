@@ -15,6 +15,6 @@ setup(name = "pyajh", version = "2.1.1",
 		description = DOCLINES[0],
 		long_description = "\n".join(DOCLINES[2:]),
 		author = "Andrew J. Hesford", author_email = "ahesford@me.com",
-		platforms = ["any"], license = "BSD", 
-		packages = ["pyajh"],
+		platforms = ["any"], license = "BSD", packages = ["pyajh"],
+		package_data={'pyajh': ['*.mako']}, zip_safe=False,
 		)
