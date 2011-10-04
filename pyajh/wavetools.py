@@ -23,7 +23,14 @@ def green2d(k, r):
 
 def srcint(k, src, obs, cell, ifunc, n = 4):
 	'''
-	Evaluate source integration, of order n, of the Green's function.
+	Evaluate source integration, of order n, of the pairwise Green's
+	function for wave number k from source location src to observer
+	location obs. The list cell specifies the dimensions of the cell.
+
+	The pairwise Green's function function ifunc takes arguments (k, s, o),
+	where k is the wave number, s is the source location and o is the
+	observer location. The source position s varies throughout the cell
+	centered at src according to Gauss-Legendre quadrature rules.
 	'''
 
 	if n % 2 != 0: raise ValueError('Order must be even to avoid singularity.')
@@ -64,10 +71,11 @@ def extgreen(k, grid, cell, greenfunc = green3d):
 	'''
 	Compute the extended Green's function with wave number k for use in
 	CG-FFT over a non-extended grid with dimensions specified in the list
-	grid. Each cell has dimensions specified in the list cell. The Green's
-	function greenfunc(k,r) takes as arguments the wave number and a
-	(possibly array) distance separating the source and observation. The
-	3-D Green's function is used by default.
+	grid. Each cell has dimensions specified in the list cell.
+
+	The Green's function greenfunc(k,r) takes as arguments the wave number
+	and a scalar distance or numpy array of distances between the source
+	and observation locations. The 3-D Green's function is used by default.
 	'''
 
 	dim = len(grid)
