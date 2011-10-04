@@ -21,71 +21,80 @@ def green2d(k, r):
 	'''
 	return 0.25j * (spec.j0(k * r) + 1j * spec.y0(k * r))
 
-def srcint(k, src, obs, cell, n = 4):
+def srcint(k, src, obs, cell, ifunc, n = 4):
 	'''
 	Evaluate source integration, of order n, of the Green's function.
 	'''
 
 	if n % 2 != 0: raise ValueError('Order must be even to avoid singularity.')
 
-	dim = len(cell)
-	if dim not in (2, 3): raise ValueError('Cell dimensions must be 2-D or 3-D.')
+	dim = len(src)
 
-	src, obs, cell = np.array(src), np.array(obs), np.array(cell)
+	if len(obs) != dim:
+		raise ValueError('Observation and source must be of same dimensionality.')
+
+	if len(cell) != dim:
+		raise ValueError('Dimension of cell sizes must match that of source.')
 
 	# Compute the node scaling factor
-	sc = 0.5 * cell
-
-	# Compute the offset between source and observation
-	off = src - obs
+	sc = [0.5 * c for c in cell]
 
 	# Grab the roots and weights of the Legendre polynomial of order n
 	wts = spec.legendre(n).weights
-	wts = zip(wts[:,1], wts[:,0])
+	# Split the quadrature points and weights as lists
+	pts, wts = list(wts[:,0]), list(wts[:,1])
 
-	# Perform the integration in 2-D or 3-D as appropriate
-	if dim == 2:
-		ival = np.sum([[wx * wy * green2d(k, norm(off + sc * [px, py]))
-			for wx, px in wts] for wy, py in wts])
-	else:
-		ival = np.sum([[[wx * wy * wz * green3d(k, norm(off + sc * [px, py, pz]))
-			for wx, px in wts] for wy, py in wts] for wz, pz in wts])
+	# Compute a coordinate grid for sampling within the cell
+	coords = np.mgrid[[slice(n) for i in range(dim)]]
+	# Flatten the coordinate grid into an array of tuples
+	coords = zip(*[c.flat for c in coords])
+
+	# Compute the cell-relative quadrature points
+	qpts = [[o + s * pts[i] for i, o, s in zip(c, src, sc)] for c in coords]
+
+	# Compute the corresponding quadrature weights
+	qwts = [np.prod([wts[i] for i in c]) for c in coords]
+
+	# Sum all contributions to the integral
+	ival = np.sum(w * ifunc(k, p, obs) for w, p in zip(qwts, qpts))
 
 	return ival * np.prod(cell) / 2.**dim
 
-def extgreen(k, grid, cell):
+def extgreen(k, grid, cell, greenfunc = green3d):
 	'''
-	Compute the extended Green's function for use in CG-FFT.
+	Compute the extended Green's function with wave number k for use in
+	CG-FFT over a non-extended grid with dimensions specified in the list
+	grid. Each cell has dimensions specified in the list cell. The Green's
+	function greenfunc(k,r) takes as arguments the wave number and a
+	(possibly array) distance separating the source and observation. The
+	3-D Green's function is used by default.
 	'''
 
-	dim = min(len(grid),len(cell))
-	if dim not in (2, 3): raise ValueError('Problem must be 2-D or 3-D.')
+	dim = len(grid)
 
-	grid, cell = np.array(grid[:dim]), np.array(cell[:dim])
+	if dim != len(cell):
+		raise ValueError('Dimensionality of cell and grid lists must agree.')
 
-	if dim == 2:
-		# Compute the coordinates on the grid
-		slice = np.mgrid[0.:2*grid[0], 0.:2*grid[1]]
-		x = cell[0] * (slice[0] < grid[0]).choose(slice[0] - 2 * grid[0], slice[0])
-		y = cell[1] * (slice[1] < grid[1]).choose(slice[1] - 2 * grid[1], slice[1])
+	# Build the coordinate index arrays in floating-point
+	coords = np.mgrid[[slice(2 * g) for g in grid]].astype(np.float)
 
-		# Evaluate the Green's function on the grid
-		r = np.sqrt(x**2 + y**2)
-		grf = green2d(k, r) * np.prod(cell)
-		# Correct the zero value to remove the singularity
-		grf[0,0] = srcint(k, (0., 0.), (0., 0.), cell)
-	else:
-		# Compute the coordinates on the grid
-		slice = np.mgrid[0.:2*grid[0], 0.:2*grid[1], 0.:2*grid[2]]
-		x = cell[0] * (slice[0] < grid[0]).choose(slice[0] - 2 * grid[0], slice[0])
-		y = cell[1] * (slice[1] < grid[1]).choose(slice[1] - 2 * grid[1], slice[1])
-		z = cell[2] * (slice[2] < grid[2]).choose(slice[2] - 2 * grid[2], slice[2])
+	# Wrap the coordinate arrays and convert to cell coordinates
+	coords = [c * (x < g).choose(x - 2 * g, x)
+			for c, g, x in zip(cell, grid, coords)]
 
-		# Evaluate the Green's function on the grid
-		r = np.sqrt(x**2 + y**2 + z**2)
-		grf = green3d(k, r) * np.prod(cell)
-		# Correct the zero value to remove the singularity
-		grf[0,0,0] = srcint(k, (0., 0., 0.), (0., 0., 0.), cell)
+	# Compute the distances along the coordinate grids
+	r = np.sqrt(np.sum([c**2 for c in coords], axis=0))
+
+	# Evaluate the Green's function on the grid
+	grf = greenfunc(k, r) * np.prod(cell)
+
+	# Define a pairwise Green's function for integration
+	def greenpair(kv, x, y):
+		return greenfunc(kv, norm([xl - yl for xl, yl in zip(x,y)]))
+
+	# Correct the zero value to remove the singularity
+	grf[[slice(1) for d in range(dim)]] = (
+			srcint(k, [0.]*dim, [0.]*dim, cell, greenpair))
 
 	# Return the FFT of the extended-grid Green's function
 	return fft.fftn(k**2 * grf)

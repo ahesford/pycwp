@@ -11,7 +11,7 @@ DOCLINES = __doc__.split("\n")
 
 from setuptools import setup
 
-setup(name = "pyajh", version = "2.1.1",
+setup(name = "pyajh", version = "2.1.2",
 		description = DOCLINES[0],
 		long_description = "\n".join(DOCLINES[2:]),
 		author = "Andrew J. Hesford", author_email = "ahesford@me.com",
