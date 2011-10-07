@@ -21,7 +21,35 @@ def green2d(k, r):
 	'''
 	return 0.25j * (spec.j0(k * r) + 1j * spec.y0(k * r))
 
-def srcint(k, src, obs, cell, ifunc, n = 4):
+def greenduf(k, x, u, v):
+	'''
+	Evaluate the Green's function in Duffy-transformed coordinates.
+
+	The origin is assumed to be the observation point.
+	'''
+	sq = np.sqrt(1. + u**2 + v**2)
+	return x * np.exp(1j * k * x * sq) / (4. * math.pi * sq)
+
+def duffyint(k, dc, n = 4):
+	'''
+	Evaluate the self-integration of order n of the 3-D Green's function
+	over a cubic cell, with length dc, using Duffy's transformation.
+	'''
+
+	# Define the coordinate-transformed cell dimensions
+	cell = [0.5 * dc, 2., 2.]
+
+	# Define the observation and the coordinate-transformed source points
+	obs = [0.]*3
+	src = [0.25 * dc, 0., 0.]
+
+	# Define the Green's function to ignore the observation argument
+	grf = lambda kv, s, o: greenduf(k, *s)
+
+	# The integration is one-sixth of the total cube
+	return 6. * srcint(k, src, obs, cell, grf, n)
+
+def srcint(k, src, obs, cell, ifunc, n = 4, wts = None):
 	'''
 	Evaluate source integration, of order n, of the pairwise Green's
 	function for wave number k from source location src to observer
@@ -31,9 +59,11 @@ def srcint(k, src, obs, cell, ifunc, n = 4):
 	where k is the wave number, s is the source location and o is the
 	observer location. The source position s varies throughout the cell
 	centered at src according to Gauss-Legendre quadrature rules.
-	'''
 
-	if n % 2 != 0: raise ValueError('Order must be even to avoid singularity.')
+	If specified, wts should be an n-by-2 array (or list of lists) in which
+	the first column contains the quadrature points and the second column
+	contains the corresponding quadrature weights.
+	'''
 
 	dim = len(src)
 
@@ -47,9 +77,7 @@ def srcint(k, src, obs, cell, ifunc, n = 4):
 	sc = [0.5 * c for c in cell]
 
 	# Grab the roots and weights of the Legendre polynomial of order n
-	wts = spec.legendre(n).weights
-	# Split the quadrature points and weights as lists
-	pts, wts = list(wts[:,0]), list(wts[:,1])
+	if wts is None: wts = spec.legendre(n).weights
 
 	# Compute a coordinate grid for sampling within the cell
 	coords = np.mgrid[[slice(n) for i in range(dim)]]
@@ -57,10 +85,10 @@ def srcint(k, src, obs, cell, ifunc, n = 4):
 	coords = zip(*[c.flat for c in coords])
 
 	# Compute the cell-relative quadrature points
-	qpts = [[o + s * pts[i] for i, o, s in zip(c, src, sc)] for c in coords]
+	qpts = [[o + s * wts[i][0] for i, o, s in zip(c, src, sc)] for c in coords]
 
 	# Compute the corresponding quadrature weights
-	qwts = [np.prod([wts[i] for i in c]) for c in coords]
+	qwts = [np.prod([wts[i][1] for i in c]) for c in coords]
 
 	# Sum all contributions to the integral
 	ival = np.sum(w * ifunc(k, p, obs) for w, p in zip(qwts, qpts))
