@@ -6,6 +6,22 @@ import numpy, math
 from scipy import special as spec
 from .geom import sph2cart
 
+def rotate(x, y = 1):
+	'''
+	Perform a cyclic rotation of the iterable x.
+	'''
+
+	# Don't do anything for a zero-length list
+	if len(x) == 0: return x
+
+	# Force x to be a list instead of a tuple or array
+	if not isinstance(x, list): x = list(x)
+
+	# Wrap the shift length
+	y = y % len(x)
+
+	return x[y:] + x[:y]
+
 def translator (r, s, phi, theta, l):
 	'''
 	Compute the diagonal translator for a translation distance r, a

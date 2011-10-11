@@ -7,6 +7,7 @@ solvers, and Green's functions.
 import math, cmath, numpy as np, scipy as sp
 import numpy.fft as fft, scipy.special as spec, scipy.sparse.linalg as la
 from numpy.linalg import norm
+from .cutil import rotate
 
 def green3d(k, r):
 	'''
@@ -48,8 +49,9 @@ def duffyint(k, obs, cell, n = 4, greenfunc = greenduf3d):
 	if not isinstance(cell, list): cell = list(cell)
 
 	# Define a generic function to build the cell size and center
-	def duffcell(s, d):
-		l = 0.5 * d[0] - s[0]
+	def duffcell(s, d, sgn):
+		sgn = sgn > 0 and 1 or -1
+		l = 0.5 * d[0] - sgn * s[0]
 		dc = [l] + [dv / l for dv in d[1:]]
 		src = [0.5 * l] + [-sv / l for sv in s[1:]]
 		return src, dc
@@ -60,18 +62,18 @@ def duffyint(k, obs, cell, n = 4, greenfunc = greenduf3d):
 	# Deal with each axis in succession
 	for i in range(dim):
 		# Integrate over the pyramid along the +x axis
-		src, dc = duffcell(obs, cell)
+		src, dc = duffcell(obs, cell, 1)
 		# The obs argument is ignored so it is set to 0
 		val += srcint(k, src, [0.]*dim, dc, grf, n)
 
 		# Integrate over the pyramid along the -x axis
-		src, dc = duffcell([-obs[0]] + obs[1:], cell)
+		src, dc = duffcell(obs, cell, -1)
 		# The obs argument is ignored so it is set to 0
 		val += srcint(k, src, [0.]*dim, dc, grf, n)
 
 		# Rotate the next axis into the x position
-		obs = list(obs[1:]) + list(obs[:1])
-		cell = list(cell[1:]) + list(cell[:1])
+		obs = rotate(obs)
+		cell = rotate(cell)
 
 	return val
 
