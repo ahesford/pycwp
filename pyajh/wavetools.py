@@ -21,7 +21,7 @@ def green2d(k, r):
 	'''
 	return 0.25j * (spec.j0(k * r) + 1j * spec.y0(k * r))
 
-def greenduf(k, x, u, v):
+def greenduf3d(k, x, u, v):
 	'''
 	Evaluate the Green's function in Duffy-transformed coordinates.
 
@@ -30,24 +30,50 @@ def greenduf(k, x, u, v):
 	sq = np.sqrt(1. + u**2 + v**2)
 	return x * np.exp(1j * k * x * sq) / (4. * math.pi * sq)
 
-def duffyint(k, dc, n = 4):
+def duffyint(k, obs, cell, n = 4, greenfunc = greenduf3d):
 	'''
-	Evaluate the self-integration of order n of the 3-D Green's function
-	over a cubic cell, with length dc, using Duffy's transformation.
+	Evaluate the self-integration of order n of the smoothed Green's
+	function over a cubic cell, with length dc, using Duffy's
+	transformation.
 	'''
 
-	# Define the coordinate-transformed cell dimensions
-	cell = [0.5 * dc, 2., 2.]
+	dim = len(obs)
+	if dim != len(cell): raise ValueError('Dimension of obs and cell must agree.')
 
-	# Define the observation and the coordinate-transformed source points
-	obs = [0.]*3
-	src = [0.25 * dc, 0., 0.]
+	# Wrap the Duffy Green's function to the form expected by srcint
+	grf = lambda kv, s, o: greenfunc(k, *s)
 
-	# Define the Green's function to ignore the observation argument
-	grf = lambda kv, s, o: greenduf(k, *s)
+	# Make sure that the obs and cell iterables are lists
+	if not isinstance(obs, list): obs = list(obs)
+	if not isinstance(cell, list): cell = list(cell)
 
-	# The integration is one-sixth of the total cube
-	return 6. * srcint(k, src, obs, cell, grf, n)
+	# Define a generic function to build the cell size and center
+	def duffcell(s, d):
+		l = 0.5 * d[0] - s[0]
+		dc = [l] + [dv / l for dv in d[1:]]
+		src = [0.5 * l] + [-sv / l for sv in s[1:]]
+		return src, dc
+
+	# Store the final integration value
+	val = 0.
+
+	# Deal with each axis in succession
+	for i in range(dim):
+		# Integrate over the pyramid along the +x axis
+		src, dc = duffcell(obs, cell)
+		# The obs argument is ignored so it is set to 0
+		val += srcint(k, src, [0.]*dim, dc, grf, n)
+
+		# Integrate over the pyramid along the -x axis
+		src, dc = duffcell([-obs[0]] + obs[1:], cell)
+		# The obs argument is ignored so it is set to 0
+		val += srcint(k, src, [0.]*dim, dc, grf, n)
+
+		# Rotate the next axis into the x position
+		obs = list(obs[1:]) + list(obs[:1])
+		cell = list(cell[1:]) + list(cell[:1])
+
+	return val
 
 def srcint(k, src, obs, cell, ifunc, n = 4, wts = None):
 	'''
@@ -67,11 +93,8 @@ def srcint(k, src, obs, cell, ifunc, n = 4, wts = None):
 
 	dim = len(src)
 
-	if len(obs) != dim:
-		raise ValueError('Observation and source must be of same dimensionality.')
-
-	if len(cell) != dim:
-		raise ValueError('Dimension of cell sizes must match that of source.')
+	if len(obs) != dim: raise ValueError('Dimension of src and obs must agree.')
+	if len(cell) != dim: raise ValueError('Dimension of src and cell must agree.')
 
 	# Compute the node scaling factor
 	sc = [0.5 * c for c in cell]
@@ -129,8 +152,7 @@ def extgreen(k, grid, cell, greenfunc = green3d):
 		return greenfunc(kv, norm([xl - yl for xl, yl in zip(x,y)]))
 
 	# Correct the zero value to remove the singularity
-	grf[[slice(1) for d in range(dim)]] = (
-			srcint(k, [0.]*dim, [0.]*dim, cell, greenpair))
+	grf[[slice(1) for d in range(dim)]] = duffyint(k, [0.]*dim, cell)
 
 	# Return the FFT of the extended-grid Green's function
 	return fft.fftn(k**2 * grf)
