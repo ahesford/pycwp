@@ -16,7 +16,7 @@ def slicer(slstr):
 	or a slice object.
 	'''
 
-	iargs = [(len(s) > 0 and [int(s)] or [None])[0] for s in slstr.split(':')]
+	iargs = [int(s) if len(s) > 0 else None for s in slstr.split(':')]
 	if len(iargs) < 2: return iargs[0]
 	return slice(*iargs)
 
@@ -39,7 +39,7 @@ def main (argv = None):
 	mat = mio.readbmat(argv.pop(0))[slices]
 
 	# Write the output to the desired file or to stdout
-	mio.writebmat(mat, (len(argv) > 0 and [argv[0]] or [sys.stdout])[0])
+	mio.writebmat(mat, argv[0] if len(argv) > 0 else sys.stdout)
 
 	return 0
 

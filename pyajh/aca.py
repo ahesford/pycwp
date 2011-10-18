@@ -37,7 +37,7 @@ def matrix(eltfunc, nr, nc, tol = 1e-6):
 			r -= ue[irow[-1]] * ve
 
 		# Find the column index of the largest element
-		icol.append(max([((idx in icol and [0.0] or [abs(l)])[0], idx)
+		icol.append(max([(0 if idx in icol else abs(l), idx)
 			for idx, l in enumerate(r)])[-1])
 
 		# Add in the scaled new row
@@ -54,7 +54,7 @@ def matrix(eltfunc, nr, nc, tol = 1e-6):
 		u.append(c)
 
 		# Find the row index of the largest element
-		irow.append(max([((idx in irow and [0.0] or [abs(l)])[0], idx)
+		irow.append(max([(0 if idx in irow else abs(l), idx)
 			for idx, l in enumerate(c)])[-1])
 
 		# Update the new matrix norm estimate

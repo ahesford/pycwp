@@ -50,7 +50,7 @@ def duffyint(k, obs, cell, n = 4, greenfunc = greenduf3d):
 
 	# Define a generic function to build the cell size and center
 	def duffcell(s, d, sgn):
-		sgn = sgn > 0 and 1 or -1
+		sgn = 1 if sgn > 0 else -1
 		l = 0.5 * d[0] - sgn * s[0]
 		dc = [l] + [dv / l for dv in d[1:]]
 		src = [0.5 * l] + [-sv / l for sv in s[1:]]
