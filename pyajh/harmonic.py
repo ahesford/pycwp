@@ -5,6 +5,7 @@ surfaces of spheres, used in other parts of the module.
 
 import math, numpy as np
 from scipy import special as spec
+from . import cutil
 
 
 class SphericalInterpolator:
@@ -56,7 +57,7 @@ class SphericalInterpolator:
 			rows = [tbase + l for l in range(order)]
 			
 			# Build the corresponding angular positions, unwrapped
-			tharr = [harmonic.polarwrap(thetas[0], ti) for ti in rows]
+			tharr = [polarwrap(thetas[0], ti) for ti in rows]
 			
 			# Build the Lagrange interpolation coefficients
 			twts = cutil.lagrange(rtheta, tharr)
@@ -95,7 +96,7 @@ class SphericalInterpolator:
 					cols = [(k + m + nphi[0]) % nphi[0]
 							for m in range(order)]
 					# Build the unwrapped phi values
-					pharr = [harmonic.aziwrap(phis[0], k + m)
+					pharr = [aziwrap(phis[0], k + m)
 							for m in range(order)]
 					
 					# Build the Lagrange interpolation coefficients
@@ -103,7 +104,7 @@ class SphericalInterpolator:
 
 					# Populate the columns of the sparse array
 					for pw, cv in zip(pwts, cols):
-						vpos = harmonic.linidx(ntheta[0], nphi[0], rv, cv)
+						vpos = linidx(ntheta[0], nphi[0], rv, cv)
 						matrow[0].append(vpos)
 						matrow[1].append(pw * tw)
 						
