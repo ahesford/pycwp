@@ -2,9 +2,28 @@
 General-purpose numerical routines used in other parts of the module.
 '''
 
-import numpy, math
+import numpy, math, operator
 from scipy import special as spec
 from .geom import sph2cart
+
+def prod(a):
+	'Compute the product of the elements of an array.'
+	return reduce(operator.mul, a)
+
+def lagrange(x, pts):
+	'''
+	For sample points pts and a test point x, return the Lagrange
+	polynomial weights.
+	'''
+
+	# Compute a single weight term
+	def lgwt(x, pi, pj): return float(x - pj) / float(pi - pj)
+
+	# Compute all the weights
+	wts = [prod([lgwt(x, pi, pj) for j, pj in enumerate(pts) if i != j])
+			for i, pi in enumerate(pts)]
+
+	return wts
 
 def rotate(x, y = 1):
 	'''
