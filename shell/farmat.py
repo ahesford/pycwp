@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 import numpy as np, math, sys
-from pyajh import mio, cutil, wavecl
+from pyajh import mio, cutil, wavecl, harmonic
 
 
 if __name__ == '__main__':
@@ -16,12 +16,8 @@ if __name__ == '__main__':
 	iord = int(sys.argv[4])
 	outfile = sys.argv[5]
 
-	# Compute the phi samples
-	nphi = 2 * (nt - 2)
-	phi = 2. * math.pi * np.arange(0., nphi) / nphi
-
 	# Compute the theta samples as Gauss-Legendre values
-	theta = [math.pi] + list(reversed(cutil.gaussleg(nt - 2)[0])) + [0.]
+	theta = harmonic.polararray(nt)
 
 	# Build a flattened array of cell coordinates
 	gsl = [slice(-n / 2. + 0.5, n / 2. + 0.5) for i in range(3)]
@@ -29,5 +25,5 @@ if __name__ == '__main__':
 	coords = [[dc * co for co in crd] for crd in zip(*[c.flat for c in grid])]
 
 	# Use a default to build the far-field matrix
-	ffd = wavecl.FarMatrix(theta, phi, dc, iord).fill(coords)
+	ffd = wavecl.FarMatrix(theta, dc, iord).fill(coords)
 	mio.writebmat(ffd, outfile)

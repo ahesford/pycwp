@@ -14,15 +14,17 @@ class SphericalInterpolator:
 	function defined on the surface of a sphere.
 	'''
 
-	def __init__(self, thetas, phis, order=4):
+	def __init__(self, thetas, order=4):
 		'''
 		Build the Lagrange interpolation matrix of a specified order
 		for a regularly sampled angular function. Interpolation windows
 		wrap around the pole at most once.
 
-		The lists of lists thetas and phis specify the number of polar
-		and azimuthal samples, respectively, of the coarse (index 0) and
-		fine (index 1) grids.
+		The 2-element list of lists thetas specifies the locations of
+		polar samples for the coarse (thetas[0]) and fine (thetas[1])
+		grids. The azimuthal samples at each of the levels are
+		regularly spaced and have a count 2 * (len(thetas[i]) - 2) for
+		the corresponding polar samples thetas[i].
 
 		The sparse output matrix format is a list of lists of two
 		lists. For a sparse matrix list mat, the list r = mat[i]
@@ -32,13 +34,16 @@ class SphericalInterpolator:
 		weights) at the nonzero columns.
 		'''
 		
-		if order > len(thetas[0]) or order > len(phis[0]):
-			raise ValueError('Order should not exceed number of samples at coarse rate.')
+		if order > len(thetas[0]):
+			raise ValueError('Order should not exceed number of coarse samples.')
 
 
 		# Grab the total number of samples
 		ntheta = [len(t) for t in thetas]
-		nphi = [len(p) for p in phis]
+		nphi = [2 * (n - 2) for n in ntheta]
+
+		# Grab the azimuthal step size
+		dphi = [2 * math.pi / n for n in nphi]
 		
 		# The number of samples at the lower [0] and higher [1] sampling rates
 		nsamp = [2 + (nt - 2) * np for nt, np in zip(ntheta, nphi)]
@@ -63,7 +68,7 @@ class SphericalInterpolator:
 			twts = cutil.lagrange(rtheta, tharr)
 			
 			# Loop over the higher azimuthal sampling rate
-			for rphi in phis[1]:
+			for j in range(nphi[1]):
 				# Initialize the empty matrix row
 				matrow = [[], []]
 				# Take care of each theta sample
@@ -78,33 +83,32 @@ class SphericalInterpolator:
 						matrow[1].append(tw)
 						continue
 
+					# Compute the angular position
+					rphi = j * dphi[1]
 					# Find the starting interpolation interval
-					phiv = rphi
-					k = cutil.rlocate(phis[0], phiv) - offset
+					k = (j * nphi[0]) / nphi[1] - offset
 					
 					# Adjust for crossing the pole
 					if not (0 <= rv < ntheta[0]):
-						phiv += math.pi
+						rphi += math.pi
 						k += ntheta[0] / 2
 
 					# Now correct the polar index
 					if rv >= ntheta[0]:
-						rv = 2 * (ntheta[0] - 1) - rv
-					elif rv < 0: rv = abs(rv)
+						ri = 2 * (ntheta[0] - 1) - rv
+					else: ri = abs(rv)
 						
 					# Build the wrapped phi indices
-					cols = [(k + m + nphi[0]) % nphi[0]
-							for m in range(order)]
+					cols = [(k + m + nphi[0]) % nphi[0] for m in range(order)]
 					# Build the unwrapped phi values
-					pharr = [aziwrap(phis[0], k + m)
-							for m in range(order)]
+					pharr = [(k + m) * dphi[0] for m in range(order)]
 					
 					# Build the Lagrange interpolation coefficients
-					pwts = cutil.lagrange(phiv, pharr)
+					pwts = cutil.lagrange(rphi, pharr)
 
 					# Populate the columns of the sparse array
 					for pw, cv in zip(pwts, cols):
-						vpos = linidx(ntheta[0], nphi[0], rv, cv)
+						vpos = linidx(ntheta[0], nphi[0], ri, cv)
 						matrow[0].append(vpos)
 						matrow[1].append(pw * tw)
 						
@@ -122,6 +126,14 @@ class SphericalInterpolator:
 
 		# Loop through all rows to compute the total output
 		return [cutil.dot(r[1], (f[i] for i in r[0])) for r in self.matrix]
+
+
+def polararray(ntheta):
+	'''
+	Return a list of polar angular samples corresponding to Gauss-Legendre
+	quadrature points, with poles added, in decreasing order.
+	'''
+	return [math.pi] + list(reversed(cutil.gaussleg(ntheta - 2)[0])) + [0.]
 
 
 def linidx(ntheta, nphi, ti, pi, poles=True):
@@ -168,16 +180,7 @@ def polarwrap(thetas, i):
 	# For negative indices, shift around the low value
 	if i < 0: return ls - thetas[-i]
 	# For too-high indices, shift around the high value
-	return hs - thetas[2 * n - i - 2]
-
-
-def aziwrap(phis, i):
-	'''
-	This returns the angular value corresponding at index i. If i is out of
-	bounds, the angle is unwrapped by 2 pi.
-	'''
-	n = len(phis)
-	return 2. * math.pi * int(i / n) + phis[i % n]
+	return hs - thetas[2 * (n - 1) - i]
 
 
 def legassoc (n, m, th):

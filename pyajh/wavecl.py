@@ -11,14 +11,14 @@ class FarMatrix:
 
 	_kernel = path.join(path.split(path.abspath(__file__))[0], 'farmat.mako')
 
-	def __init__(self, theta, phi, dc = 0.1, n = 4, context = None):
+	def __init__(self, theta, dc = 0.1, n = 4, context = None):
 		'''
 		Create an OpenCL kernel to build a far-field matrix.
 
-		The polar angular samples are specified in the list theta, and
-		the azimuthal samples are specified in the list phi. The
-		(square) cells have edge length dc. Gauss-Legendre quadrature
-		of order n is used.
+		The polar angular samples are specified in the list theta. The
+		azimuthal samples number 2 * (len(theta) - 2) and are equally
+		spaced. The (square) cells have edge length dc. Gauss-Legendre
+		quadrature of order n is used.
 
 		A desired OpenCL context may be specified in context, or else a
 		default context is used.
@@ -49,7 +49,8 @@ class FarMatrix:
 		self.k = np.float32(2 * math.pi)
 
 		# Compute the angular sizes
-		ntheta, nphi = len(theta), len(phi)
+		ntheta = len(theta)
+		nphi = 2 * (ntheta - 2)
 
 		# The number of samples of the far-field, including poles
 		self.nsamp = (ntheta - 2) * nphi + 2
@@ -57,9 +58,10 @@ class FarMatrix:
 		# Note the dimensions of the work grid
 		self.wgrid = (nphi, ntheta - 2)
 
-		# Copy the angular positions as arrays
+		# Copy the polar positions as an array
 		self.theta = theta[:] if isinstance(theta, np.ndarray) else np.array(theta)
-		self.phi = phi[:] if isinstance(phi, np.ndarray) else np.array(phi)
+		# Build a list of azimuthal positions
+		self.phi = 2. * math.pi * np.arange(nphi) / nphi
 
 
 	def fill(self, srclist):
