@@ -21,7 +21,7 @@ if __name__ == '__main__':
 	phi = 2. * math.pi * np.arange(0., nphi) / nphi
 
 	# Compute the theta samples as Gauss-Legendre values
-	theta = [math.pi] + list(reversed(np.cos(cutil.gaussleg(nt - 2)[0]))) + [0.]
+	theta = [math.pi] + list(reversed(cutil.gaussleg(nt - 2)[0])) + [0.]
 
 	# Build a flattened array of cell coordinates
 	gsl = [slice(-n / 2. + 0.5, n / 2. + 0.5) for i in range(3)]

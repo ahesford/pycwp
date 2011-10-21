@@ -6,9 +6,48 @@ import numpy, math, operator
 from scipy import special as spec
 from .geom import sph2cart
 
+def rlocate(arr, val):
+	'''
+	Search the monotonically increasing or decreasing list arr for an index
+	j such that arr[j] <= val <= arr[j+1]. If j == -1 or j == len(arr) - 1,
+	val is out of range of the list.
+
+	Return the index.
+	'''
+
+	n = len(arr)
+
+	jl = -1;
+	ju = n;
+	ascnd = arr[-1] >= arr[0]
+
+	while ju - jl > 1:
+		jm = (ju + jl) >> 1
+		if (val >= arr[jm]) == ascnd: jl = jm
+		else: ju = jm
+
+	if val == arr[0]: return 0
+	if val == arr[-1]: return n - 1
+
+	return jl
+
+def hadamard(x, y):
+	'''
+	Compute the Hadamard product of iterables x and y.
+	'''
+	return map(lambda x, y: x * y, x, y)
+
 def prod(a):
-	'Compute the product of the elements of an array.'
+	'''
+	Compute the product of the elements of an iterable.
+	'''
 	return reduce(operator.mul, a)
+
+def dot(x, y):
+	'''
+	Compute the dot product of two iterables.
+	'''
+	return sum(hadamard(x, y))
 
 def lagrange(x, pts):
 	'''
