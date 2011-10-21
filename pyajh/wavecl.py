@@ -1,6 +1,97 @@
-import numpy as np, pyopencl as cl, pyopencl.array as cla, os.path as path
+import numpy as np, scipy.special as spec, math
+import pyopencl as cl, pyopencl.array as cla, os.path as path
+
 from mako.template import Template
 from . import fdtd
+
+class FarMatrix:
+	'''
+	Compile an OpenCL kernel that will populate a far-field matrix.
+	'''
+
+	_kernel = path.join(path.split(path.abspath(__file__))[0], 'farmat.mako')
+
+	def __init__(self, theta, phi, dc = 0.1, n = 4, context = None):
+		'''
+		Create an OpenCL kernel to build a far-field matrix.
+
+		The polar angular samples are specified in the list theta, and
+		the azimuthal samples are specified in the list phi. The
+		(square) cells have edge length dc. Gauss-Legendre quadrature
+		of order n is used.
+
+		A desired OpenCL context may be specified in context, or else a
+		default context is used.
+		'''
+
+		# Build an OpenCL context if one hasn't been provided
+		if context is None:
+			self.context = cl.Context(dev_type=cl.device_type.DEFAULT)
+		else: self.context = context
+
+		# Compute the quadrature points and weights
+		self.pts, self.wts = spec.legendre(n).weights.T.tolist()[:2]
+
+		# Copy the integration order and the cell dimensions
+		self.n, self.dc = n, dc
+
+		# Read the Mako template for the kernel
+		t = Template(filename=FarMatrix._kernel, output_encoding='ascii')
+
+		# Build the program for the context
+		self.prog = cl.Program(self.context, t.render(pts = self.pts,
+			wts = self.wts, dc = dc)).build()
+
+		# Build a queue for the context
+		self.queue = cl.CommandQueue(self.context)
+
+		# Build the wave number
+		self.k = np.float32(2 * math.pi)
+
+		# Compute the angular sizes
+		ntheta, nphi = len(theta), len(phi)
+
+		# The number of samples of the far-field, including poles
+		self.nsamp = (ntheta - 2) * nphi + 2
+
+		# Note the dimensions of the work grid
+		self.wgrid = (nphi, ntheta - 2)
+
+		# Copy the angular positions as arrays
+		self.theta = theta[:] if isinstance(theta, np.ndarray) else np.array(theta)
+		self.phi = phi[:] if isinstance(phi, np.ndarray) else np.array(phi)
+
+
+	def fill(self, srclist):
+		'''
+		Use the precompiled kernel to fill the far-field matrix for
+		sources with centers specified in a list srclist of
+		three-element coordinate lists.
+
+		In the row for each source position, phi most rapidly varies.
+		'''
+
+		# Build a buffer to store the OpenCL results
+		buf = cl.Buffer(self.context, cl.mem_flags.READ_WRITE,
+				size=self.nsamp * np.complex64().nbytes)
+
+		# Allocate OpenCL arrays for the angular samples
+		tharr = cla.to_device(self.queue, self.theta.astype(np.float32))
+		pharr = cla.to_device(self.queue, self.phi.astype(np.float32))
+
+		# Define a function to fill one row of the far-field matrix
+		def fillrow(s):
+			src = cla.vec.make_float3(*s)
+			self.prog.farmat(self.queue, self.wgrid, None, buf,
+					tharr.data, pharr.data, self.k, src)
+			row = np.empty((self.nsamp,), dtype=np.complex64)
+			cl.enqueue_copy(self.queue, row, buf).wait()
+			return row.tolist()
+
+		# Invoke the kernel to fill rows of the far-fiel matrix
+		return np.array([fillrow(s) for s in srclist], dtype=np.complex64)
+
+
 
 class Helmholtz(fdtd.Helmholtz):
 	'''
