@@ -18,7 +18,7 @@ class SphericalInterpolator:
 		'''
 		Build the Lagrange interpolation matrix of a specified order
 		for a regularly sampled angular function. Interpolation windows
-		wrap around the pole at most once.
+		do not wrap around the pole.
 
 		The 2-element list of lists thetas specifies the locations of
 		polar samples for the coarse (thetas[0]) and fine (thetas[1])
@@ -33,7 +33,7 @@ class SphericalInterpolator:
 		specifies the corresponding values (Lagrange interpolation
 		weights) at the nonzero columns.
 		'''
-		
+
 		if order > len(thetas[0]):
 			raise ValueError('Order should not exceed number of coarse samples.')
 
@@ -44,29 +44,31 @@ class SphericalInterpolator:
 
 		# Grab the azimuthal step size
 		dphi = [2 * math.pi / n for n in nphi]
-		
+
 		# The number of samples at the lower [0] and higher [1] sampling rates
 		nsamp = [2 + (nt - 2) * np for nt, np in zip(ntheta, nphi)]
-		
+
 		# Half the Lagrange interval width
 		offset = (order - 1) / 2
-		
+
 		# Simply copy the north pole into the higher sampling rate
 		self.matrix = [[[0], [1]]]
-		
+
 		# Loop over the higher polar sampling rate, ignoring the poles
 		for rtheta in thetas[1][1:-1]:
 			# Find the starting interpolation interval
 			tbase = cutil.rlocate(thetas[0], rtheta) - offset
+			# Prevent the interval from wrapping around poles
+			tbase = min(max(0, tbase), ntheta[0] - order)
 			# Enumerate all polar indices involved in interpolation
 			rows = [tbase + l for l in range(order)]
-			
-			# Build the corresponding angular positions, unwrapped
-			tharr = [polarwrap(thetas[0], ti) for ti in rows]
-			
+
+			# Build the corresponding angular positions
+			tharr = [thetas[0][ti] for ti in rows]
+
 			# Build the Lagrange interpolation coefficients
 			twts = cutil.lagrange(rtheta, tharr)
-			
+
 			# Loop over the higher azimuthal sampling rate
 			for j in range(nphi[1]):
 				# Initialize the empty matrix row
@@ -87,31 +89,21 @@ class SphericalInterpolator:
 					rphi = j * dphi[1]
 					# Find the starting interpolation interval
 					k = (j * nphi[0]) / nphi[1] - offset
-					
-					# Adjust for crossing the pole
-					if not (0 <= rv < ntheta[0]):
-						rphi += math.pi
-						k += ntheta[0] / 2
 
-					# Now correct the polar index
-					if rv >= ntheta[0]:
-						ri = 2 * (ntheta[0] - 1) - rv
-					else: ri = abs(rv)
-						
 					# Build the wrapped phi indices
 					cols = [(k + m + nphi[0]) % nphi[0] for m in range(order)]
 					# Build the unwrapped phi values
 					pharr = [(k + m) * dphi[0] for m in range(order)]
-					
+
 					# Build the Lagrange interpolation coefficients
 					pwts = cutil.lagrange(rphi, pharr)
 
 					# Populate the columns of the sparse array
 					for pw, cv in zip(pwts, cols):
-						vpos = linidx(ntheta[0], nphi[0], ri, cv)
+						vpos = linidx(ntheta[0], nphi[0], rv, cv)
 						matrow[0].append(vpos)
 						matrow[1].append(pw * tw)
-						
+
 				# Add the populated row to the matrix
 				self.matrix.append(matrow)
 
@@ -140,7 +132,8 @@ def linidx(ntheta, nphi, ti, pi, poles=True):
 	'''
 	Compute the linearized index the spherical indices (ti, pi), with phi
 	most rapidly varying. If poles is True, poles are included, with the
-	first pole at index 0 and the second pole at index -1.
+	first pole at index 0 and the second pole at Python index -1. Each pole
+	has a single value for ti = 0 or ti = ntheta - 1.
 
 	The index will not be wrapped.
 	'''
@@ -152,35 +145,6 @@ def linidx(ntheta, nphi, ti, pi, poles=True):
 	if not poles: return ti * nphi + pi
 	# With a pole, adjust for the single value at the poles
 	else: return 1 + (ti - 1) * nphi + pi
-
-
-def polarwrap(thetas, i):
-	'''
-	This returns the angular value corresponding to index i wrapped around
-	a pole. For correct results, a polar value (v = 0 or v = pi) must exist
-	at the end of the list around which the index is wrapped.
-
-	If i < 0, a polar value must reside at thetas[0].
-	If i >= len(thetas), a polar value must reside at thetas[-1].
-	'''
-	n = len(thetas)
-
-	# Check the limits
-	if i < 1 - n or i > 2 * (n - 1):
-		raise ValueError('Index may only wrap around one pole.')
-
-	# Don't wrap if the index is properly placed
-	if 0 <= i < n: return thetas[i]
-
-	# For increasing arrays, the north pole (theta = 0) is at the start
-	if thetas[0] < thetas[-1]: ls, hs = 0, 2. * math.pi
-	# For decreasing arrays, the north pole is at the end
-	else: ls, hs = 2. * math.pi, 0.
-
-	# For negative indices, shift around the low value
-	if i < 0: return ls - thetas[-i]
-	# For too-high indices, shift around the high value
-	return hs - thetas[2 * (n - 1) - i]
 
 
 def legassoc (n, m, th):
