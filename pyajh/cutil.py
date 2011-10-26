@@ -149,36 +149,108 @@ def exband (a, tol = 1e-6):
 	return int(2. * math.pi * a + 1.8 * (d0**2 * 2. * math.pi * a)**(1./3.))
 
 
-def gaussleg (m, tol = 1e-9):
+def legendre (t, m):
 	'''
-	Compute the Gaussian nodes in the interval [0,pi] and corresponding weights
-	for a specified order.
+	Return the value of the Legendre polynomial of order m, along with its
+	first and second derivatives, at a point t.
 	'''
-	def legendre (t, m):
-		p0 = 1.0; p1 = t
-		for k in range(1,m):
-			p = ((2.0*k + 1.0) * t * p1 - k * p0) / (1.0 + k)
-			p0 = p1; p1 = p
-		dp = m * (p0 - t * p1) / (1.0 - t**2)
-		return p, dp
+	# Set function values explicitly for orders less than 2
+	if m < 1: return 1., 0., 0.
+	elif m < 2: return t, 1., 0.
 
-	weights = numpy.zeros ((m), dtype=numpy.float64)
-	nodes = numpy.zeros ((m), dtype=numpy.float64)
+	p0, p1 = 1.0, t
+
+	for k in range(1, m):
+		# This value is necessary for the second derivative
+		dpl = k * (p0 - t * p1) / (1. - t**2)
+		p = ((2.*k + 1.0) * t * p1 - k * p0) / (1. + k)
+		p0 = p1; p1 = p
+
+	# Compute the value of the derivative
+	dp = m * (p0 - t * p1) / (1.0 - t**2)
+
+	# Compute the value of the second derivative
+	ddp = ((m - 2.) * t * dp + m * (p1 - dpl)) / (t**2 - 1.)
+
+	return p, dp, ddp
+
+
+def gaussleg (m, tol = 1e-9, itmax=100):
+	'''
+	Compute the Gauss-Legendre quadrature nodes and weights in the interval
+	[0,pi] for a specified order m. The Newton-Raphson method is used to
+	find the roots of Legendre polynomials (the nodes) with a maximum of
+	itmax iterations and an error tolerance of tol.
+	'''
+	weights = numpy.zeros((m), dtype=numpy.float64)
+	nodes = numpy.zeros((m), dtype=numpy.float64)
 
 	nRoots = (m + 1) / 2
 
 	for i in range(nRoots):
-		t = math.cos (math.pi * (i + 0.75) / (m + 0.5))
-		for j in range(30):
-			p,dp = legendre (t, m)
-			dt = -p/dp; t += dt
-			if abs(dt) < tol:
-				nodes[i] = math.acos(t)
-				nodes[m - i - 1] = math.acos(-t)
-				weights[i] = 2.0 / (1.0 - t**2) / (dp**2)
-				weights[m - i - 1] = weights[i]
-				break
+		# The initial guess is the (i+1) Chebyshev root
+		t = math.cos (math.pi * (i + 0.75) / m)
+		for j in range(itmax):
+			# Grab the Legendre polynomial and its derviative
+			p, dp = legendre (t, m)[:2]
+
+			# Perform a Newton-Raphson update
+			dt = -p/dp
+			t += dt
+
+			# Update the node and weight estimates
+			nodes[i] = math.acos(t)
+			nodes[-(i + 1)] = math.acos(-t)
+			weights[i] = 2.0 / (1.0 - t**2) / (dp**2)
+			weights[-(i + 1)] = weights[i]
+
+			# Nothing left to do if tolerance was achieved
+			if abs(dt) < tol: break
+
 	return nodes, weights
+
+
+def gausslob (m, tol = 1e-9, itmax=100):
+	'''
+	Compute the Gauss-Lobatto quadrature nodes and weights in the interval
+	[0,pi] for a specified order m. The Newton-Raphson method is used to
+	find the roots of derivatives of Legendre polynomials (the nodes) with
+	a maximum of itmax iterations and an error tolerance of tol.
+	'''
+	weights = numpy.zeros((m), dtype=numpy.float64)
+	nodes = numpy.zeros((m), dtype=numpy.float64)
+
+	# This is the number of roots away from the endpoints
+	nRoots = (m - 1) / 2
+
+	# First compute the nodes and weights at the endpoints
+	nodes[0] = 0.
+	nodes[-1] = math.pi
+	weights[0] = 2. / m / (m - 1.)
+	weights[-1] = weights[0]
+
+	for i in range(1, nRoots + 1):
+		# The initial guess is halfway between subsequent Chebyshev roots
+		t = 0.5 * sum(math.cos(math.pi * (i + j - 0.25) / m) for j in range(2));
+		for j in range(itmax):
+			# Grab the Legendre polynomial and its derviative
+			p, dp, ddp = legendre (t, m - 1)
+
+			# Perform a Newton-Raphson update
+			dt = -dp / ddp
+			t += dt
+
+			# Update the node and weight estimates
+			nodes[i] = math.acos(t)
+			nodes[-(i + 1)] = math.acos(-t)
+			weights[i] = 2. / m / (m - 1.) / (p**2)
+			weights[-(i + 1)] = weights[i]
+
+			# Nothing left to do if tolerance was achieved
+			if abs(dt) < tol: break
+
+	return nodes, weights
+
 
 def complexmax (a):
 	'''

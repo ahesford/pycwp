@@ -18,7 +18,7 @@ class SphericalInterpolator:
 		'''
 		Build the Lagrange interpolation matrix of a specified order
 		for a regularly sampled angular function. Interpolation windows
-		do not wrap around the pole.
+		wrap around the pole.
 
 		The 2-element list of lists thetas specifies the locations of
 		polar samples for the coarse (thetas[0]) and fine (thetas[1])
@@ -37,7 +37,6 @@ class SphericalInterpolator:
 		if order > len(thetas[0]):
 			raise ValueError('Order should not exceed number of coarse samples.')
 
-
 		# Grab the total number of samples
 		ntheta = [len(t) for t in thetas]
 		nphi = [2 * (n - 2) for n in ntheta]
@@ -54,17 +53,29 @@ class SphericalInterpolator:
 		# Simply copy the north pole into the higher sampling rate
 		self.matrix = [[[0], [1]]]
 
-		# Loop over the higher polar sampling rate, ignoring the poles
+		# Wrap the polar index around the pole
+		wrapthidx = lambda nt, ti: abs(ti) if ti < nt else 2 * (nt - 1) - ti
+
+		# Wrap the polar angle around the pole
+		def wraptheta(th, ti):
+			n = len(th)
+			# Adjust the wrap shift at either end
+			# according to direction of angular change
+			if th[0] < th[-1]: hs, ls = 2 * math.pi, 0.
+			else: hs, ls = 0., 2 * math.pi
+
+			if 0 <= ti < n: return th[ti]
+			elif ti < 0: return ls - th[-ti]
+			else: return hs - th[wrapthidx(n, ti)]
+
 		for rtheta in thetas[1][1:-1]:
 			# Find the starting interpolation interval
 			tbase = cutil.rlocate(thetas[0], rtheta) - offset
-			# Prevent the interval from wrapping around poles
-			tbase = min(max(0, tbase), ntheta[0] - order)
 			# Enumerate all polar indices involved in interpolation
 			rows = [tbase + l for l in range(order)]
 
 			# Build the corresponding angular positions
-			tharr = [thetas[0][ti] for ti in rows]
+			tharr = [wraptheta(thetas[0], ti) for ti in rows]
 
 			# Build the Lagrange interpolation coefficients
 			twts = cutil.lagrange(rtheta, tharr)
@@ -90,8 +101,15 @@ class SphericalInterpolator:
 					# Find the starting interpolation interval
 					k = (j * nphi[0]) / nphi[1] - offset
 
+					if rv < 0 or rv >= ntheta[0]:
+						rphi += math.pi
+						k += nphi[0] / 2
+
+					ri = wrapthidx(ntheta[0], rv)
+
 					# Build the wrapped phi indices
-					cols = [(k + m + nphi[0]) % nphi[0] for m in range(order)]
+					cols = [(k + m + nphi[0]) % nphi[0]
+							for m in range(order)]
 					# Build the unwrapped phi values
 					pharr = [(k + m) * dphi[0] for m in range(order)]
 
@@ -100,14 +118,14 @@ class SphericalInterpolator:
 
 					# Populate the columns of the sparse array
 					for pw, cv in zip(pwts, cols):
-						vpos = linidx(ntheta[0], nphi[0], rv, cv)
+						vpos = linidx(ntheta[0], nphi[0], ri, cv)
 						matrow[0].append(vpos)
 						matrow[1].append(pw * tw)
 
 				# Add the populated row to the matrix
 				self.matrix.append(matrow)
 
-		# Copy the south pole value
+		# Add the last pole value
 		self.matrix.append([[nsamp[0] - 1], [1]])
 
 
@@ -115,17 +133,15 @@ class SphericalInterpolator:
 		'''
 		Interpolate the coarsely sampled angular function f.
 		'''
-
-		# Loop through all rows to compute the total output
 		return [cutil.dot(r[1], (f[i] for i in r[0])) for r in self.matrix]
 
 
 def polararray(ntheta):
 	'''
-	Return a list of polar angular samples corresponding to Gauss-Legendre
-	quadrature points, with poles added, in decreasing order.
+	Return a list of polar angular samples corresponding to Gauss-Lobatto
+	quadrature points (including poles) in decreasing order.
 	'''
-	return [math.pi] + list(reversed(cutil.gaussleg(ntheta - 2)[0])) + [0.]
+	return list(reversed(cutil.gausslob(ntheta)[0]))
 
 
 def linidx(ntheta, nphi, ti, pi, poles=True):
