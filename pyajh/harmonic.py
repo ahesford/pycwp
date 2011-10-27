@@ -14,7 +14,7 @@ class SphericalInterpolator:
 	function defined on the surface of a sphere.
 	'''
 
-	def __init__(self, thetas, order=4):
+	def __init__(self, thetas, order=4, poles=True):
 		'''
 		Build the Lagrange interpolation matrix of a specified order
 		for a regularly sampled angular function. Interpolation windows
@@ -22,9 +22,15 @@ class SphericalInterpolator:
 
 		The 2-element list of lists thetas specifies the locations of
 		polar samples for the coarse (thetas[0]) and fine (thetas[1])
-		grids. The azimuthal samples at each of the levels are
-		regularly spaced and have a count 2 * (len(thetas[i]) - 2) for
+		grids. The azimuthal samples at each of the levels are have
+		2 * (len(thetas[i]) - 2) regularly spaced values (when poles is
+		True) or 2 * len(thetas[i]) values (when poles is False) for
 		the corresponding polar samples thetas[i].
+
+		If poles is true, thetas[i][0] and thetas[i][-1] correspond to
+		polar values that will only be sampled once. Otherwise,
+		thetas[i][0] and thetas[i][-1] have values away from the poles
+		and are not treated specially.
 
 		The sparse output matrix format is a list of lists of two
 		lists. For a sparse matrix list mat, the list r = mat[i]
@@ -37,45 +43,35 @@ class SphericalInterpolator:
 		if order > len(thetas[0]):
 			raise ValueError('Order should not exceed number of coarse samples.')
 
-		# Grab the total number of samples
+		# Grab the total number of polar samples
 		ntheta = [len(t) for t in thetas]
-		nphi = [2 * (n - 2) for n in ntheta]
+		# Grab the azimuthal samples and total samples depending on
+		# whether polar values are included
+		if poles:
+			nphi = [2 * (n - 2) for n in ntheta]
+			nsamp = [2 + (nt - 2) * np for nt, np in zip(ntheta, nphi)]
+		else:
+			nphi = [2 * n for n in ntheta]
+			nsamp = [nt * np for nt, np in zip(ntheta, nphi)]
 
 		# Grab the azimuthal step size
 		dphi = [2 * math.pi / n for n in nphi]
-
-		# The number of samples at the lower [0] and higher [1] sampling rates
-		nsamp = [2 + (nt - 2) * np for nt, np in zip(ntheta, nphi)]
 
 		# Half the Lagrange interval width
 		offset = (order - 1) / 2
 
 		# Simply copy the north pole into the higher sampling rate
-		self.matrix = [[[0], [1]]]
+		self.matrix = [[[0], [1]]] if poles else []
 
-		# Wrap the polar index around the pole
-		wrapthidx = lambda nt, ti: abs(ti) if ti < nt else 2 * (nt - 1) - ti
-
-		# Wrap the polar angle around the pole
-		def wraptheta(th, ti):
-			n = len(th)
-			# Adjust the wrap shift at either end
-			# according to direction of angular change
-			if th[0] < th[-1]: hs, ls = 2 * math.pi, 0.
-			else: hs, ls = 0., 2 * math.pi
-
-			if 0 <= ti < n: return th[ti]
-			elif ti < 0: return ls - th[-ti]
-			else: return hs - th[wrapthidx(n, ti)]
-
-		for rtheta in thetas[1][1:-1]:
+		# Loop through all polar samples away from the poles
+		for rtheta in (thetas[1][1:-1] if poles else thetas[1]):
 			# Find the starting interpolation interval
 			tbase = cutil.rlocate(thetas[0], rtheta) - offset
 			# Enumerate all polar indices involved in interpolation
 			rows = [tbase + l for l in range(order)]
 
 			# Build the corresponding angular positions
-			tharr = [wraptheta(thetas[0], ti) for ti in rows]
+			tharr = [unwraptheta(thetas[0], ti) for ti in rows]
 
 			# Build the Lagrange interpolation coefficients
 			twts = cutil.lagrange(rtheta, tharr)
@@ -87,11 +83,11 @@ class SphericalInterpolator:
 				# Take care of each theta sample
 				for tw, rv in zip(twts, rows):
 					# Pole samples are not azimuthally interpolated
-					if rv == 0:
+					if rv == 0 and poles:
 						matrow[0].append(0)
 						matrow[1].append(tw)
 						continue
-					elif rv == ntheta[0] - 1:
+					elif rv == ntheta[0] - 1 and poles:
 						matrow[0].append(nsamp[0] - 1)
 						matrow[1].append(tw)
 						continue
@@ -105,7 +101,7 @@ class SphericalInterpolator:
 						rphi += math.pi
 						k += nphi[0] / 2
 
-					ri = wrapthidx(ntheta[0], rv)
+					ri = polarwrapidx(ntheta[0], rv)
 
 					# Build the wrapped phi indices
 					cols = [(k + m + nphi[0]) % nphi[0]
@@ -118,7 +114,7 @@ class SphericalInterpolator:
 
 					# Populate the columns of the sparse array
 					for pw, cv in zip(pwts, cols):
-						vpos = linidx(ntheta[0], nphi[0], ri, cv)
+						vpos = linidx(ntheta[0], nphi[0], ri, cv, poles)
 						matrow[0].append(vpos)
 						matrow[1].append(pw * tw)
 
@@ -126,7 +122,7 @@ class SphericalInterpolator:
 				self.matrix.append(matrow)
 
 		# Add the last pole value
-		self.matrix.append([[nsamp[0] - 1], [1]])
+		if poles: self.matrix.append([[nsamp[0] - 1], [1]])
 
 
 	def applymat(self, f):
@@ -134,6 +130,45 @@ class SphericalInterpolator:
 		Interpolate the coarsely sampled angular function f.
 		'''
 		return [cutil.dot(r[1], (f[i] for i in r[0])) for r in self.matrix]
+
+
+def polarwrapidx(nt, ti, poles=True):
+	'''
+	For a list of polar samples with length nt, wrap the index ti (possibly
+	out of bounds) around the poles to point to an inbounds sample. If
+	poles is true, the first and last elements correspond to the poles.
+	Otherwise, the poles are not included in the sampling.
+
+	The value may only wrap around a single pole.
+	'''
+
+	# Remember to shift negative samples by one if a pole isn't present
+	if ti < 0: return -ti if poles else -(ti + 1)
+	# Shift one extra sample to account for end-of-list poles
+	if ti >= nt: return nt - ti - (2 if poles else 1)
+
+	# By default, no shifting is necessary
+	return ti
+
+
+def unwraptheta(th, ti, poles=True):
+	'''
+	Given an unwrapped (possibly out-of-bounds) index ti into an array th
+	of polar samples, return a corresponding unwrapped value that extends
+	beyond the poles. If poles is true, the array contains polar values at
+	the first and last indices of th. Otherwise, the poles are not stored.
+	'''
+	# Grab the length and the wrapped index
+	n = len(th)
+	tr = polarwrapidx(n, ti, poles)
+
+	# Handle the polar shifts based on the direction of the array
+	if th[0] < th[-1]: hs, ls = 2 * math.pi, 0.
+	else: hs, ls = 0., 2 * math.pi
+
+	if 0 <= ti < n: return th[ti]
+	elif ti < 0: return ls - th[tr]
+	else: return hs - th[tr]
 
 
 def polararray(ntheta):
@@ -151,11 +186,15 @@ def linidx(ntheta, nphi, ti, pi, poles=True):
 	first pole at index 0 and the second pole at Python index -1. Each pole
 	has a single value for ti = 0 or ti = ntheta - 1.
 
-	The index will not be wrapped.
+	The index will not be wrapped. Python negative indexing is supported.
 	'''
 
-	if not (0 <= ti < ntheta): raise IndexError('Polar index out of bounds.')
-	if not (0 <= pi < nphi): raise IndexError('Azimuthal index out of bounds.')
+	if not (-ntheta <= ti < ntheta): raise IndexError('Polar index out of bounds.')
+	if not (-nphi <= pi < nphi): raise IndexError('Azimuthal index out of bounds.')
+
+	# Fix negative indices according to Python rules
+	if ti < 0: ti = ntheta + ti
+	if pi < 0: pi = nphi + pi
 
 	# Without a pole, the 0 and -1 values do not degenerate
 	if not poles: return ti * nphi + pi
