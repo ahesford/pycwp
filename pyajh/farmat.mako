@@ -36,39 +36,20 @@ float2 integrate(const float k, const float3 src, const float3 obs) {
 	return ans;
 }
 
-__kernel void farmat(__global float2 * const mat, __global float * const theta,
-		__global float * const phi, const float k, const float3 src) {
-	/* Get the global grid position. */
-	const uint gi = get_global_id(0);
-	const uint gj = get_global_id(1);
+__kernel void farmat(__global float2 * const mat, const float k,
+			const float3 src, __global float2 * const angles) {
+	/* Get the global position. */
+	const uint idx = get_global_id(0);
+	/* Grab the angular coordinates for the work item. */
+	const float2 curang = angles[idx];
 
-	/* Get the global grid size. */
-	const uint np = get_global_size(0);
-	const uint nt = get_global_size(1) + 2;
-
-	/* Find the work item's angular position. */
-	const float thval = theta[gj + 1];
-	const float phval = phi[gi];
-
-	const float st = sin(thval);
+	/* The first entry is the polar angle, the second the azimuthal angle. */
+	const float thval = curang.s0, phval = curang.s1;
 
 	/* Find the direction corresponding to the work item. */
+	const float st = sin(thval);
 	const float3 obs = (float3) (cos(phval) * st, sin(phval) * st, cos(thval));
 
-	float2 ans;
-
 	/* Integrate the source and observation. */
-	ans = integrate(k, src, obs);
-	/* Offset the value by one to account for the pole. */
-	mat[gj * np + gi + 1] = ans;
-
-	/* The first work item computes the polar values. */
-	if (gi == 0 && gj == 0) {
-		/* The first pole comes first. */
-		mat[0] = integrate(k, src, (float3) (0., 0., cos(theta[0])));
-
-		/* The last pole comes last. */
-		mat[(nt - 2) * np + 1] = 
-			integrate(k, src, (float3) (0., 0., cos(theta[nt - 1])));
-	}
+	mat[idx] = integrate(k, src, obs);
 }

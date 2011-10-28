@@ -1,4 +1,4 @@
-import numpy as np, scipy.special as spec, math
+import numpy as np, scipy.special as spec, math, itertools
 import pyopencl as cl, pyopencl.array as cla, os.path as path
 
 from mako.template import Template
@@ -11,14 +11,21 @@ class FarMatrix:
 
 	_kernel = path.join(path.split(path.abspath(__file__))[0], 'farmat.mako')
 
-	def __init__(self, theta, dc = 0.1, n = 4, context = None):
+	def __init__(self, theta, dc = 0.1, n = 4, poles=True, context = None):
 		'''
 		Create an OpenCL kernel to build a far-field matrix.
 
-		The polar angular samples are specified in the list theta. The
-		azimuthal samples number 2 * (len(theta) - 2) and are equally
-		spaced. The (square) cells have edge length dc. Gauss-Legendre
-		quadrature of order n is used.
+		The polar angular samples are specified in the list theta. If
+		poles is True, the first and last entries in the list theta are
+		polar samples that correspond to one distinct value. Otherwise,
+		the first and last values in the list are away from the poles
+		and correspond to multiple distinct azimuthal positions.
+
+		The azimuthal samples are equally spaced and, if poles is True,
+		number 2 * (len(theta) - 2); otherwise, 2 * len(theta).
+
+		The (square) source cells have edge length dc. Gauss-Legendre
+		quadrature of order n is used to integrate the cells.
 
 		A desired OpenCL context may be specified in context, or else a
 		default context is used.
@@ -50,18 +57,27 @@ class FarMatrix:
 
 		# Compute the angular sizes
 		ntheta = len(theta)
-		nphi = 2 * (ntheta - 2)
 
-		# The number of samples of the far-field, including poles
-		self.nsamp = (ntheta - 2) * nphi + 2
+		# If the poles are included, separate them out for later
+		if poles:
+			pv = [theta[0], theta[-1]]
+			theta = theta[1:-1]
 
-		# Note the dimensions of the work grid
-		self.wgrid = (nphi, ntheta - 2)
+		# Count the azimuthal samples and build a generator for them
+		nphi = 2 * len(theta)
+		phigen = (2. * math.pi * i / float(nphi) for i in range(nphi))
 
-		# Copy the polar positions as an array
-		self.theta = theta[:] if isinstance(theta, np.ndarray) else np.array(theta)
-		# Build a list of azimuthal positions
-		self.phi = 2. * math.pi * np.arange(nphi) / nphi
+		# Make a generator of angular coordinates without polar samples
+		anggen = itertools.product(theta, phigen)
+
+		# If poles exist, add them to the generator
+		if poles: anggen = itertools.chain([(pv[0],)], anggen, [(pv[-1],)])
+
+		# Build an array of the coordinates using complex types
+		self.angles = np.array([complex(*t) for t in anggen], dtype=np.complex64)
+
+		# Grab the number of angular samples
+		self.nsamp = len(self.angles)
 
 
 	def fill(self, srclist):
@@ -72,20 +88,21 @@ class FarMatrix:
 
 		In the row for each source position, phi most rapidly varies.
 		'''
+		mf = cl.mem_flags
 
 		# Build a buffer to store the OpenCL results
-		buf = cl.Buffer(self.context, cl.mem_flags.READ_WRITE,
+		buf = cl.Buffer(self.context, mf.WRITE_ONLY,
 				size=self.nsamp * np.complex64().nbytes)
 
-		# Allocate OpenCL arrays for the angular samples
-		tharr = cla.to_device(self.queue, self.theta.astype(np.float32))
-		pharr = cla.to_device(self.queue, self.phi.astype(np.float32))
+		# Build and fill a buffer storing the angular coordinates
+		angarr = cl.Buffer(self.context, mf.READ_ONLY | 
+				mf.COPY_HOST_PTR, hostbuf=self.angles)
 
 		# Define a function to fill one row of the far-field matrix
 		def fillrow(s):
 			src = cla.vec.make_float3(*s)
-			self.prog.farmat(self.queue, self.wgrid, None, buf,
-					tharr.data, pharr.data, self.k, src)
+			self.prog.farmat(self.queue, (self.nsamp,),
+					None, buf, self.k, src, angarr)
 			row = np.empty((self.nsamp,), dtype=np.complex64)
 			cl.enqueue_copy(self.queue, row, buf).wait()
 			return row.tolist()
