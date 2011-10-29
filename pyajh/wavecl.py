@@ -80,34 +80,43 @@ class FarMatrix:
 		self.nsamp = len(self.angles)
 
 
+	def fillrow(self, src):
+		'''
+		Use the precompiled kernel to fill a row of the far-field
+		matrix corresponding to a source cell with a center specified
+		in the list src.
+
+		The azimuthal angle phi most rapidly varies.
+		'''
+		mf = cl.mem_flags
+		# Check for or create device buffers used in the row calculations
+		try: getattr(self, 'rowbuf')
+		except AttributeError:
+			self.rowbuf = cl.Buffer(self.context, mf.WRITE_ONLY,
+					size=self.nsamp * np.complex64().nbytes)
+		try: getattr(self, 'angbuf')
+		except AttributeError:
+			self.angbuf = cl.Buffer(self.context, mf.READ_ONLY |
+					mf.COPY_HOST_PTR, hostbuf=self.angles)
+
+		# Create the source vector and invoke the kernel
+		srcloc = cla.vec.make_float3(*src)
+		self.prog.farmat(self.queue, (self.nsamp,), None,
+				self.rowbuf, self.k, srcloc, self.angbuf)
+		# Copy the result from the device to a NumPy array
+		row = np.empty((self.nsamp,), dtype=np.complex64)
+		cl.enqueue_copy(self.queue, row, self.rowbuf).wait()
+		return row
+
+
 	def fill(self, srclist):
 		'''
 		Use the precompiled kernel to fill the far-field matrix for
 		sources with centers specified in a list srclist of
 		three-element coordinate lists.
-
-		In the row for each source position, phi most rapidly varies.
 		'''
-		mf = cl.mem_flags
-
-		# Build a buffer to store the OpenCL results
-		buf = cl.Buffer(self.context, mf.WRITE_ONLY,
-				size=self.nsamp * np.complex64().nbytes)
-
-		# Build and fill a buffer storing the angular coordinates
-		angarr = cl.Buffer(self.context, mf.READ_ONLY | 
-				mf.COPY_HOST_PTR, hostbuf=self.angles)
-
-		# Define a function to fill one row of the far-field matrix
-		def fillrow(s):
-			src = cla.vec.make_float3(*s)
-			self.prog.farmat(self.queue, (self.nsamp,),
-					None, buf, self.k, src, angarr)
-			row = np.empty((self.nsamp,), dtype=np.complex64)
-			cl.enqueue_copy(self.queue, row, buf).wait()
-			return row.tolist()
-
-		# Invoke the kernel to fill rows of the far-fiel matrix
+		# Build the matrix row-by-row
+		# Device buffers will be created when necessary
 		return np.array([fillrow(s) for s in srclist], dtype=np.complex64)
 
 

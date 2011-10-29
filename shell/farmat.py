@@ -40,5 +40,15 @@ if __name__ == '__main__':
 	hc = n / 2. + 0.5
 	coords = itertools.product(dc * np.mgrid[-hc+1:hc], repeat=3)
 
-	# Use a default context to build and write the far-field matrix
-	mio.writebmat(wavecl.FarMatrix(theta, dc, iord, poles).fill(coords), args[2])
+	# Build the matrix class
+	f = wavecl.FarMatrix(theta, dc, iord, poles)
+
+	print "Building %d-by-%d far-field matrix" % (f.nsamp, n**3)
+
+	# Create the output file
+	with open(args[2], 'wb') as output:
+		# Write the final matrix size
+		np.array([f.nsamp, n**3], dtype=np.int32).tofile(output)
+
+		# Build the matrix row-by-row and write it to output
+		for c in coords: f.fillrow(c).tofile(output)
