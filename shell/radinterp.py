@@ -46,7 +46,7 @@ if __name__ == '__main__':
 		ntc = int(math.sqrt(inmat.shape[1] / 2.))
 
 		# Build coarse and fine polar samples using regular spacing
-		thetas = [list(np.pi * np.arange(1., n+1) / (n + 1.)) for n in [ntc, ntf]]
+		thetas = [np.pi * np.arange(1., n+1) / (n + 1.) for n in [ntc, ntf]]
 
 	# Create the interpolation matrix
 	a = harmonic.SphericalInterpolator(thetas, iord, poles)
