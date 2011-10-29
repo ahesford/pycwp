@@ -41,4 +41,4 @@ if __name__ == '__main__':
 	coords = itertools.product(np.mgrid[-hc+1:hc], repeat=3)
 
 	# Use a default context to build and write the far-field matrix
-	mio.writebmat(wavecl.FarMatrix(theta, dc, iord, poles).fill(coords), args[3])
+	mio.writebmat(wavecl.FarMatrix(theta, dc, iord, poles).fill(coords), args[2])
