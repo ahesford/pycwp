@@ -3,14 +3,18 @@ Routines for reading and writing binary matrix files in FORTRAN-order.
 '''
 
 import os, math, numpy as np
+from . import cutil
 
 def getmattype (infile, dim = None, dtype = None):
 	'''
-	Read a header from the provided array data file to determine the size
-	and data type of the array therein. The file will be left pointing to
-	the data beyond the header. The data type and dimension may be provided
-	to avoid auto detection.
+	Read a header from the provided array data file (or a path to a file)
+	to determine the size and data type of the array therein. The file will
+	be left pointing to the data beyond the header. The data type and
+	dimension may be provided to avoid auto detection.
 	'''
+
+	# Open the input file if it isn't already open
+	if isinstance(infile, (str, unicode)): infile = open (infile, mode='rb')
 
 	# The maximum allowed dimension
 	maxdim = max(dim, 3)
@@ -107,37 +111,74 @@ def readbmat (infile, dim = None, dtype = None):
 	return datamap.reshape (matsize, order = 'F')
 
 
-def readslicer (infile, dim = None, dtype = None, slices = None):
+class ReadSlicer:
 	'''
-	A generator that will read and return each slice of a file one-by-one.
-	An optional (inclusive) range limits the slices read. The parameter
-	infile may be a string, in which case it is the name of the input file;
-	or it may be an already-open file object.
+	This class opens a data file that can be read one slice at a time. A
+	slice is defined as a chunk of data with a dimension one less than the
+	input, i.e., one column of a FORTRAN-ordered matrix or one slab of a
+	FORTRAN-ordered three-dimensional grid.
 	'''
 
-	# Open the input file if it isn't already open
-	if isinstance(infile, (str, unicode)): infile = open(infile, mode='rb')
+	def __init__(self, infile, dim = None, dtype = None, slices = None):
+		'''
+		Open the input file, possibly with the specified dimension and
+		data type (to avoid automatic detection), and prepare to read
+		the file one slice at a time. The parameter infile may be a
+		string containing the path of a file to open, or it may be an
+		already-open file. The optional two-element list slices
+		specifies the first and last indices (inclusive) of the slices
+		to be read.
+		'''
+		
+		# Open the input file if it isn't already open
+		if isinstance(infile, (str, unicode)):
+			infile = open(infile, mode='rb')
 
-	# Read the matrix header and determine the data type
-	matsize, dtype = getmattype(infile, dim, dtype)
+		# Store the file
+		self.infile = infile
 
-	# The number of elements to read per slice
-	nelts = np.prod(matsize[:-1])
+		# Grab the matrix header, size, and data type
+		self.matsize, self.dtype = getmattype(infile, dim, dtype)
+		
+		# The number of elements to read per slice
+		self.nelts = cutil.prod(self.matsize[:-1])
 
-	if slices is not None:
-		# Seek to the desired starting slice
-		infile.seek(nelts * slices[0] * dtype().nbytes, 1)
-		# Set the number of slices to read
-		slrange = range(slices[0], slices[1] + 1)
-	else: slrange = range(matsize[-1])
+		# Store the start of the data block
+		self.fstart = self.infile.tell()
 
-	# Slice along the last index
-	for idx in slrange:
-		data = np.fromfile(infile, dtype = dtype, count = nelts)
-		if data.size != nelts or data is None:
-			raise ValueError('Failed to read requested data.')
-		yield (idx, data.reshape(matsize[:-1], order = 'F'))
+		# If a subset of slices are desired, restrict the read
+		if slices is not None:
+			if len(slices) != 2:
+				raise ValueError('Slices list must contain two elements.')
+			if (0 > slices[0] >= self.matsize[-1]) or (0 > slices[1] >= self.matsize[-1]):
+				raise ValueError('Slice indices outside of valid range.')
+			# Copy the slice range
+			self.slices = slices[:]
+			# Move the starting position to the first desired slice
+			self.fstart += self.nelts * self.slices[0] * self.dtype().nbytes
+		else: self.slices = [0, self.matsize[-1] - 1]
 
-	# Close the file and return
-	infile.close()
-	return
+
+	def __del__(self):
+		'''
+		Ensure the file opened by the ReadSlicer instance is closed.
+		'''
+		self.infile.close()
+
+
+	def __iter__(self):
+		'''
+		Create a generator to read each desired slice in succession.
+		Returns a tuple of the slice index and its data values.
+		'''
+		# Ensure the file object points to the start of the data block
+		self.infile.seek(self.fstart)
+
+		# Slice along the last index
+		for idx in range(self.slices[0], self.slices[1] + 1):
+			data = np.fromfile(self.infile, dtype=self.dtype, count=self.nelts)
+			if data.size != self.nelts or data is None:
+				raise ValueError('Failed to read requested data.')
+			yield (idx, data.reshape(self.matsize[:-1], order = 'F'))
+
+		return

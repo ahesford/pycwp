@@ -41,7 +41,7 @@ def main (argv = None):
 	sldim = [slice(None, None, 2), slice(1, None, 2)]
 	slices = [[sldim[(i & 2**d) >> d] for d in range(dims)] for i in range(2**dims)]
 
-	for slab in mio.readslicer(infile):
+	for slab in mio.ReadSlicer(infile):
 		# Duplicate the slab values along each possible dimension
 		for sl in slices:
 			bslab[sl] = slab[1]

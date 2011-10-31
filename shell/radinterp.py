@@ -29,21 +29,18 @@ if __name__ == '__main__':
 	# Grab the number of interpolated polar samples
 	ntf = int(args[0])
 
-	# Read the input file
-	inmat = mio.readbmat(args[1])
-
-	# Grab the output file
-	outname = args[2]
+	# Create a generator to read the matrix column by column
+	inmat = mio.ReadSlicer(args[1])
 
 	if poles:
 		# Compute the input number of polar samples
-		ntc = int(2. + math.sqrt(4. + 0.5 * (inmat.shape[1] - 10.)))
+		ntc = int(2. + math.sqrt(4. + 0.5 * (inmat.matsize[0] - 10.)))
 
 		# Build coarse and fine polar samples using Lobatto rules
 		thetas = [harmonic.polararray(n) for n in [ntc, ntf]]
 	else:
 		# Compute the input number of polar samples
-		ntc = int(math.sqrt(inmat.shape[1] / 2.))
+		ntc = int(math.sqrt(inmat.matsize[0] / 2.))
 
 		# Build coarse and fine polar samples using regular spacing
 		thetas = [np.pi * np.arange(1., n+1) / (n + 1.) for n in [ntc, ntf]]
@@ -51,8 +48,12 @@ if __name__ == '__main__':
 	# Create the interpolation matrix
 	a = harmonic.SphericalInterpolator(thetas, iord, poles)
 
-	# Interpolate the input
-	outmat = np.array([a.applymat(row.tolist()) for row in inmat])
+	# Interpolate each column of the matrix and write it to a file
+	with open(args[2], 'wb') as output:
+		# Write the output matrix size
+		np.array([len(a.matrix), inmat.matsize[-1]],
+				dtype=np.int32).tofile(output)
 
-	# Write the output as a 64-bit complex matrix
-	mio.writebmat(outmat.astype(np.complex64), outname)
+		# Read each row in the input, interpolate it, and write it
+		for row in inmat:
+			a.applymat(row[1]).astype(inmat.dtype).tofile(output)

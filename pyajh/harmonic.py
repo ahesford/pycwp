@@ -129,7 +129,10 @@ class SphericalInterpolator:
 		'''
 		Interpolate the coarsely sampled angular function f.
 		'''
-		return [cutil.dot(r[1], (f[i] for i in r[0])) for r in self.matrix]
+		# Duplicate the input as a NumPy array, if necessary
+		if not isinstance(f, np.ndarray): f = np.array(f)
+		# Compute each row of the output
+		return np.array([np.dot(r[1], f[r[0]]) for r in self.matrix])
 
 
 def polarwrapidx(nt, ti, poles=True):
