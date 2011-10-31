@@ -32,18 +32,12 @@ if __name__ == '__main__':
 	# Create a generator to read the matrix column by column
 	inmat = mio.ReadSlicer(args[1])
 
-	if poles:
-		# Compute the input number of polar samples
-		ntc = int(2. + math.sqrt(4. + 0.5 * (inmat.matsize[0] - 10.)))
+	# Compute the input number of samples of the polar angle
+	if poles: ntc = int(2. + math.sqrt(4. + 0.5 * (inmat.matsize[0] - 10.)))
+	else: ntc = int(math.sqrt(inmat.matsize[0] / 2.))
 
-		# Build coarse and fine polar samples using Lobatto rules
-		thetas = [harmonic.polararray(n) for n in [ntc, ntf]]
-	else:
-		# Compute the input number of polar samples
-		ntc = int(math.sqrt(inmat.matsize[0] / 2.))
-
-		# Build coarse and fine polar samples using regular spacing
-		thetas = [np.pi * np.arange(1., n+1) / (n + 1.) for n in [ntc, ntf]]
+	# Build coarse and fine polar samples using Lobatto rules
+	thetas = [harmonic.polararray(n, not poles) for n in [ntc, ntf]]
 
 	# Create the interpolation matrix
 	a = harmonic.SphericalInterpolator(thetas, iord, poles)

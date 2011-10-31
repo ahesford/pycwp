@@ -78,14 +78,13 @@ def writebmat (mat, outfile):
 	# Open the output file if it isn't already open
 	if isinstance(outfile, (str, unicode)): outfile = open (outfile, mode='wb')
 
-	# Pull the shape for writing
-	mshape = np.array (mat.shape, dtype='int32')
+	# This will close the file when writing is done
+	with outfile:
+		# Write the size header to the matrix
+		np.array(mat.shape, dtype='int32').tofile(outfile)
 
-	# Write the size header
-	mshape.tofile (outfile)
-	# Write the matrix body in FORTRAN order
-	mat.flatten('F').tofile (outfile)
-	outfile.close ()
+		# Write the matrix body in FORTRAN order
+		mat.T.flat.tofile(outfile)
 
 
 def readbmat (infile, dim = None, dtype = None):
@@ -100,15 +99,16 @@ def readbmat (infile, dim = None, dtype = None):
 	# Open the input file if it isn't already open
 	if isinstance(infile, (str, unicode)): infile = open (infile, mode='rb')
 
-	# Read the matrix header and determine the data type
-	matsize, dtype = getmattype (infile, dim, dtype)
+	# This will close the file when writing is done
+	with infile:
+		# Read the matrix header and determine the data type
+		matsize, dtype = getmattype(infile, dim, dtype)
 
-	# Create the read-only memory map and close the source file
-	datamap = np.memmap(infile, offset=infile.tell(), dtype=dtype, mode='c')
-	infile.close()
+		# Create the read-only memory map and close the source file
+		datamap = np.memmap(infile, offset=infile.tell(), dtype=dtype, mode='c')
 
 	# Reshape the map in FORTRAN order
-	return datamap.reshape (matsize, order = 'F')
+	return datamap.reshape(matsize, order='F')
 
 
 class ReadSlicer:
@@ -129,7 +129,7 @@ class ReadSlicer:
 		specifies the first and last indices (inclusive) of the slices
 		to be read.
 		'''
-		
+
 		# Open the input file if it isn't already open
 		if isinstance(infile, (str, unicode)):
 			infile = open(infile, mode='rb')
@@ -139,7 +139,7 @@ class ReadSlicer:
 
 		# Grab the matrix header, size, and data type
 		self.matsize, self.dtype = getmattype(infile, dim, dtype)
-		
+
 		# The number of elements to read per slice
 		self.nelts = cutil.prod(self.matsize[:-1])
 
@@ -161,7 +161,7 @@ class ReadSlicer:
 
 	def __del__(self):
 		'''
-		Ensure the file opened by the ReadSlicer instance is closed.
+		Close the open data file on delete.
 		'''
 		self.infile.close()
 

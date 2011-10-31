@@ -45,30 +45,31 @@ class SphericalInterpolator:
 
 		# Grab the total number of polar samples
 		ntheta = [len(t) for t in thetas]
-		# Grab the azimuthal samples and total samples depending on
-		# whether polar values are included
+		# Count the azimuthal and total samples
 		if poles:
+			# Double the number of samples away form the poles
 			nphi = [2 * (n - 2) for n in ntheta]
+			# Don't duplicate azimuthal values at the poles
 			nsamp = [2 + (nt - 2) * nph for nt, nph in zip(ntheta, nphi)]
+
+			# Initialize the sparse matrix to copy the first polar value
+			data = [1]
+			ij = [[0, 0]]
+			rval = 0
 		else:
 			nphi = [2 * n for n in ntheta]
 			nsamp = [nt * nph for nt, nph in zip(ntheta, nphi)]
+
+			# Initialize the sparse matrix as an empty list
+			data = []
+			ij = []
+			rval = -1
 
 		# Grab the azimuthal step size
 		dphi = [2 * math.pi / n for n in nphi]
 
 		# Half the Lagrange interval width
 		offset = (order - 1) / 2
-
-		# Simply copy the north pole into the higher sampling rate
-		if poles:
-			data = [1]
-			ij = [[0, 0]]
-			rval = 0
-		else:
-			data = []
-			ij = []
-			rval = -1
 
 		# Loop through all polar samples away from the poles
 		for rtheta in (thetas[1][1:-1] if poles else thetas[1]):
@@ -132,8 +133,7 @@ class SphericalInterpolator:
 			ij.append([rval, nsamp[0] - 1])
 
 		# Create a CSR matrix representation of the interpolator
-		self.matrix = sparse.csr_matrix((data, np.array(ij).T),
-				shape=list(reversed(nsamp)))
+		self.matrix = sparse.csr_matrix((data, zip(*ij)), shape=nsamp[::-1])
 
 
 	def applymat(self, f):
@@ -183,12 +183,20 @@ def unwraptheta(th, ti, poles=True):
 	else: return hs - th[tr]
 
 
-def polararray(ntheta):
+def polararray(ntheta, regular=False):
 	'''
-	Return a list of polar angular samples corresponding to Gauss-Lobatto
+	Return a numbpy array of polar angular samples.
+
+	When regular is False, the samples correspond to Gauss-Lobatto
 	quadrature points (including poles) in decreasing order.
+
+	If regular is True, the samples are in increasing order at regular
+	intervals that exclude the poles. Thus, the returned list theta is
+
+		theta = math.pi * np.arange(1., ntheta + 1.) / (ntheta + 1.).
 	'''
-	return list(reversed(cutil.gausslob(ntheta)[0]))
+	if regular: return math.pi * np.arange(1., ntheta + 1.) / (ntheta + 1.)
+	return cutil.gausslob(ntheta)[0][::-1]
 
 
 def linidx(ntheta, nphi, ti, pi, poles=True):

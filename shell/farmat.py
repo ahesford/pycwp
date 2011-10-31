@@ -33,8 +33,7 @@ if __name__ == '__main__':
 	nt = int(args[1])
 
 	# Compute the polar samples as Gauss-Lobatto nodes or regular samples
-	if poles: theta = harmonic.polararray(nt)
-	else: theta = math.pi * np.arange(1., nt + 1.) / (nt + 1.)
+	theta = harmonic.polararray(nt, not poles)
 
 	# Build a generator of cell coordinates
 	hc = n / 2. + 0.5
