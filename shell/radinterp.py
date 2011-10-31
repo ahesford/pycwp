@@ -51,7 +51,7 @@ if __name__ == '__main__':
 	# Interpolate each column of the matrix and write it to a file
 	with open(args[2], 'wb') as output:
 		# Write the output matrix size
-		np.array([len(a.matrix), inmat.matsize[-1]],
+		np.array([a.matrix.shape[0], inmat.matsize[-1]],
 				dtype=np.int32).tofile(output)
 
 		# Read each row in the input, interpolate it, and write it

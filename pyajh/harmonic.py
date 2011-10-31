@@ -4,7 +4,7 @@ surfaces of spheres, used in other parts of the module.
 '''
 
 import math, numpy as np
-from scipy import special as spec
+from scipy import special as spec, sparse
 from . import cutil
 
 
@@ -49,10 +49,10 @@ class SphericalInterpolator:
 		# whether polar values are included
 		if poles:
 			nphi = [2 * (n - 2) for n in ntheta]
-			nsamp = [2 + (nt - 2) * np for nt, np in zip(ntheta, nphi)]
+			nsamp = [2 + (nt - 2) * nph for nt, nph in zip(ntheta, nphi)]
 		else:
 			nphi = [2 * n for n in ntheta]
-			nsamp = [nt * np for nt, np in zip(ntheta, nphi)]
+			nsamp = [nt * nph for nt, nph in zip(ntheta, nphi)]
 
 		# Grab the azimuthal step size
 		dphi = [2 * math.pi / n for n in nphi]
@@ -61,7 +61,14 @@ class SphericalInterpolator:
 		offset = (order - 1) / 2
 
 		# Simply copy the north pole into the higher sampling rate
-		self.matrix = [[[0], [1]]] if poles else []
+		if poles:
+			data = [1]
+			ij = [[0, 0]]
+			rval = 0
+		else:
+			data = []
+			ij = []
+			rval = -1
 
 		# Loop through all polar samples away from the poles
 		for rtheta in (thetas[1][1:-1] if poles else thetas[1]):
@@ -78,18 +85,18 @@ class SphericalInterpolator:
 
 			# Loop over the higher azimuthal sampling rate
 			for j in range(nphi[1]):
-				# Initialize the empty matrix row
-				matrow = [[], []]
+				# Increment the row pointer
+				rval += 1
 				# Take care of each theta sample
 				for tw, rv in zip(twts, rows):
 					# Pole samples are not azimuthally interpolated
 					if rv == 0 and poles:
-						matrow[0].append(0)
-						matrow[1].append(tw)
+						data.append(tw)
+						ij.append([rval, 0])
 						continue
 					elif rv == ntheta[0] - 1 and poles:
-						matrow[0].append(nsamp[0] - 1)
-						matrow[1].append(tw)
+						data.append(tw)
+						ij.append([rval, nsamp[0] - 1])
 						continue
 
 					# Compute the angular position
@@ -115,24 +122,26 @@ class SphericalInterpolator:
 					# Populate the columns of the sparse array
 					for pw, cv in zip(pwts, cols):
 						vpos = linidx(ntheta[0], nphi[0], ri, cv, poles)
-						matrow[0].append(vpos)
-						matrow[1].append(pw * tw)
-
-				# Add the populated row to the matrix
-				self.matrix.append(matrow)
+						data.append(pw * tw)
+						ij.append([rval, vpos])
 
 		# Add the last pole value
-		if poles: self.matrix.append([[nsamp[0] - 1], [1]])
+		if poles:
+			rval += 1
+			data.append(1)
+			ij.append([rval, nsamp[0] - 1])
+
+		# Create a CSR matrix representation of the interpolator
+		self.matrix = sparse.csr_matrix((data, np.array(ij).T),
+				shape=list(reversed(nsamp)))
 
 
 	def applymat(self, f):
 		'''
 		Interpolate the coarsely sampled angular function f.
 		'''
-		# Duplicate the input as a NumPy array, if necessary
-		if not isinstance(f, np.ndarray): f = np.array(f)
-		# Compute each row of the output
-		return np.array([np.dot(r[1], f[r[0]]) for r in self.matrix])
+		# Compute the output
+		return self.matrix * f
 
 
 def polarwrapidx(nt, ti, poles=True):
