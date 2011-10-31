@@ -14,11 +14,12 @@ class SphericalInterpolator:
 	function defined on the surface of a sphere.
 	'''
 
-	def __init__(self, thetas, order=4, poles=True):
+	def __init__(self, thetas, order=4, poles=True, wrap=True):
 		'''
 		Build the Lagrange interpolation matrix of a specified order
 		for a regularly sampled angular function. Interpolation windows
-		wrap around the pole.
+		wrap around the pole when wrap is True, otherwise intervals are
+		shifted to prevent wrapping.
 
 		The 2-element list of lists thetas specifies the locations of
 		polar samples for the coarse (thetas[0]) and fine (thetas[1])
@@ -45,6 +46,7 @@ class SphericalInterpolator:
 
 		# Grab the total number of polar samples
 		ntheta = [len(t) for t in thetas]
+
 		# Count the azimuthal and total samples
 		if poles:
 			# Double the number of samples away form the poles
@@ -57,10 +59,11 @@ class SphericalInterpolator:
 			ij = [[0, 0]]
 			rval = 0
 		else:
+			# There are no poles to avoid in this case
 			nphi = [2 * n for n in ntheta]
 			nsamp = [nt * nph for nt, nph in zip(ntheta, nphi)]
 
-			# Initialize the sparse matrix as an empty list
+			# Initialize the sparse matrix as empty lists
 			data = []
 			ij = []
 			rval = -1
@@ -75,6 +78,11 @@ class SphericalInterpolator:
 		for rtheta in (thetas[1][1:-1] if poles else thetas[1]):
 			# Find the starting interpolation interval
 			tbase = cutil.rlocate(thetas[0], rtheta) - offset
+
+			# Prevent wrapping around the poles if desired
+			if not wrap:
+				tbase = min(max(0, tbase), len(thetas[0]) - order)
+
 			# Enumerate all polar indices involved in interpolation
 			rows = [tbase + l for l in range(order)]
 
@@ -183,19 +191,19 @@ def unwraptheta(th, ti, poles=True):
 	else: return hs - th[tr]
 
 
-def polararray(ntheta, regular=False):
+def polararray(ntheta, poles=True):
 	'''
 	Return a numbpy array of polar angular samples.
 
-	When regular is False, the samples correspond to Gauss-Lobatto
-	quadrature points (including poles) in decreasing order.
+	When poles is True, the samples correspond to Gauss-Lobatto quadrature
+	points (including poles) in decreasing order.
 
-	If regular is True, the samples are in increasing order at regular
+	When poles is false, the samples are in increasing order at regular
 	intervals that exclude the poles. Thus, the returned list theta is
 
 		theta = math.pi * np.arange(1., ntheta + 1.) / (ntheta + 1.).
 	'''
-	if regular: return math.pi * np.arange(1., ntheta + 1.) / (ntheta + 1.)
+	if not poles: return math.pi * np.arange(1., ntheta + 1.) / (ntheta + 1.)
 	return cutil.gausslob(ntheta)[0][::-1]
 
 

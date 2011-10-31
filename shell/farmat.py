@@ -5,35 +5,47 @@ from pyajh import mio, cutil, wavecl, harmonic
 
 
 def usage(execname):
-	print 'USAGE: %s [-h] [-p] [-i <iord>] [-d <length>] <ncell> <ntheta> <outfile>' % execname
+	print 'USAGE: %s [-h] [-p] [-i <iord>] [-d <length>] [-n <ncell>] <ntheta> <outfile>' % execname
+	print '''
+	Write to outfile the far-field matrix for a group of ncell elements per
+	dimension using ntheta samples of the polar angle.
+
+	OPTIONAL ARGUMENTS:
+	-h: Display this message and exit
+	-p: Sample polar angle at regular intervals away from the poles
+	    By default, the samples correspond to Gauss-Lobatto quadrature nodes
+	-i: Use quadrature order iord for integration (default: 4)
+	-d: Specify the edge length of each cubic cell in wavelengths (default: 0.1)
+	-n: Specify the number of cells per group per dimension (default: 10)
+	'''
 
 if __name__ == '__main__':
 	# Grab the executable name
 	execname = sys.argv[0]
 
-	# Set some default values
-	iord, poles, dc = 4, False, 0.1
+	# Create an empty dictionary for optional arguments
+	poles, iord, dc, n = True, 4, 0.1, 10
 
-	optlist, args = getopt.getopt(sys.argv[1:], 'hpi:d:')
+	optlist, args = getopt.getopt(sys.argv[1:], 'hpi:d:n:')
 
 	for opt in optlist:
-		if opt[0] == '-p': poles = True
+		if opt[0] == '-p': poles = False
 		elif opt[0] == '-i': iord = int(opt[1])
-		elif opt[0] == '-d': iord = float(opt[1])
+		elif opt[0] == '-d': dc = float(opt[1])
+		elif opt[0] == '-n': n = int(opt[1])
 		else:
 			usage(execname)
 			sys.exit(128)
 
-	if len(args) < 3:
+	if len(args) < 2:
 		usage(execname)
 		sys.exit(128)
 
-	# Grab the variables
-	n = int(args[0])
-	nt = int(args[1])
+	# Grab the number of samples of the polar angle
+	nt = int(args[0])
 
 	# Compute the polar samples as Gauss-Lobatto nodes or regular samples
-	theta = harmonic.polararray(nt, not poles)
+	theta = harmonic.polararray(nt, poles)
 
 	# Build a generator of cell coordinates
 	hc = n / 2. + 0.5
@@ -45,7 +57,7 @@ if __name__ == '__main__':
 	print "Building %d-by-%d far-field matrix" % (f.nsamp, n**3)
 
 	# Create the output file
-	with open(args[2], 'wb') as output:
+	with open(args[1], 'wb') as output:
 		# Write the final matrix size
 		np.array([f.nsamp, n**3], dtype=np.int32).tofile(output)
 
