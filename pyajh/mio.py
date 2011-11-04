@@ -83,8 +83,8 @@ def writebmat (mat, outfile):
 		# Write the size header to the matrix
 		np.array(mat.shape, dtype='int32').tofile(outfile)
 
-		# Write the matrix body in FORTRAN order
-		mat.T.flat.tofile(outfile)
+		# Write the matrix body in FORTRAN order by transposing first
+		mat.T.tofile(outfile)
 
 
 def readbmat (infile, dim = None, dtype = None):
