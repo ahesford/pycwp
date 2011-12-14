@@ -5,15 +5,14 @@ from pyajh import mio, cutil, wavecl, harmonic
 
 
 def usage(execname):
-	print 'USAGE: %s [-h] [-p] [-i <iord>] [-d <length>] [-n <ncell>] <ntheta> <outfile>' % execname
+	print 'USAGE: %s [-h] [-r] [-i <iord>] [-d <length>] [-n <ncell>] <ntheta> <outfile>' % execname
 	print '''
 	Write to outfile the far-field matrix for a group of ncell elements per
 	dimension using ntheta samples of the polar angle.
 
 	OPTIONAL ARGUMENTS:
 	-h: Display this message and exit
-	-p: Sample polar angle at regular intervals away from the poles
-	    By default, the samples correspond to Gauss-Lobatto quadrature nodes
+	-r: Sample polar angle at regular intervals instead of Gauss-Lobatto nodes
 	-i: Use quadrature order iord for integration (default: 4)
 	-d: Specify the edge length of each cubic cell in wavelengths (default: 0.1)
 	-n: Specify the number of cells per group per dimension (default: 10)
@@ -24,12 +23,12 @@ if __name__ == '__main__':
 	execname = sys.argv[0]
 
 	# Create an empty dictionary for optional arguments
-	poles, iord, dc, n = True, 4, 0.1, 10
+	regular, iord, dc, n = False, 4, 0.1, 10
 
-	optlist, args = getopt.getopt(sys.argv[1:], 'hpi:d:n:')
+	optlist, args = getopt.getopt(sys.argv[1:], 'hri:d:n:')
 
 	for opt in optlist:
-		if opt[0] == '-p': poles = False
+		if opt[0] == '-r': regular = True
 		elif opt[0] == '-i': iord = int(opt[1])
 		elif opt[0] == '-d': dc = float(opt[1])
 		elif opt[0] == '-n': n = int(opt[1])
@@ -45,7 +44,7 @@ if __name__ == '__main__':
 	nt = int(args[0])
 
 	# Compute the polar samples as Gauss-Lobatto nodes or regular samples
-	theta = harmonic.polararray(nt, poles)
+	theta = harmonic.polararray(nt, not regular)
 
 	# Build a generator of cell coordinates
 	hc = n / 2. + 0.5

@@ -4,7 +4,7 @@ import numpy as np, math, sys, getopt
 from pyajh import mio, cutil, harmonic
 
 def usage(execname):
-	print 'USAGE: %s [-h] [-p] [-w] [-i <iord>] <ntheta> <infile> <outfile>' % execname
+	print 'USAGE: %s [-h] [-r] [-i <iord>] <ntheta> <infile> <outfile>' % execname
 	print '''
 	Write to outfile the far-field matrix, characterized by ntheta samples
 	of the polar angle, obtained by interpolating the far-field matrix
@@ -12,10 +12,8 @@ def usage(execname):
 
 	OPTIONAL ARGUMENTS:
 	-h: Display this message and exit
-	-p: Sample polar angle at regular intervals away from the poles
-	    By default, the samples correspond to Gauss-Lobatto quadrature nodes
-	-w: Prohibit interpolation intervals from wrapping around poles
-	-i: Use quadrature order iord for integration (default: 4)
+	-r: Sample polar angle at regular intervals instead of Gauss-Lobatto nodes
+	-i: Use Lagrange interpolation of order iord (default: use cubic b-splines)
 	'''
 
 if __name__ == '__main__':
@@ -23,13 +21,12 @@ if __name__ == '__main__':
 	execname = sys.argv[0]
 
 	# Set some default values
-	poles, wrap, iord = True, True, 4
+	regular, iord = False, 0
 
-	optlist, args = getopt.getopt(sys.argv[1:], 'hpi:w')
+	optlist, args = getopt.getopt(sys.argv[1:], 'hri:')
 
 	for opt in optlist:
-		if opt[0] == '-p': poles = False
-		elif opt[0] == '-w': wrap = False
+		if opt[0] == '-r': regular = True
 		elif opt[0] == '-i': iord = int(opt[1])
 		else:
 			usage(execname)
@@ -46,14 +43,14 @@ if __name__ == '__main__':
 	inmat = mio.ReadSlicer(args[1])
 
 	# Compute the input number of samples of the polar angle
-	if poles: ntc = int(2. + math.sqrt(4. + 0.5 * (inmat.matsize[0] - 10.)))
-	else: ntc = int(math.sqrt(inmat.matsize[0] / 2.))
+	ntc = int(2. + math.sqrt(4. + 0.5 * (inmat.matsize[0] - 10.)))
 
-	# Build coarse and fine polar samples using Lobatto rules
-	thetas = [harmonic.polararray(n, poles) for n in [ntc, ntf]]
+	# Build coarse and fine polar samples
+	thetas = [harmonic.polararray(n, not regular) for n in [ntc, ntf]]
 
 	# Create the interpolation matrix
-	a = harmonic.SphericalInterpolator(thetas, iord, poles, wrap)
+	if iord > 0: a = harmonic.SphericalInterpolator(thetas, iord)
+	else: a = harmonic.HarmonicSpline(thetas)
 
 	# Interpolate each column of the matrix and write it to a file
 	with open(args[2], 'wb') as output:
@@ -63,4 +60,4 @@ if __name__ == '__main__':
 
 		# Read each row in the input, interpolate it, and write it
 		for row in inmat:
-			a.applymat(row[1]).astype(inmat.dtype).tofile(output)
+			a.interpolate(row[1]).astype(inmat.dtype).tofile(output)

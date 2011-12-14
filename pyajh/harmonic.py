@@ -5,7 +5,256 @@ surfaces of spheres, used in other parts of the module.
 
 import math, numpy as np
 from scipy import special as spec, sparse
+from itertools import count, izip
 from . import cutil
+
+
+class HarmonicSpline:
+	'''
+	Use cubic basis splines to interpolate a harmonic function defined on
+	the surface of a sphere.
+	'''
+
+	def __init__(self, thetas):
+		'''
+		Prepare to interpolate functions defined on a coarse grid, with
+		polar samples specified in thetas[0], onto a fine grid whose
+		polar samples are specified in thetas[1]. For each of the
+		coarse grid and the fine grid, the azimuthal samples occur at
+		regular intervals with cardinality
+
+			nphi[i] = 2 * (len(thetas[i]) - 2).
+
+		The first and last samples of each element in the thetas list
+		correspond to values at the poles and, therefore, only have one
+		associated (but arbitrary) azimuthal angle.
+		'''
+
+		# Compute the number of angular samples
+		self.nthetas = [len(th) for th in thetas]
+		self.nphis = [2 * (nt - 2) for nt in self.nthetas]
+
+		# Compute the number of output samples
+		osamp = 2 + (self.nthetas[1] - 2) * self.nphis[1]
+
+		# Split the polar arrays
+		thetac, thetaf = thetas
+
+		# Ensure the polar samples are increasing
+		if thetac[0] > thetac[-1]:
+			self.reverse = True
+			thetac = thetac[::-1]
+		else: self.reverse = False
+
+		# Compute the azimuthal interval width
+		dphi = 2. * math.pi / self.nphis[0]
+
+		# The dimensions of the coefficient grid at the coarse level
+		n, m = 2 * (self.nthetas[0] - 1), self.nphis[0] / 2
+
+		# Precompute the pole for the causal and anti-causal filters
+		zp = math.sqrt(3) - 2.
+		# Also precompute all of the necessary powers of the pole
+		self.zpn = zp**np.arange(n + 1)
+
+		# Initialize the list of weights and indices
+		weights, idx, rval = [], [], 0
+
+		# Loop through all polar samples
+		for thi, rtheta in enumerate(thetaf):
+			# Find the interval containing the finer polar sample
+			i = cutil.rlocate(thetac, rtheta)
+			# Ensure the interval doesn't wrap around the poles
+			i = min(max(i, 0), self.nthetas[0] - 2)
+
+			# Grab the fractional distance into the interval
+			dtheta = thetac[i + 1] - thetac[i]
+			alpha = (rtheta - thetac[i]) / dtheta
+
+			# Compute the cubic b-spline weights
+			w = self.weights(alpha)
+
+			# The azimuthal samples degenerate at the poles
+			if thi == 0 or thi == self.nthetas[1] - 1: nphi = 1
+			else: nphi = self.nphis[1]
+
+			# Loop through the azimuthal samples
+			for jf in range(nphi):
+				# Find the fractional coarse interval
+				pa = float(jf * self.nphis[0]) / self.nphis[1]
+				# Ensure that the interval doesn't wrap
+				j = min(max(int(pa), 0), self.nphis[0] - 1)
+
+				# Grab the fractional distance into the interval
+				beta = pa - j
+
+				# Compute the cubic b-spline weights
+				u = self.weights(beta)
+
+				# Handle wrapping in the second hemisphere
+				if j >= m:
+					thwts = izip(reversed(w), count(-i - 2))
+					j -= m
+				else: thwts = izip(w, count(i - 1))
+
+				for wv, iv in thwts:
+					for uv, jv in izip(u, count(j - 1)):
+						# Compute the contributing weight
+						weights.append(wv * uv)
+						# Compute its (wrapped) index
+						iw = iv if (0 <= jv < m) else -iv
+						ij = (iw % n) + n * (jv % m)
+						idx.append([rval, ij])
+
+				rval += 1
+
+		# Create a CSR matrix representation of the interpolator
+		self.matrix = sparse.csr_matrix((weights, zip(*idx)), shape=(osamp, n * m))
+
+
+	def getcoeff(self, f):
+		'''
+		Given a function f defined on the unit sphere at the coarse
+		sampling rate defined in the constructor, compute and return a
+		2-D array of coefficients that expand the function in terms of
+		the cubic b-spline basis.
+
+		The coefficients have the polar angle along the rows and the
+		azimuthal angle along the colums, with the polar angle in the
+		interval [0, 2 * pi] and the azimuthal angle in [0, pi].
+		'''
+
+		# Note the dimensions of the input grid
+		ntheta, nphi = self.nthetas[0], self.nphis[0]
+
+		# Store the poles
+		poles = f[0], f[-1]
+		# Reshape the remaining samples, theta along the rows
+		f = np.reshape(f[1:-1], (ntheta - 2, nphi), order='C')
+
+		# Ensure samples of the polar angle are increasing
+		if self.reverse:
+			f = f[::-1, :]
+			poles = poles[::-1]
+
+		# Grab the pole and its powers
+		zpn = self.zpn
+		zp = zpn[1]
+
+		# Create the coefficient grid
+		n, m, k = 2 * (ntheta - 1), nphi / 2, ntheta - 1
+		c = np.zeros((n, m), dtype=f.dtype)
+
+		# Copy the first hemisphere of data
+		c[1:k, :] = f[:, :m]
+		# Copy the second hemisphere of data with flipped polar angle
+		c[k+1:, :] = f[-1::-1, m:]
+
+		# Copy the poles into the appropriate rows
+		c[0, :] = poles[0]
+		c[k, :] = poles[-1]
+
+		# Compute the filter coefficients
+		l = 6. / (1 - zpn[n]), zp / (zpn[n] - 1)
+
+		# Compute the initial causal polar coefficient
+		c[0, :] = l[0] * (c[0, :] + np.dot(c[1:,:].T, zpn[n-1:0:-1]).T)
+
+		# Compute the remaining causal polar coefficients
+		for i in range(1, c.shape[0]):
+			c[i, :] = 6. * c[i, :] + zp * c[i - 1, :]
+
+		# Compute the initial anti-causal polar coefficient
+		c[-1, :] = l[1] * (c[-1, :] + np.dot(c[:-1,:].T, zpn[1:n]).T)
+
+		# Compute the remaining anti-causal polar coefficients
+		for i in range(c.shape[0] - 2, -1, -1):
+			c[i, :] = zp * (c[i + 1, :] - c[i,:])
+
+		# Correct the length and coefficients for the azimuthal angle
+		n, m, k = nphi, ntheta - 1, nphi / 2
+		l = 6. / (1 - zpn[n]), zp / (zpn[n] - 1)
+
+		# Compute the initial causal azimuthal coefficient
+		c[1:m, 0] = l[0] * (c[1:m, 0] +
+				np.dot(c[1:m, 1:], zpn[n-1:n-k:-1]) +
+				np.dot(c[:-m:-1, :], zpn[n-k:0:-1]))
+
+		# Compute the remaining coefficients of the first hemisphere
+		for i in range(1, c.shape[1]):
+			c[1:m, i] = 6. * c[1:m, i] + zp * c[1:m, i - 1]
+
+		# Populate the initial coefficients of the second hemisphere
+		c[:-m:-1, 0] = 6. * c[:-m:-1, 0] + zp * c[1:m, -1]
+
+		# Compute the remaining coefficients of the second hemisphere
+		for i in range(1, c.shape[1]):
+			c[-m+1:, i] = 6. * c[-m+1:, i] + zp * c[-m+1:, i - 1]
+
+		# Compute the initial anti-causal azimuthal coefficient
+		c[:-m:-1, -1] = l[1] * (c[:-m:-1, -1] +
+				np.dot(c[1:m, :], zpn[1:k+1]) +
+				np.dot(c[:-m:-1, :-1], zpn[k+1:n]))
+
+		# Compute the remaining coefficients of the second hemisphere
+		for i in range(c.shape[1] - 2, -1, -1):
+			c[-m+1:, i] = zp * (c[-m+1:, i + 1] - c[-m+1:, i])
+
+		# Populate the initial coefficients of the first hemisphere
+		c[1:m, -1] = zp * (c[:-m:-1, 0] - c[1:m, -1])
+
+		# Compute the remaining coefficients of the first hemisphere
+		for i in range(c.shape[1] - 2, -1, -1):
+			c[1:m, i] = zp * (c[1:m, i + 1] - c[1:m, i])
+
+		# The polar azimuthal coefficients are special cases in which
+		# the period degenerates to pi, rather than 2 pi.
+		n = nphi / 2
+		l = 6. / (1. - zpn[n]), zp / (zpn[n] - 1.)
+
+		# Compute the coefficients for each pole
+		for i in [0, m]:
+			# Compute the initial causal azimuthal coefficient
+			c[i, 0] = l[0] * (c[i, 0] + np.dot(c[i, 1:], zpn[n-1:0:-1]))
+
+			# Compute the remaining causal azimuthal coefficients
+			for j in range(1, c.shape[1]):
+				c[i, j] = 6. * c[i, j] + zp * c[i, j - 1]
+
+			# Compute the initial anti-causal azimuthal coefficient
+			c[i, -1] = l[1] * (c[i, -1] + np.dot(c[i, :-1], zpn[1:n]))
+
+			# Compute the remaining anti-causal azimuthal coefficients
+			for j in range(c.shape[1] - 2, -1, -1):
+				c[i, j] = zp * (c[i, j + 1] - c[i, j])
+
+		return c
+
+
+	def weights(self, x):
+		'''
+		Evaluate the cubic b-spline interpolation weights for a
+		fractional coordinate 0 <= x <= 1.
+		'''
+
+		tail = lambda y: (2. - abs(y))**3 / 6.
+		hump = lambda y: (2. / 3.) - 0.5 * abs(y)**2 * (2 - abs(y))
+
+		return [tail(1 + x), hump(x), hump(1 - x), tail(2 - x)]
+
+
+	def interpolate(self, f):
+		'''
+		Given the angular function f, convert it to cubic b-spline
+		coefficients and interpolate it on the previously defined grid.
+		'''
+
+		# Grab the cubic b-spline coefficients
+		c = self.getcoeff(f)
+
+		# Return the output
+		return self.matrix * c.ravel('F')
+
 
 
 class SphericalInterpolator:
@@ -14,31 +263,21 @@ class SphericalInterpolator:
 	function defined on the surface of a sphere.
 	'''
 
-	def __init__(self, thetas, order=4, poles=True, wrap=True):
+	def __init__(self, thetas, order=4):
 		'''
 		Build the Lagrange interpolation matrix of a specified order
 		for a regularly sampled angular function. Interpolation windows
-		wrap around the pole when wrap is True, otherwise intervals are
-		shifted to prevent wrapping.
+		wrap around the pole.
 
 		The 2-element list of lists thetas specifies the locations of
 		polar samples for the coarse (thetas[0]) and fine (thetas[1])
-		grids. The azimuthal samples at each of the levels are have
-		2 * (len(thetas[i]) - 2) regularly spaced values (when poles is
-		True) or 2 * len(thetas[i]) values (when poles is False) for
-		the corresponding polar samples thetas[i].
+		grids. The azimuthal samples at each of the levels have
 
-		If poles is true, thetas[i][0] and thetas[i][-1] correspond to
-		polar values that will only be sampled once. Otherwise,
-		thetas[i][0] and thetas[i][-1] have values away from the poles
-		and are not treated specially.
+			nphi[i] = 2 * (len(thetas[i]) - 2)
 
-		The sparse output matrix format is a list of lists of two
-		lists. For a sparse matrix list mat, the list r = mat[i]
-		corresponds to the i-th row of the matrix. List r[0] specifies
-		the column index of all non-empty entries in the row. List r[1]
-		specifies the corresponding values (Lagrange interpolation
-		weights) at the nonzero columns.
+		regularly spaced values. The elements thetas[i][0] and
+		thetas[i][-1] correspond to polar values that will only be
+		sampled once.
 		'''
 
 		if order > len(thetas[0]):
@@ -47,26 +286,15 @@ class SphericalInterpolator:
 		# Grab the total number of polar samples
 		ntheta = [len(t) for t in thetas]
 
-		# Count the azimuthal and total samples
-		if poles:
-			# Double the number of samples away form the poles
-			nphi = [2 * (n - 2) for n in ntheta]
-			# Don't duplicate azimuthal values at the poles
-			nsamp = [2 + (nt - 2) * nph for nt, nph in zip(ntheta, nphi)]
+		# Double the number of samples away form the poles
+		nphi = [2 * (n - 2) for n in ntheta]
+		# Don't duplicate azimuthal values at the poles
+		nsamp = [2 + (nt - 2) * nph for nt, nph in zip(ntheta, nphi)]
 
-			# Initialize the sparse matrix to copy the first polar value
-			data = [1]
-			ij = [[0, 0]]
-			rval = 0
-		else:
-			# There are no poles to avoid in this case
-			nphi = [2 * n for n in ntheta]
-			nsamp = [nt * nph for nt, nph in zip(ntheta, nphi)]
-
-			# Initialize the sparse matrix as empty lists
-			data = []
-			ij = []
-			rval = -1
+		# Initialize the sparse matrix to copy the first polar value
+		data = [1]
+		ij = [[0, 0]]
+		rval = 0
 
 		# Grab the azimuthal step size
 		dphi = [2 * math.pi / n for n in nphi]
@@ -74,20 +302,29 @@ class SphericalInterpolator:
 		# Half the Lagrange interval width
 		offset = (order - 1) / 2
 
+		# Adjust wrapping shifts depending on direction of polar samples
+		if thetas[0][0] < thetas[0][-1]: wraps = 0, 2 * math.pi
+		else: wraps = 2 * math.pi, 0.
+
+		# Adjust indices running off the right of the polar array
+		tflip = lambda t: (ntheta[0] - t - 2) % ntheta[0]
+
 		# Loop through all polar samples away from the poles
-		for rtheta in (thetas[1][1:-1] if poles else thetas[1]):
+		for rtheta in thetas[1][1:-1]:
 			# Find the starting interpolation interval
 			tbase = cutil.rlocate(thetas[0], rtheta) - offset
-
-			# Prevent wrapping around the poles if desired
-			if not wrap:
-				tbase = min(max(0, tbase), len(thetas[0]) - order)
 
 			# Enumerate all polar indices involved in interpolation
 			rows = [tbase + l for l in range(order)]
 
 			# Build the corresponding angular positions
-			tharr = [unwraptheta(thetas[0], ti) for ti in rows]
+			tharr = []
+			for i, ti in enumerate(rows):
+				if ti < 0:
+					tharr.append(wraps[0] - thetas[0][-ti])
+				elif ti >= ntheta[0]:
+					tharr.append(wraps[1] - thetas[0][tflip(ti)])
+				else: tharr.append(thetas[0][ti])
 
 			# Build the Lagrange interpolation coefficients
 			twts = cutil.lagrange(rtheta, tharr)
@@ -99,11 +336,11 @@ class SphericalInterpolator:
 				# Take care of each theta sample
 				for tw, rv in zip(twts, rows):
 					# Pole samples are not azimuthally interpolated
-					if rv == 0 and poles:
+					if rv == 0:
 						data.append(tw)
 						ij.append([rval, 0])
 						continue
-					elif rv == ntheta[0] - 1 and poles:
+					elif rv == ntheta[0] - 1:
 						data.append(tw)
 						ij.append([rval, nsamp[0] - 1])
 						continue
@@ -117,7 +354,9 @@ class SphericalInterpolator:
 						rphi += math.pi
 						k += nphi[0] / 2
 
-					ri = polarwrapidx(ntheta[0], rv)
+					# Properly wrap the polar values
+					if rv < 0: rv = -rv
+					elif rv >= ntheta[0]: rv = tflip(rv)
 
 					# Build the wrapped phi indices
 					cols = [(k + m + nphi[0]) % nphi[0]
@@ -130,21 +369,20 @@ class SphericalInterpolator:
 
 					# Populate the columns of the sparse array
 					for pw, cv in zip(pwts, cols):
-						vpos = linidx(ntheta[0], nphi[0], ri, cv, poles)
+						vpos = 1 + (rv - 1) * nphi[0] + cv
 						data.append(pw * tw)
 						ij.append([rval, vpos])
 
 		# Add the last pole value
-		if poles:
-			rval += 1
-			data.append(1)
-			ij.append([rval, nsamp[0] - 1])
+		rval += 1
+		data.append(1)
+		ij.append([rval, nsamp[0] - 1])
 
 		# Create a CSR matrix representation of the interpolator
 		self.matrix = sparse.csr_matrix((data, zip(*ij)), shape=nsamp[::-1])
 
 
-	def applymat(self, f):
+	def interpolate(self, f):
 		'''
 		Interpolate the coarsely sampled angular function f.
 		'''
@@ -152,82 +390,20 @@ class SphericalInterpolator:
 		return self.matrix * f
 
 
-def polarwrapidx(nt, ti, poles=True):
+def polararray(ntheta, lobatto=True):
 	'''
-	For a list of polar samples with length nt, wrap the index ti (possibly
-	out of bounds) around the poles to point to an inbounds sample. If
-	poles is true, the first and last elements correspond to the poles.
-	Otherwise, the poles are not included in the sampling.
+	Return a numpy array of polar angular samples.
 
-	The value may only wrap around a single pole.
-	'''
-
-	# Remember to shift negative samples by one if a pole isn't present
-	if ti < 0: return -ti if poles else -(ti + 1)
-	# Shift one extra sample to account for end-of-list poles
-	if ti >= nt: return nt - ti - (2 if poles else 1)
-
-	# By default, no shifting is necessary
-	return ti
-
-
-def unwraptheta(th, ti, poles=True):
-	'''
-	Given an unwrapped (possibly out-of-bounds) index ti into an array th
-	of polar samples, return a corresponding unwrapped value that extends
-	beyond the poles. If poles is true, the array contains polar values at
-	the first and last indices of th. Otherwise, the poles are not stored.
-	'''
-	# Grab the length and the wrapped index
-	n = len(th)
-	tr = polarwrapidx(n, ti, poles)
-
-	# Handle the polar shifts based on the direction of the array
-	if th[0] < th[-1]: hs, ls = 2 * math.pi, 0.
-	else: hs, ls = 0., 2 * math.pi
-
-	if 0 <= ti < n: return th[ti]
-	elif ti < 0: return ls - th[tr]
-	else: return hs - th[tr]
-
-
-def polararray(ntheta, poles=True):
-	'''
-	Return a numbpy array of polar angular samples.
-
-	When poles is True, the samples correspond to Gauss-Lobatto quadrature
+	When lobatto is True, the samples correspond to Gauss-Lobatto quadrature
 	points (including poles) in decreasing order.
 
-	When poles is false, the samples are in increasing order at regular
-	intervals that exclude the poles. Thus, the returned list theta is
+	When lobatto is false, the samples are in increasing order at regular
+	intervals that include the poles. Thus, the samples are
 
-		theta = math.pi * np.arange(1., ntheta + 1.) / (ntheta + 1.).
+		theta = math.pi * np.arange(ntheta) / (ntheta - 1.).
 	'''
-	if not poles: return math.pi * np.arange(1., ntheta + 1.) / (ntheta + 1.)
+	if not lobatto: return math.pi * np.arange(ntheta) / (ntheta - 1.)
 	return cutil.gausslob(ntheta)[0][::-1]
-
-
-def linidx(ntheta, nphi, ti, pi, poles=True):
-	'''
-	Compute the linearized index the spherical indices (ti, pi), with phi
-	most rapidly varying. If poles is True, poles are included, with the
-	first pole at index 0 and the second pole at Python index -1. Each pole
-	has a single value for ti = 0 or ti = ntheta - 1.
-
-	The index will not be wrapped. Python negative indexing is supported.
-	'''
-
-	if not (-ntheta <= ti < ntheta): raise IndexError('Polar index out of bounds.')
-	if not (-nphi <= pi < nphi): raise IndexError('Azimuthal index out of bounds.')
-
-	# Fix negative indices according to Python rules
-	if ti < 0: ti = ntheta + ti
-	if pi < 0: pi = nphi + pi
-
-	# Without a pole, the 0 and -1 values do not degenerate
-	if not poles: return ti * nphi + pi
-	# With a pole, adjust for the single value at the poles
-	else: return 1 + (ti - 1) * nphi + pi
 
 
 def legassoc (n, m, th):
