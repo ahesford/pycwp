@@ -15,7 +15,7 @@ class HarmonicSpline:
 	the surface of a sphere.
 	'''
 
-	def __init__(self, thetas):
+	def __init__(self, thetas, tol = 1e-7):
 		'''
 		Prepare to interpolate functions defined on a coarse grid, with
 		polar samples specified in thetas[0], onto a fine grid whose
@@ -28,6 +28,9 @@ class HarmonicSpline:
 		The first and last samples of each element in the thetas list
 		correspond to values at the poles and, therefore, only have one
 		associated (but arbitrary) azimuthal angle.
+
+		For efficiency, the coefficients are only computed to within a
+		tolerance specified by tol. Set tol < 0 for full precision.
 		'''
 
 		# Compute the number of angular samples
@@ -56,6 +59,13 @@ class HarmonicSpline:
 		zp = math.sqrt(3) - 2.
 		# Also precompute all of the necessary powers of the pole
 		self.zpn = zp**np.arange(n + 1)
+
+		# Restrict the precision, if desired
+		if tol > 0:
+			self.precision = int(math.log(tol) / math.log(abs(zp)))
+		else: self.precision = max(n, m)
+
+		print 'Precision:', self.precision
 
 		# Initialize the list of weights and indices
 		weights, idx, rval = [], [], 0
@@ -157,15 +167,20 @@ class HarmonicSpline:
 		# Compute the filter coefficients
 		l = 6. / (1 - zpn[n]), zp / (zpn[n] - 1)
 
+		# Limit the number of terms in the sum
+		p = min(n - 1, self.precision)
+
 		# Compute the initial causal polar coefficient
-		c[0, :] = l[0] * (c[0, :] + np.dot(c[1:,:].T, zpn[n-1:0:-1]).T)
+		# c[0] is never in the dot product since p < n
+		c[0] = l[0] * (c[0] + np.dot(c[-p:].T, zpn[p:0:-1]).T)
 
 		# Compute the remaining causal polar coefficients
 		for i in range(1, c.shape[0]):
 			c[i, :] = 6. * c[i, :] + zp * c[i - 1, :]
 
 		# Compute the initial anti-causal polar coefficient
-		c[-1, :] = l[1] * (c[-1, :] + np.dot(c[:-1,:].T, zpn[1:n]).T)
+		# c[-1] is never in the dot product since p < n
+		c[-1] = l[1] * (c[-1] + np.dot(c[:p,].T, zpn[1:p+1]).T)
 
 		# Compute the remaining anti-causal polar coefficients
 		for i in range(c.shape[0] - 2, -1, -1):
@@ -175,10 +190,14 @@ class HarmonicSpline:
 		n, m, k = nphi, ntheta - 1, nphi / 2
 		l = 6. / (1 - zpn[n]), zp / (zpn[n] - 1)
 
-		# Compute the initial causal azimuthal coefficient
-		c[1:m, 0] = l[0] * (c[1:m, 0] +
-				np.dot(c[1:m, 1:], zpn[n-1:n-k:-1]) +
-				np.dot(c[:-m:-1, :], zpn[n-k:0:-1]))
+		# Limit the number of terms in the sum
+		p = min(n - 1, self.precision)
+		pk = min(k, self.precision)
+
+		# The initial causal azimuthal coefficients from the second hemisphere
+		c[1:m, 0] = l[0] * (c[1:m, 0] + np.dot(c[:-m:-1, -pk:], zpn[pk:0:-1]))
+		# High precision may require terms from the first hemisphere
+		if (p > k): c[1:m, 0] += l[0] * np.dot(c[1:m, k-p:], zpn[p:k:-1])
 
 		# Compute the remaining coefficients of the first hemisphere
 		for i in range(1, c.shape[1]):
@@ -191,10 +210,10 @@ class HarmonicSpline:
 		for i in range(1, c.shape[1]):
 			c[-m+1:, i] = 6. * c[-m+1:, i] + zp * c[-m+1:, i - 1]
 
-		# Compute the initial anti-causal azimuthal coefficient
-		c[:-m:-1, -1] = l[1] * (c[:-m:-1, -1] +
-				np.dot(c[1:m, :], zpn[1:k+1]) +
-				np.dot(c[:-m:-1, :-1], zpn[k+1:n]))
+		# The initial anti-causal azimuthal coefficients from the first hemisphere
+		c[:-m:-1, -1] = l[1] * (c[:-m:-1, -1] + np.dot(c[1:m, :pk], zpn[1:pk+1]))
+		# High precision may require terms from the second hemisphere
+		if (p > k): c[:-m:-1, -1] += l[1] * np.dot(c[:-m:-1, :p-k], zpn[k+1:p+1])
 
 		# Compute the remaining coefficients of the second hemisphere
 		for i in range(c.shape[1] - 2, -1, -1):
@@ -212,17 +231,20 @@ class HarmonicSpline:
 		n = nphi / 2
 		l = 6. / (1. - zpn[n]), zp / (zpn[n] - 1.)
 
+		# Limit the number of terms in the sum
+		p = min(n - 1, self.precision)
+
 		# Compute the coefficients for each pole
 		for i in [0, m]:
 			# Compute the initial causal azimuthal coefficient
-			c[i, 0] = l[0] * (c[i, 0] + np.dot(c[i, 1:], zpn[n-1:0:-1]))
+			c[i, 0] = l[0] * (c[i, 0] + np.dot(c[i, -p:], zpn[p:0:-1]))
 
 			# Compute the remaining causal azimuthal coefficients
 			for j in range(1, c.shape[1]):
 				c[i, j] = 6. * c[i, j] + zp * c[i, j - 1]
 
 			# Compute the initial anti-causal azimuthal coefficient
-			c[i, -1] = l[1] * (c[i, -1] + np.dot(c[i, :-1], zpn[1:n]))
+			c[i, -1] = l[1] * (c[i, -1] + np.dot(c[i, :p], zpn[1:p+1]))
 
 			# Compute the remaining anti-causal azimuthal coefficients
 			for j in range(c.shape[1] - 2, -1, -1):
