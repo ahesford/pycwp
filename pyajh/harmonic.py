@@ -65,8 +65,6 @@ class HarmonicSpline:
 			self.precision = int(math.log(tol) / math.log(abs(zp)))
 		else: self.precision = max(n, m)
 
-		print 'Precision:', self.precision
-
 		# Initialize the list of weights and indices
 		weights, idx, rval = [], [], 0
 
