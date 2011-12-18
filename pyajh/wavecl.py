@@ -1,6 +1,7 @@
-import numpy as np, scipy.special as spec, math, itertools
+import numpy as np, scipy.special as spec, math
 import pyopencl as cl, pyopencl.array as cla, os.path as path
 
+from itertools import product, chain
 from mako.template import Template
 from . import fdtd
 
@@ -11,18 +12,17 @@ class FarMatrix:
 
 	_kernel = path.join(path.split(path.abspath(__file__))[0], 'farmat.mako')
 
-	def __init__(self, theta, dc = 0.1, n = 4, poles=True, context = None):
+	def __init__(self, theta, dc = 0.1, n = 4, context = None):
 		'''
 		Create an OpenCL kernel to build a far-field matrix.
 
-		The polar angular samples are specified in the list theta. If
-		poles is True, the first and last entries in the list theta are
-		polar samples that correspond to one distinct value. Otherwise,
-		the first and last values in the list are away from the poles
-		and correspond to multiple distinct azimuthal positions.
+		The polar angular samples are specified in the list theta. The
+		first and last entries in the list theta are polar samples that
+		correspond to only one unique azimuthal angle.
 
-		The azimuthal samples are equally spaced and, if poles is True,
-		number 2 * (len(theta) - 2); otherwise, 2 * len(theta).
+		The azimuthal samples are equally spaced and number
+
+			2 * (len(theta) - 2).
 
 		The (square) source cells have edge length dc. Gauss-Legendre
 		quadrature of order n is used to integrate the cells.
@@ -58,20 +58,16 @@ class FarMatrix:
 		# Compute the angular sizes
 		ntheta = len(theta)
 
-		# If the poles are included, separate them out for later
-		if poles:
-			pv = [theta[0], theta[-1]]
-			theta = theta[1:-1]
+		# Separate the poles for later
+		pv = (theta[0], 0.0), (theta[-1], 0.0)
+		theta = theta[1:-1]
 
 		# Count the azimuthal samples and build a generator for them
 		nphi = 2 * len(theta)
 		phigen = (2. * math.pi * i / float(nphi) for i in range(nphi))
 
-		# Make a generator of angular coordinates without polar samples
-		anggen = itertools.product(theta, phigen)
-
-		# If poles exist, add them to the generator
-		if poles: anggen = itertools.chain([(pv[0],)], anggen, [(pv[-1],)])
+		# Make a generator of angular coordinates with polar samples
+		anggen = chain([pv[0]], product(theta, phigen), [pv[1]])
 
 		# Build an array of the coordinates using complex types
 		self.angles = np.array([complex(*t) for t in anggen], dtype=np.complex64)

@@ -51,7 +51,7 @@ if __name__ == '__main__':
 	coords = itertools.product(dc * np.mgrid[-hc+1:hc], repeat=3)
 
 	# Build the matrix class
-	f = wavecl.FarMatrix(theta, dc, iord, poles)
+	f = wavecl.FarMatrix(theta, dc, iord)
 
 	print "Building %d-by-%d far-field matrix" % (f.nsamp, n**3)
 
