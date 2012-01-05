@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 import numpy as np, math, sys, getopt
-from pyajh import mio, cutil, harmonic
+from pyajh import mio, cutil, harmonic, wavecl
 
 def usage(execname):
 	print 'USAGE: %s [-h] [-r] [-i <iord>] [-t <tol>] <ntheta> <infile> <outfile>' % execname
@@ -15,6 +15,7 @@ def usage(execname):
 	-r: Sample polar angle at regular intervals instead of Gauss-Lobatto nodes
 	-i: Use Lagrange interpolation of order iord (default: use cubic b-splines)
 	-t: Use a tolerance of tol for spline coefficient computation (default: 1e-7)
+	-g: Use the GPU for interpolation (implies -r and not -i)
 	'''
 
 if __name__ == '__main__':
@@ -22,14 +23,15 @@ if __name__ == '__main__':
 	execname = sys.argv[0]
 
 	# Set some default values
-	regular, iord, tol = False, 0, 1e-7
+	regular, gpu, iord, tol = False, False, 0, 1e-7
 
-	optlist, args = getopt.getopt(sys.argv[1:], 'hri:t:')
+	optlist, args = getopt.getopt(sys.argv[1:], 'hrgi:t:')
 
 	for opt in optlist:
 		if opt[0] == '-r': regular = True
 		elif opt[0] == '-i': iord = int(opt[1])
 		elif opt[0] == '-t': tol = float(opt[1])
+		elif opt[0] == '-g': gpu = regular = True
 		else:
 			usage(execname)
 			sys.exit(128)
@@ -47,19 +49,33 @@ if __name__ == '__main__':
 	# Compute the input number of samples of the polar angle
 	ntc = int(2. + math.sqrt(4. + 0.5 * (inmat.matsize[0] - 10.)))
 
-	# Build coarse and fine polar samples
-	thetas = [harmonic.polararray(n, not regular) for n in [ntc, ntf]]
+	# The total number of output samples
+	nsamp = 2 * (ntf - 2)**2 + 2
 
-	# Create the interpolation matrix
-	if iord > 0: a = harmonic.SphericalInterpolator(thetas, iord)
-	else: a = harmonic.HarmonicSpline(thetas, tol)
+	if not gpu:
+		# Build coarse and fine polar samples
+		thetas = [harmonic.polararray(n, not regular) for n in [ntc, ntf]]
+
+		# Create the interpolation matrix
+		if iord > 0: a = harmonic.SphericalInterpolator(thetas, iord)
+		else: a = harmonic.HarmonicSpline(thetas, tol)
+	else: a = wavecl.SplineInterpolator(ntc, 2 * (ntc - 2), tol)
 
 	# Interpolate each column of the matrix and write it to a file
 	with open(args[2], 'wb') as output:
 		# Write the output matrix size
-		np.array([a.matrix.shape[0], inmat.matsize[-1]],
-				dtype=np.int32).tofile(output)
+		np.array([nsamp, inmat.matsize[-1]], dtype=np.int32).tofile(output)
 
-		# Read each row in the input, interpolate it, and write it
-		for row in inmat:
-			a.interpolate(row[1]).astype(inmat.dtype).tofile(output)
+		if not gpu:
+			for row in inmat:
+				# Interpolate to the finer grid
+				irow = a.interpolate(row[1])
+				# Write the finer grid to output
+				irow.astype(inmat.dtype).tofile(output)
+		else:
+			for row in inmat:
+				# Build the spline coefficients for the row
+				a.buildcoeff(row[1])
+				# Interpolate to the finer grid and write to output
+				irow = a.interpolate(ntf, 2 * (ntf - 2))
+				irow.astype(inmat.dtype).tofile(output)
