@@ -5,6 +5,131 @@ from itertools import product, chain
 from mako.template import Template
 from . import fdtd
 
+class SplineInterpolator:
+	'''
+	Use OpenCL to quickly interpolate harmonic functions defined at regular
+	sample points on the sphere using cubic b-splines.
+	'''
+
+	_kernel = path.join(path.split(path.abspath(__file__))[0], 'spline.mako')
+
+	def __init__(self, ntheta, nphi, tol = 1e-7, context = None):
+		'''
+		Create OpenCL kernels to convert samples of a harmonic
+		function, sampled at regular points on the unit sphere, into
+		cubic b-spline coefficients. These coefficients can be used for
+		rapid, GPU-based interpolation at arbitrary locations.
+		'''
+
+		if nphi % 2 != 0:
+			raise ValueError('The number of azimuthal samples must be even')
+
+		self.ntheta = ntheta
+		self.nphi = nphi
+		# This is the polar-ring grid shape
+		self.grid = 2 * (ntheta - 1), nphi / 2
+
+		# Set the desired precision of the filter coefficients
+		if tol > 0:
+			zp = math.sqrt(3) - 2.
+			self.precision = int(math.log(tol) / math.log(abs(zp)))
+		else: self.precision = ntheta
+
+		# Don't let the precision exceed the number of samples!
+		self.precision = min(self.precision, min(ntheta, nphi))
+
+		# Build an OpenCL context if one hasn't been provided
+		if context is None:
+			self.context = cl.Context(dev_type=cl.device_type.DEFAULT)
+		else: self.context = context
+
+		# Build the program for the context
+		t = Template(filename=SplineInterpolator._kernel, output_encoding='ascii')
+		self.prog = cl.Program(self.context, t.render(ntheta = ntheta, 
+			nphi = nphi, p = self.precision)).build()
+
+		# Create a command queue for the context
+		self.queue = cl.CommandQueue(self.context)
+
+		# Create an image that will store the spline coefficients
+		# Remember to pad the columns to account for repeated boundaries
+		mf = cl.mem_flags
+		self.coeffs = cl.Image(self.context, mf.READ_WRITE,
+				cl.ImageFormat(cl.channel_order.RG, cl.channel_type.FLOAT),
+				[g + 3 for g in self.grid])
+
+		# The poles will be stored so they need not be interpolated
+		self.poles = 0., 0.
+
+
+	def buildcoeff(self, f):
+		'''
+		Convert a harmonic function, sampled on a regular grid, into
+		cubic b-spline coefficients that will be stored in the OpenCL
+		image self.coeffs.
+		'''
+		# Store the exact polar values
+		self.poles = f[0], f[-1]
+		# Reshape the array, polar angle along the rows
+		f = np.reshape(f[1:-1], (self.ntheta - 2, self.nphi), order='C')
+
+		# Rearrange the data in the polar-ring format
+		c = np.empty(self.grid, dtype=np.complex64, order='F')
+
+		c[1:self.ntheta - 1, :] = f[:, :self.grid[1]]
+		c[self.ntheta:, :] = f[-1::-1, self.grid[1]:]
+
+		# Duplicate the polar values
+		c[0, :] = self.poles[0]
+		c[self.ntheta - 1, :] = self.poles[-1]
+
+		# Copy the polar-ring data to the GPU
+		mf = cl.mem_flags
+		buf = cl.Buffer(self.context, mf.READ_WRITE | mf.COPY_HOST_PTR, hostbuf=c)
+
+		# Invoke the kernels to compute the spline coefficients
+		self.prog.polcoeff(self.queue, (self.grid[1],), None, buf)
+		self.prog.azicoeff(self.queue, (self.ntheta,), None, buf)
+
+		# Now copy the coefficients into the float image
+		self.prog.mat2img(self.queue, self.grid, None, self.coeffs, buf)
+
+
+	def interpolate(self, ntheta, nphi):
+		'''
+		Interpolate the previously-established spline representation of
+		a function on a regular grid containing ntheta polar samples
+		(including the poles) and nphi azimuthal samples.
+		'''
+		if nphi % 2 != 0:
+			raise ValueError('The number of azimuthal samples must be even.')
+
+		# Define the GPU grid size and allocate a GPU buffer
+		grid = ntheta - 2, nphi
+		buf = cl.Buffer(self.context, cl.mem_flags.WRITE_ONLY,
+				size = grid[0] * grid[1] * np.complex64().nbytes)
+
+		# Call the interpolation kernel
+		self.prog.radinterp(self.queue, grid, None, buf, self.coeffs)
+
+		# Allocate a host array to store non-polar values
+		nsamp = (ntheta - 2) * nphi + 2;
+		f = np.empty((nsamp - 2,), dtype=np.complex64)
+		# Map the GPU memory to execute a transfer
+		cl.enqueue_copy(self.queue, f, buf).wait()
+
+		# Allocate a bigger host array that will store the whole pattern
+		ef = np.empty((nsamp,), dtype=np.complex64)
+		# Copy the exact polar values
+		ef[0] = self.poles[0]
+		ef[-1] = self.poles[-1]
+		# Copy the non-polar values
+		ef[1:-1] = f
+
+		return ef
+
+
+
 class FarMatrix:
 	'''
 	Compile an OpenCL kernel that will populate a far-field matrix.
