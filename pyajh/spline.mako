@@ -25,9 +25,9 @@ float2 splineval(__read_only image2d_t img, const float2 idx, const float2 frac)
 	const float2 frac2 = frac * frac;
 
 	const float2 w0 = (float2) (1. / 6.) * one_frac2 * one_frac;
-	const float2 w1 = (float2) (2. / 3.) - 
+	const float2 w1 = (float2) (2. / 3.) -
 		(float2) (0.5) * frac2 * ((float2) (2.) - frac);
-	const float2 w2 = (float2) (2. / 3.) - 
+	const float2 w2 = (float2) (2. / 3.) -
 		(float2) (0.5) * one_frac2 * ((float2) (1.) + frac);
 	const float2 w3  = (float2) (1. / 6.) * frac2 * frac;
 
@@ -37,7 +37,7 @@ float2 splineval(__read_only image2d_t img, const float2 idx, const float2 frac)
 	/* The fractional coordinates are increased by half an index work
 	 * properly with OpenCL image addressing, and again by a full index to
 	 * skip the repeated lower boundary. */
-	const float4 h = (float4) ((w1 / g.lo) + (float2) (0.5) + idx, 
+	const float4 h = (float4) ((w1 / g.lo) + (float2) (0.5) + idx,
 		(w3 / g.hi) + (float2) (2.5) + idx);
 
 	/* Grab the four constituent linear interpolations. */
@@ -226,6 +226,9 @@ __kernel void mat2img(__write_only image2d_t img, __global float2 * const mat) {
  *
  * The azimuthal angle is most rapidly varying in the output.
  *
+ * The output array has indices for the polar values that will be written by
+ * the calling routine. The kernel skips the first when storing its output.
+ *
  * The first workgroup dimension is the number of polar samples away from the
  * poles; the second dimension is the number of azimuthal samples. */
 __kernel void radinterp(__global float2 * const mat, __read_only image2d_t img) {
@@ -233,11 +236,12 @@ __kernel void radinterp(__global float2 * const mat, __read_only image2d_t img) 
 	const uint2 widx = { get_global_id(0), get_global_id(1) };
 	const uint2 size = { get_global_size(0), get_global_size(1) };
 
-	/* Figure out the linearized work index. Azimuth varies most rapidly! */
-	const uint outidx = widx.y + size.y * widx.x;
+	/* Figure out the linearized work index. Azimuth varies most rapidly!
+	 * Add one to the index to skip the polar value to be added later. */
+	const uint outidx = 1 + widx.y + size.y * widx.x;
 
 	/* The scale that converts fine coordinates to coarse coordinates. */
-	const float2 scale = (float2) (${ntheta - 1}, ${nphi}) / 
+	const float2 scale = (float2) (${ntheta - 1}, ${nphi}) /
 		(float2) (size.x + 1, size.y);
 
 	/* Represent the coordinates on the coarse grid. */

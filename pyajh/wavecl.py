@@ -104,29 +104,25 @@ class SplineInterpolator:
 		if nphi % 2 != 0:
 			raise ValueError('The number of azimuthal samples must be even.')
 
-		# Define the GPU grid size and allocate a GPU buffer
-		grid = ntheta - 2, nphi
+		# The number of output samples
+		nsamp = (ntheta - 2) * nphi + 2;
+		# Allocate a GPU buffer for the output
 		buf = cl.Buffer(self.context, cl.mem_flags.WRITE_ONLY,
-				size = grid[0] * grid[1] * np.complex64().nbytes)
+				size = nsamp * np.complex64().nbytes)
 
-		# Call the interpolation kernel
+		# Call the kernel to interpolate values away from poles
+		grid = ntheta - 2, nphi
 		self.prog.radinterp(self.queue, grid, None, buf, self.coeffs)
 
-		# Allocate a host array to store non-polar values
-		nsamp = (ntheta - 2) * nphi + 2;
-		f = np.empty((nsamp - 2,), dtype=np.complex64)
-		# Map the GPU memory to execute a transfer
+		# Copy the interpolated grid
+		f = np.empty((nsamp,), dtype=np.complex64)
 		cl.enqueue_copy(self.queue, f, buf).wait()
 
-		# Allocate a bigger host array that will store the whole pattern
-		ef = np.empty((nsamp,), dtype=np.complex64)
 		# Copy the exact polar values
-		ef[0] = self.poles[0]
-		ef[-1] = self.poles[-1]
-		# Copy the non-polar values
-		ef[1:-1] = f
+		f[0] = self.poles[0]
+		f[-1] = self.poles[-1]
 
-		return ef
+		return f
 
 
 
