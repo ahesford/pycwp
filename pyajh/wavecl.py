@@ -5,7 +5,7 @@ from itertools import product, chain
 from mako.template import Template
 from . import fdtd
 
-class SplineInterpolator:
+class SplineInterpolator(object):
 	'''
 	Use OpenCL to quickly interpolate harmonic functions defined at regular
 	sample points on the sphere using cubic b-splines.

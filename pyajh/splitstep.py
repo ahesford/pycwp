@@ -6,144 +6,179 @@ import math, numpy as np, numpy.fft as fft
 
 from . import mio
 
-def slicecoords(nx, ny, dx):
+class SplitStepEngine(object):
 	'''
-	Return the meshgrid arrays x and y given by an (nx,ny) grid with
-	uniform spacing dx.
-	'''
-
-	slice = np.mgrid[-nx/2:nx/2,-ny/2:ny/2] * float(dx)
-	return slice[0], slice[1]
-
-def k(f, c):
-	'''
-	Compute the wave number for a frequency f and a sound speed c.
-	'''
-	return 2.0 * math.pi * f / c
-
-def incslab(k0, x, y, zh, src):
-	'''
-	Compute an incident field with wave number k0 due to a source at
-	location src in the slab at height zh with transverse coordinates
-	specified in the meshgrid arrays x and y.
+	A class to advance a wavefront through an arbitrary medium according to
+	the split-step method.
 	'''
 
-	rhosq = (x - src[0])**2 + (y - src[1])**2
-	rsq = rhosq + (zh - src[2])**2
-	r = np.sqrt(rsq)
+	def __init__(self, k0, nx, ny, h):
+		'''
+		Initialize a split-step engine over an nx-by-ny grid with
+		isotropic step size h. The unitless wave number is k0.
+		'''
 
-	return np.exp(1j * k0 * r - 2 * rhosq / rsq) / r
+		# Copy the parameters
+		self.grid = nx, ny
+		self.h, self.k0 = h, k0
 
-def genprop(k0, nx, ny, dx, dz = None):
-	'''
-	Generate the propagator used to advance the field through a homogeneous
-	slab of dimensions (nx, ny) and with height dx and wave number k0.
-	'''
+		# The default propagator and attenuation screen are None
+		self._propagator = None
+		self._attenuator = None
 
-	# Make the grid isotropic if slab thickness isn't specified
-	if dz is None: dz = dx
 
-	# Get the coordinate indices for the slab
-	slice = np.mgrid[-nx/2:nx/2,-ny/2:ny/2]
+	def kxysq(self):
+		'''
+		Return the square of the transverse wave number, caching the
+		result if it has not already been computed.
+		'''
 
-	# Compute the transverse wave numbers
-	kx = 2. * math.pi * slice[0] / (nx * dx)
-	ky = 2. * math.pi * slice[1] / (ny * dx)
-	ksq = kx**2 + ky**2
+		try: return self._kxysq
+		except AttributeError:
+			# Get the coordinate indices for each slab
+			nx, ny = self.grid
+			sl = np.mgrid[-nx/2:nx/2, -ny/2:ny/2].astype(float)
 
-	# Return the propagator, with frequencies shifted for proper alignment
-	return fft.fftshift(np.exp(1j * np.sqrt(complex(k0)**2 - ksq) * float(dz)))
+			# Compute the transverse wave numbers
+			kx = 2. * math.pi * sl[0] / (nx * self.h)
+			ky = 2. * math.pi * sl[1] / (ny * self.h)
 
-def genatten(atten, nt, nx, ny):
-	'''
-	Generate an attenuation screen that supresses the field in a slab of
-	size (nx, ny) for a thickness of nt points around each edge.
-	'''
+			self._kxysq = fft.fftshift(kx**2 + ky**2)
+			return self._kxysq 
 
-	slice = np.mgrid[-nx/2:nx/2,-ny/2:ny/2]
 
-	# Figure out how much attenuation should be applied in the slab
-	x = (np.abs(slice[0]) - (nx / 2. - nt)) / float(nt)
-	y = (np.abs(slice[1]) - (ny / 2. - nt)) / float(nt)
+	def slicecoords(self):
+		'''
+		Return the meshgrid coordinate arrays for an x-y slab in the
+		current engine. The origin is in the center of the slab.
+		'''
+		g = self.grid
+		cg = np.mgrid[:g[0], :g[1]].astype(float)
+		return [(c - 0.5 * (n - 1.)) * self.h for c, n in zip(cg, g)]
 
-	# Compute the attenuation profile
-	wx = 1 - np.sin(0.5 * math.pi * (x > 0).choose(0, x))**2
-	wy = 1 - np.sin(0.5 * math.pi * (y > 0).choose(0, y))**2
-	w = wx * wy;
 
-	return np.exp(-atten * (1. - w))
+	@property
+	def propagator(self):
+		'''
+		Return a propagator to advance wabes to the next slab.
+		'''
+		return self._propagator
 
-def genscreen(obj, k0, dx):
-	'''
-	Generate the phase screen used to correct for differences from the
-	average wave number. The background wave number k0 should be unitless,
-	and the object contrast obj is the square of the ratio of the true wave
-	number to the background wave number, minus 1. The slab thickness dx
-	should be in wavelengths.
-	'''
-	return np.exp(0.5j * float(dx) * k0 * obj)
 
-def propfield(fld, prop):
-	'''
-	Apply the propagator in the spatial-frequency domain.
-	'''
+	@propagator.setter
+	def propagator(self, dz):
+		'''
+		Generate and cache the slab propagator for a step size dz. If
+		dz is None, use a step that matches the transverse step.
+		'''
+		# Make the grid isotropic if slab thickness isn't specified
+		if dz is None: dz = self.h
 
-	return fft.ifftn(prop * fft.fftn(fld))
+		# Get the longitudinal wave number
+		kz = np.sqrt(complex(self.k0**2) - self.kxysq())
 
-def compguess(k0, dx, inc, atn, objfile, fmt = 'SplitStep.%03d.field'):
-	'''
-	Propagate the incident field inc, with wave number k0, through a
-	contrast specified in objfile with cell size dx. The slab closest to
-	the incident field is the last slab in the contrast file. Each slab has
-	an attenuation profile atn to avoid boundary reflections. Output is
-	written in slab files with name format fmt.
-	'''
+		# Compute the propagator
+		self._propagator = np.exp(1j * kz * dz)
 
-	# Determine the contrast dimensions and see if the incident field matches
-	hdr, dtype = mio.getmattype(objfile)
-	# Note the position of the start of data
-	fpos = objfile.tell()
 
-	# The number of pixels per slab
-	npix = hdr[0] * hdr[1]
+	@propagator.deleter
+	def propagator(self): del self._propagator
 
-	# Record the size of the computational grid
-	pgrid = list(inc.shape[:])
 
-	# Check that the computational grid is at least as large as the contrast
-	if hdr[0] > pgrid[0] or hdr[1] > pgrid[1]:
-		raise ValueError('Contrast must not be larger than computation grid.')
+	def propfield(self, fld):
+		'''
+		Apply the spectral propagator to the provided field.
+		'''
+		return fft.ifftn(self.propagator * fft.fftn(fld))
 
-	# Record the offsets for zero-padding contrast grids
-	xmin, ymin = (pgrid[0] - hdr[0]) / 2, (pgrid[1] - hdr[1]) / 2
-	xmax, ymax = xmin + hdr[0], ymin + hdr[1]
 
-	# Generate the propagator
-	prop = genprop (k0, pgrid[0], pgrid[1], dx)
+	@property
+	def attenuator(self):
+		'''
+		Return a screen to attenuate the field at each slab edge. If
+		one was not previously set, a screen that does not attenuate is
+		created.
+		'''
+		return self._attenuator
 
-	# Write the incident field as the first slab in the desired data type
-	mio.writebmat(inc[xmin:xmax,ymin:ymax].astype(dtype), fmt % hdr[2])
-	print('Wrote ' + fmt % hdr[2])
 
-	# Copy the incident field
-	fld = inc.copy()
+	@attenuator.setter
+	def attenuator(self, aparm):
+		'''
+		Generate a screen to supresses the field in each slab. The
+		tuple aparm takes the form (a, t), where a is the maximum
+		attenuation exp(-a), and t is the thickness of the border over
+		which the attenuation increases from zero to the maximum.
+		'''
+		# Unfold the parameter tuple
+		atten, nt = aparm
+		# Build an index grid centered on the origin
+		nx, ny = self.grid
+		sl = np.mgrid[:nx,:ny].astype(float)
+		sl[0] -= (nx - 1.) / 2.
+		sl[1] -= (ny - 1.) / 2.
+		# Positive points lie within the absorbing boundaries
+		x = (np.abs(sl[0]) - (0.5 * nx - nt)) / float(nt)
+		y = (np.abs(sl[1]) - (0.5 * ny - nt)) / float(nt)
 
-	# Read the contrast slab, propagate and write the field
-	for idx in range(hdr[2] - 1, -1, -1):
-		# Create a padded slab and read the contrast values
-		obj = np.zeros(pgrid, dtype = dtype)
-		objfile.seek(fpos + npix * idx * dtype().nbytes)
-		obj[xmin:xmax,ymin:ymax] = np.fromfile(objfile,
-				dtype=dtype, count=npix).reshape(hdr[:2], order='F')
+		# Compute the attenuation profile
+		wx = 1 - np.sin(0.5 * math.pi * (x > 0).choose(0, x))**2
+		wy = 1 - np.sin(0.5 * math.pi * (y > 0).choose(0, y))**2
+		w = wx * wy
 
-		# Generate the phase screen and propagate the field
-		# Make sure to cast into the expected format
-		screen = genscreen (obj, k0, dx)
-		fld = propfield (fld, prop)
-		fld *= screen * atn
+		# This is the imaginary part of the wave number in the boundary
+		self._attenuator = 1j * atten * (1. - w) / self.k0
 
-		# Write the slab in the desired data type
-		mio.writebmat(fld[xmin:xmax,ymin:ymax].astype(dtype), fmt % idx)
-		print('Wrote ' + fmt % idx)
 
-	return hdr[2]
+	@attenuator.deleter
+	def attenuator(self): del self._attenuator
+
+
+	def phasescreen(self, eta, dz = None):
+		'''
+		Generate the phase screen for a slab characterized by scaled
+		wave number eta. If the step size dz is not specified, the
+		isotropic in-plane step is used. Results are not cached.
+		'''
+
+		# Use the default step size if necessary
+		if dz is None: dz = self.h
+
+		return np.exp(1j * dz * self.k0 * (eta - 1.))
+
+
+	def wideangle(self, fld, eta, dz = None):
+		'''
+		Apply wide-angle corrections to the propagated field fld
+		corresponding to a medium with scaled wave number eta.
+		'''
+		if dz is None: dz = self.h
+
+		# Compute the Laplacian term and the spatial correction
+		kbar = self.kxysq() / self.k0**2
+		cor = 1j * self.k0 * dz * (eta - 1.) / (2. * eta)
+		return fld + cor * fft.ifftn(kbar * fft.fftn(fld))
+
+
+	def advance(self, fld, obj, dz = None):
+		'''
+		Use the spectral propagator, the phase screen for the current
+		slab, and the attenuation screen to advance the field through
+		one layer of a specified medium with contrast obj. The
+		propagator and attenuation screen must have previously been
+		established.
+		'''
+
+		# Convert the contrast to a scaled wave number
+		eta = np.sqrt(obj + 1.)
+
+		# Incorporate an absorbing boundary if one was desired
+		if self.attenuator is not None: eta += self.attenuator
+
+		# Build the phase screen for this slab
+		screen = self.phasescreen(eta, dz)
+
+		# Propagate the field with a wide-angle term and phase screen
+		fld = screen * self.wideangle(self.propfield(fld), eta, dz)
+
+		return fld

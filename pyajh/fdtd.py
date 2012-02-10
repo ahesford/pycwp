@@ -19,7 +19,7 @@ def findiff(a, axis=0):
 
 
 
-class PML:
+class PML(object):
 	'''
 	A class to encapsulate first-order pressure and particle velocity
 	updates in a perfectly matched layer where the boundaries are forced,
@@ -142,7 +142,7 @@ class PML:
 
 
 
-class Helmholtz:
+class Helmholtz(object):
 	'''
 	A class to encapsulate second-order pressure updates in a bounded
 	medium. The boundaries are independently forced directly or through
@@ -228,7 +228,7 @@ class Helmholtz:
 
 
 
-class FDTD:
+class FDTD(object):
 	'''
 	A simple FDTD engine that uses a hybrid scalar/vector formulation to
 	efficiently compute the propagation of acoustic waves in a medium

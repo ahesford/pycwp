@@ -111,7 +111,7 @@ def readbmat (infile, dim = None, dtype = None):
 	return datamap.reshape(matsize, order='F')
 
 
-class ReadSlicer:
+class ReadSlicer(object):
 	'''
 	This class opens a data file that can be read one slice at a time. A
 	slice is defined as a chunk of data with a dimension one less than the
@@ -143,6 +143,9 @@ class ReadSlicer:
 		# The number of elements to read per slice
 		self.nelts = cutil.prod(self.matsize[:-1])
 
+		# The number of bytes per slice
+		self.slicebytes = self.nelts * self.dtype().nbytes
+
 		# Store the start of the data block
 		self.fstart = self.infile.tell()
 
@@ -155,8 +158,11 @@ class ReadSlicer:
 			# Copy the slice range
 			self.slices = slices[:]
 			# Move the starting position to the first desired slice
-			self.fstart += self.nelts * self.slices[0] * self.dtype().nbytes
+			self.fstart += self.slices[0] * self.slicebytes
 		else: self.slices = [0, self.matsize[-1] - 1]
+
+		# Store the total number of slices to be read
+		self.nslices = self.slices[1] - self.slices[0] + 1
 
 
 	def __del__(self):
@@ -171,14 +177,46 @@ class ReadSlicer:
 		Create a generator to read each desired slice in succession.
 		Returns a tuple of the slice index and its data values.
 		'''
-		# Ensure the file object points to the start of the data block
-		self.infile.seek(self.fstart)
+		# Point to the first slice in the desired range
+		self.setslice(0)
 
-		# Slice along the last index
+		# Yield each slice along the last index
 		for idx in range(self.slices[0], self.slices[1] + 1):
-			data = np.fromfile(self.infile, dtype=self.dtype, count=self.nelts)
-			if data.size != self.nelts or data is None:
-				raise ValueError('Failed to read requested data.')
-			yield (idx, data.reshape(self.matsize[:-1], order = 'F'))
+			yield (idx, self.readslice())
 
 		return
+
+
+	def readslice(self):
+		'''
+		Read the slice at the current file position and reshape it to
+		the slice dimensions.
+		'''
+		data = np.fromfile(self.infile, dtype=self.dtype, count=self.nelts)
+		if data.size != self.nelts or data is None:
+			raise ValueError('Failed to read current slice')
+		return data.reshape(self.matsize[:-1], order='F')
+
+
+	def setslice(self, i):
+		'''
+		Point the file to the start of slice i, relative to the
+		starting index.
+		'''
+		# Ensure the requested index is valid
+		if -self.nslices > i or i >= self.nslices:
+			raise IndexError('Requested slice is out of bounds')
+
+		# Wrap negative indices in the Python fashion
+		if i < 0: i = i + self.nslices
+
+		# Point to the start of the desired slice
+		self.infile.seek(self.fstart + i * self.slicebytes)
+
+
+	def getslice(self, i):
+		'''
+		Grab the slice at index i, relative to the starting index.
+		'''
+		self.setslice(i)
+		return self.readslice()

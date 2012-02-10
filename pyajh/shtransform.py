@@ -4,7 +4,7 @@ from scipy import special as spec
 
 from . import cutil, harmonic
 
-class SHTransform:
+class SHTransform(object):
 	'''
 	Encapsulates a spherical harmonic transform to convert between
 	spherical harmonic coefficients and plane-wave coefficients.

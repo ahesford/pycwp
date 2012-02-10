@@ -9,7 +9,7 @@ from itertools import count, izip
 from . import cutil
 
 
-class HarmonicSpline:
+class HarmonicSpline(object):
 	'''
 	Use cubic basis splines to interpolate a harmonic function defined on
 	the surface of a sphere.
@@ -277,7 +277,7 @@ class HarmonicSpline:
 
 
 
-class SphericalInterpolator:
+class SphericalInterpolator(object):
 	'''
 	Build a sparse matrix that can be used to interpolate an angular
 	function defined on the surface of a sphere.
