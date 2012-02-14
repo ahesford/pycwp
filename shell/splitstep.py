@@ -87,8 +87,8 @@ if __name__ == '__main__':
 	# Compute and write the values of the Green's function in this slab
 	r = np.sqrt(reduce(np.add, map(lambda (x, y): (x - y)**2, zip(crd, src))))
 	fld = np.exp(1j * k0 * r) / (4. * math.pi * r)
-	# Include a directivity pattern if desired
-	if d is not None: fld *= wavetools.directivity(crd, src, d, 4.3458)
+	# Include any specified directivity pattern
+	if d is not None: fld *= wavetools.directivity(crd, src, d[:3], d[3])
 	mio.writebmat(fld[sl].astype(inmat.dtype), outfmt % objdim[-1])
 
 	# Create a buffer to store the current, padded contrast
