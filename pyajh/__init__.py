@@ -4,6 +4,5 @@ read and write matrices, deal with focused beams, and handle scattering
 data.
 '''
 
-__all__ = [ "cutil", "focusing", "geom", "harmonic", "mio",
-		"wavetools", "wavecl", "aca", "shtransform",
-		"scattering", "splitstep", "fdtd" ]
+__all__ = [ "cutil", "focusing", "geom", "harmonic", "mio", "wavetools",
+		"wavecl", "aca", "shtransform", "scattering", "fdtd" ]

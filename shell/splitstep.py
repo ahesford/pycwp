@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 
 import numpy as np, math, sys, getopt
-from pyajh import mio, splitstep
+from pyajh import mio, wavetools
 
 def usage(execname):
-	print 'USAGE: %s [-h] [-a <a,t>] [-f f] [-d d] [-c c]' % execname
+	print 'USAGE: %s [-a <a,t>] [-f f] [-h h] [-c c] [-w] [-d x,y,z]' % execname
 	print '       <src> <infile> <outfmt>'
 	print '''
 	Using the split-step method, compute the field induced in a contrast
@@ -18,29 +18,32 @@ def usage(execname):
 	outfmt is a Python format string and d is the slab index.
 
 	OPTIONAL ARGUMENTS:
-	-h: Display this message and exit
 	-a: Use a maximum attenuation a, increased over t cells (default: 7.0, 10)
 	-f: Specify the incident frequency, f, in MHz (default: 3.0)
-	-d: Specify the grid spacing, d, in mm (default: 0.05)
+	-h: Specify the grid spacing, h, in mm (default: 0.05)
 	-c: Specify the sound speed, c, in mm/us (default: 1.5)
+	-w: Disable wide-angle corrections
+	-d: Specify a directivity axis x,y,z (default: none)
 	'''
 
 if __name__ == '__main__':
 	# Grab the executable name
 	execname = sys.argv[0]
 
-	# Store the default attenuation, grid spacing, frequency and wave number
-	a, d, f, k0 = (7.0, 10), 0.05, 3.0, 2 * math.pi
+	# Store the default parameters
+	a, h, f, k0, d, w = (7.0, 10), 0.05, 3.0, 2 * math.pi, None, True
 
-	optlist, args = getopt.getopt(sys.argv[1:], 'ha:f:d:c:')
+	optlist, args = getopt.getopt(sys.argv[1:], 'wa:f:h:c:d:')
 
 	for opt in optlist:
 		if opt[0] == '-a':
 			av = opt[1].split(',')
 			a = float(av[0]), int(av[1])
+		elif opt[0] == '-d': d = [float(ds) for ds in opt[1].split(',')]
 		elif opt[0] == '-f': f = float(opt[1])
-		elif opt[0] == '-d': d = float(opt[1])
+		elif opt[0] == '-h': h = float(opt[1])
 		elif opt[0] == '-c': c = float(opt[1])
+		elif opt[0] == '-w': w = False
 		else:
 			usage(execname)
 			sys.exit(128)
@@ -50,7 +53,7 @@ if __name__ == '__main__':
 		sys.exit(128)
 
 	# Compute the step size in wavelengths
-	h = d * f / c
+	h *= f / c
 
 	print 'Split-step simulation, frequency %g MHz, background %g mm/us' % (f, c)
 	print 'Step size in wavelengths is %g, attenuation is %g over %d pixels' % (h, a[0], a[1])
@@ -66,7 +69,7 @@ if __name__ == '__main__':
 
 	# Pad the domain with the attenuation borders
 	grid = [m + 2 * a[1] for m in objdim[:-1]]
-	sse = splitstep.SplitStepEngine(k0, grid[0], grid[1], h)
+	sse = wavetools.SplitStepEngine(k0, grid[0], grid[1], h)
 
 	# Create a slice tuple to strip out the padding when writing
 	sl = [slice(a[1], -a[1]) for i in range(2)]
@@ -78,11 +81,13 @@ if __name__ == '__main__':
 
 	# Compute the z-offset of the slab before the first computed slab
 	zoff = 0.5 * float(objdim[-1] + 1) * sse.h
-	# Compute the x, y (array) and z (scalar) coordinates of the start slab
+	# Compute the x, y (array) coordinates of the start slab
 	crd = sse.slicecoords() + [zoff]
 	# Compute and write the values of the Green's function in this slab
 	r = np.sqrt(reduce(np.add, map(lambda (x, y): (x - y)**2, zip(crd, src))))
 	fld = np.exp(1j * k0 * r) / (4. * math.pi * r)
+	# Include a directivity pattern if desired
+	if d is not None: fld *= wavetools.directivity(crd, src, d, 4.3458)
 	mio.writebmat(fld[sl].astype(inmat.dtype), outfmt % objdim[-1])
 
 	# Create a buffer to store the current, padded contrast
@@ -91,5 +96,5 @@ if __name__ == '__main__':
 	# Loop through all slices and compute the propagated field
 	for idx in range(objdim[-1] - 1, -1, -1):
 		obj[sl] = inmat.getslice(idx)
-		fld = sse.advance(fld, obj)
+		fld = sse.advance(fld, obj, w)
 		mio.writebmat(fld[sl].astype(inmat.dtype), outfmt % idx)
