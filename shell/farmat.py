@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 
-import numpy as np, math, sys, getopt, itertools
+import numpy as np, math, sys, getopt, itertools, os
 from pyajh import mio, cutil, wavecl, harmonic
 
-
 def usage(execname):
-	print 'USAGE: %s [-h] [-r] [-i <iord>] [-d <length>] [-n <ncell>] <ntheta> <outfile>' % execname
+	binfile = os.path.basename(execname)
+	print 'USAGE:', binfile, '[-h] [-r] [-i <iord>] [-d <length>] [-n <ncell>] <ntheta> <outfile>'
 	print '''
 	Write to outfile the far-field matrix for a group of ncell elements per
 	dimension using ntheta samples of the polar angle.

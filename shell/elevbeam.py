@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-import sys
+import sys, os
 import getopt
 from numpy import *
 
@@ -9,8 +9,8 @@ import pylab
 from pyajh import focusing, mio, scattering
 
 def usage (progname = 'elevbeam.py'):
-	print 'Usage: %s [-h] [-p] [-f freq] [-c speed] [-a phi]' % progname
-	print '[-w aperture] [-l length] [-z offset] [-s shift] [-r scatpat] [-o output]'
+	binfile = os.path.basename(progname)
+	print 'Usage:', binfile, '[-h] [-p] [-f freq] [-c speed] [-a phi] [-w aperture] [-l length] [-z offset] [-s shift] [-r scatpat] [-o output]'
 	print '\t-h: Print this message'
 	print '\t-p: Plot the amplitudes'
 	print '\t-f: Excitation frequency in MHz (default: 2.5)'

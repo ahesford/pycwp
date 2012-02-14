@@ -1,13 +1,14 @@
 #!/usr/bin/env python
 
-import sys
+import sys, os
 import getopt
 import numpy as np
 
 from pyajh import mio
 
 def usage (progname = 'gridup.py'):
-	print >> sys.stderr, "Usage: %s <inputfile> [outputfile]" % progname
+	binfile = os.path.basename(progname)
+	print >> sys.stderr, "Usage:", binfile, "<inputfile> [outputfile]"
 
 
 def main (argv = None):

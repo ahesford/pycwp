@@ -1,12 +1,13 @@
 #!/usr/bin/env python
 
-import sys
+import sys, os
 import numpy
 
 from pyajh import mio
 
 def usage (progname = 'patsplit.py'):
-	print "Usage: %s [-h] <file> [x,y]" % progname
+	binfile = os.path.basename(progname)
+	print "Usage:", binfile, "[-h] <file> [x,y]"
 	print "\tSplit columns of two-dimensional matrix <file> into separate files"
 	print "\tOptional shape specification x,y reshapes each column as a 2-D matrix."
 

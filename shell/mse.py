@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-import sys
+import sys, os
 import getopt
 import numpy as np
 from itertools import izip
@@ -8,7 +8,8 @@ from itertools import izip
 from pyajh import mio, cutil
 
 def usage (progname = 'mse.py'):
-	print "Usage: %s [-h] [-n] <cmpfile> [...] <reffile>" % progname
+	binfile = os.path.basename(progname)
+	print "Usage:", binfile, "[-h] [-n] <cmpfile> [...] <reffile>"
 
 
 def filemax (infile):

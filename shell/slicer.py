@@ -1,13 +1,14 @@
 #!/usr/bin/env python
 
-import sys
+import sys, os
 import getopt
 import numpy as np
 
 from pyajh import mio
 
 def usage (progname = 'slicer.py'):
-	print >> sys.stderr, "Usage: %s <slice> <inputfile> [outputfile]" % progname
+	binfile = os.path.basename(progname)
+	print >> sys.stderr, "Usage:", binfile, "<slice> <inputfile> [outputfile]"
 
 
 def slicer(slstr):

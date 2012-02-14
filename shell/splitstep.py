@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 
-import numpy as np, math, sys, getopt
+import numpy as np, math, sys, getopt, os
 from pyajh import mio, wavetools
 
 def usage(execname):
-	print 'USAGE: %s [-a <a,t>] [-f f] [-h h] [-c c] [-w] [-d x,y,z]' % execname
-	print '       <src> <infile> <outfmt>'
+	binfile = os.path.basename(execname)
+	print 'USAGE:', binfile, '[-a <a,t>] [-f f] [-h h] [-c c] [-w] [-d x,y,z,w]', '<src> <infile> <outfmt>'
 	print '''
 	Using the split-step method, compute the field induced in a contrast
 	medium specified in infile by a point source at location src = x,y,z.
@@ -23,7 +23,7 @@ def usage(execname):
 	-h: Specify the grid spacing, h, in mm (default: 0.05)
 	-c: Specify the sound speed, c, in mm/us (default: 1.5)
 	-w: Disable wide-angle corrections
-	-d: Specify a directivity axis x,y,z (default: none)
+	-d: Specify a directivity axis x,y,z with width parameter w (default: none)
 	'''
 
 if __name__ == '__main__':

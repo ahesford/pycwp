@@ -1,13 +1,14 @@
 #!/usr/bin/env python
 
-import sys
+import sys, os
 import getopt
 import numpy as np
 
 from pyajh import mio
 
 def usage (progname = 'catslab.py'):
-	print >> sys.stderr, "Usage: %s [-h] [-t xl,xh,yl,yh] <slab1> [...] <slabN>" % progname
+	binfile = os.path.basename(progname)
+	print >> sys.stderr, "Usage:", binfile, "[-h] [-t xl,xh,yl,yh] <slab1> [...] <slabN>"
 
 def main (argv = None):
 	if argv is None:

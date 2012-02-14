@@ -1,10 +1,11 @@
 #!/usr/bin/env python
 
-import numpy as np, math, sys, getopt
+import numpy as np, math, sys, getopt, os
 from pyajh import mio, cutil, harmonic, wavecl
 
 def usage(execname):
-	print 'USAGE: %s [-h] [-r] [-i <iord>] [-t <tol>] <ntheta> <infile> <outfile>' % execname
+	binfile = os.path.basename(execname)
+	print 'USAGE:', binfile, '[-h] [-r] [-i <iord>] [-t <tol>] <ntheta> <infile> <outfile>'
 	print '''
 	Write to outfile the far-field matrix, characterized by ntheta samples
 	of the polar angle, obtained by interpolating the far-field matrix
