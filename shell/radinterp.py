@@ -45,7 +45,7 @@ if __name__ == '__main__':
 	ntf = int(args[0])
 
 	# Create a generator to read the matrix column by column
-	inmat = mio.ReadSlicer(args[1])
+	inmat = mio.Slicer(args[1])
 
 	# Compute the input number of samples of the polar angle
 	ntc = int(2. + math.sqrt(4. + 0.5 * (inmat.shape[0] - 10.)))
@@ -63,20 +63,18 @@ if __name__ == '__main__':
 	else: a = wavecl.SplineInterpolator(ntc, 2 * (ntc - 2), tol)
 
 	# Interpolate each column of the matrix and write it to a file
-	with open(args[2], 'wb') as output:
-		# Write the output matrix size
-		np.array([nsamp, inmat.shape[-1]], dtype=np.int32).tofile(output)
-
-		if not gpu:
-			for row in inmat:
-				# Interpolate to the finer grid
-				irow = a.interpolate(row[1])
-				# Write the finer grid to output
-				irow.astype(inmat.dtype).tofile(output)
-		else:
-			for row in inmat:
-				# Build the spline coefficients for the row
-				a.buildcoeff(row[1])
-				# Interpolate to the finer grid and write to output
-				irow = a.interpolate(ntf, 2 * (ntf - 2))
-				irow.astype(inmat.dtype).tofile(output)
+	output = mio.Slicer(args[2], [nsamp, inmat.shape[-1]], dtype=inmat.dtype)
+	
+	if not gpu:
+		for row in inmat:
+			# Interpolate to the finer grid
+			irow = a.interpolate(row[1])
+			# Write the finer grid to output
+			output.writeslice(irow)
+	else:
+		for row in inmat:
+			# Build the spline coefficients for the row
+			a.buildcoeff(row[1])
+			# Interpolate to the finer grid and write to output
+			irow = a.interpolate(ntf, 2 * (ntf - 2))
+			output.writeslice(irow)

@@ -5,7 +5,7 @@ from pyajh import mio, wavetools
 
 def usage(execname):
 	binfile = os.path.basename(execname)
-	print 'USAGE:', binfile, '[-h] [-a <a,t>] [-f f] [-s s] [-c c] [-w] [-m] [-d x,y,z,w]', '<src> <infile> <outfmt>'
+	print 'USAGE:', binfile, '[-h] [-a <a,t>] [-f f] [-s s] [-c c] [-w] [-m] [-d x,y,z,w]', '<src> <infile> <outfile>'
 	print '''
 	Using the split-step method, compute the field induced in a contrast
 	medium specified in infile by a point source at location src = x,y,z.
@@ -14,8 +14,7 @@ def usage(execname):
 	first receives the incident field. A configurable attenuation profile
 	is applied to each edge of each slice.
 
-	Each slab is written to a file whose name is given by outfmt % d, where
-	outfmt is a Python format string and d is the slab index.
+	The solution is written to outfile.
 
 	OPTIONAL ARGUMENTS:
 	-h: Display this message and exit
@@ -65,10 +64,10 @@ if __name__ == '__main__':
 	src = tuple(float(s) * f / c for s in args[0].split(','))
 
 	# Create a generator to read the matrix slab by slab
-	inmat = mio.ReadSlicer(args[1])
+	inmat = mio.Slicer(args[1])
 	objdim = inmat.shape
-
-	outfmt = args[2]
+	# Create the output file
+	outmat = mio.Slicer(args[2], objdim, dtype=inmat.dtype)
 
 	# Pad the domain with the attenuation borders
 	grid = [n + 2 * a[1] for n in objdim[:-1]]
@@ -91,7 +90,6 @@ if __name__ == '__main__':
 	fld = np.exp(1j * k0 * r) / (4. * math.pi * r)
 	# Include any specified directivity pattern
 	if d is not None: fld *= wavetools.directivity(crd, src, d[:3], d[3])
-	mio.writebmat(fld[sl].astype(inmat.dtype), outfmt % objdim[-1])
 
 	# Create a buffer to store the current, padded contrast
 	obj = np.zeros(grid, inmat.dtype)
@@ -100,4 +98,4 @@ if __name__ == '__main__':
 	for idx in range(objdim[-1] - 1, -1, -1):
 		obj[sl] = inmat[idx]
 		fld = sse.advance(fld, obj, w, m)
-		mio.writebmat(fld[sl].astype(inmat.dtype), outfmt % idx)
+		outmat[idx] = fld[sl]

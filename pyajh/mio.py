@@ -81,7 +81,7 @@ def writebmat (mat, outfile):
 	# This will close the file when writing is done
 	with outfile:
 		# Write the size header to the matrix
-		np.array(mat.shape, dtype='int32').tofile(outfile)
+		np.array(mat.shape, dtype=np.int32).tofile(outfile)
 
 		# Write the matrix body in FORTRAN order by transposing first
 		mat.T.tofile(outfile)
@@ -111,65 +111,70 @@ def readbmat (infile, dim = None, dtype = None):
 	return datamap.reshape(matsize, order='F')
 
 
-class ReadSlicer(object):
+class Slicer(object):
 	'''
-	This class opens a data file that can be read one slice at a time. A
-	slice is defined as a chunk of data with a dimension one less than the
-	input, i.e., one column of a FORTRAN-ordered matrix or one slab of a
-	FORTRAN-ordered three-dimensional grid.
+	This class opens a data file that can be read or written to one slice
+	at a time. A slice is defined as a chunk of data with a dimension one
+	less than the whole set, i.e., one column of a FORTRAN-ordered matrix
+	or one slab of a FORTRAN-ordered three-dimensional grid.
 	'''
-
-	def __init__(self, infile, dim = None, dtype = None, slices = None):
+	def __init__(self, f, dim = None, dtype = None):
 		'''
-		Open the input file, possibly with the specified dimension and
-		data type (to avoid automatic detection), and prepare to read
-		the file one slice at a time. The parameter infile may be a
-		string containing the path of a file to open, or it may be an
-		already-open file. The optional two-element list slices
-		specifies the first and last indices (inclusive) of the slices
-		to be read.
+		If f is a file object or a string corresponding to an existing
+		file name, create a Slicer object backed by the existing file.
+		In this case, optional arguments dim and dtype may be used to
+		avoid automatic dimensionality and type detection. In this
+		case, dim must be the number of dimensions in the file.
+
+		If f is a string corresponding to a file name that does not
+		exist, an empty data file is created. In this case, dim and
+		dtype MUST be specified. The argument dim must be an iterable
+		object specifying the length of the data in each dimension.
 		'''
+		try:
+			# Treat the file as if it already exists
+			# If the name is a string, open the file for reading
+			if isinstance(f, (str, unicode)):
+				f = open(f, mode='rb+')
 
-		# Open the input file if it isn't already open
-		if isinstance(infile, (str, unicode)):
-			infile = open(infile, mode='rb')
+			# Grab the matrix header, size, and data type
+			self.shape, self.dtype = getmattype(f, dim, dtype)
+		except IOError:
+			# If the file does not exist, the name must be a string
+			if not isinstance(f, (str, unicode)):
+				raise TypeError('Specify a string to create a Slicer backing file')
 
-		# Store the file
-		self.infile = infile
+			# Make sure the dimensions and data type are specified
+			if dim is None or dtype is None:
+				raise ValueError('Grid dimensions and data type must be specified to create file')
 
-		# Grab the matrix header, size, and data type
-		self.shape, self.dtype = getmattype(infile, dim, dtype)
+			# Copy the matrix shape and data type
+			self.shape = dim[:]
+			self.dtype = dtype
 
-		# The number of elements to read per slice
+			# Open the file and write the header
+			f = open(f, mode='wb+')
+			np.array(self.shape, dtype=np.int32).tofile(f)
+
+			# Truncate the file to the desired size
+			f.truncate(f.tell() + cutil.prod(self.shape) * self.dtype().nbytes)
+
+		# Copy the backer file
+		self.backer = f
+
+		# The number of elements and bytes per slice
 		self.nelts = cutil.prod(self.shape[:-1])
-
-		# The number of bytes per slice
 		self.slicebytes = self.nelts * self.dtype().nbytes
 
 		# Store the start of the data block
-		self.fstart = self.infile.tell()
-
-		# If a subset of slices are desired, restrict the read
-		if slices is not None:
-			if len(slices) != 2:
-				raise ValueError('Slices list must contain two elements.')
-			if (0 > slices[0] >= self.shape[-1]) or (0 > slices[1] >= self.shape[-1]):
-				raise ValueError('Slice indices outside of valid range.')
-			# Copy the slice range
-			self.slices = slices[:]
-			# Move the starting position to the first desired slice
-			self.fstart += self.slices[0] * self.slicebytes
-		else: self.slices = [0, self.shape[-1] - 1]
-
-		# Store the total number of slices to be read
-		self.nslices = self.slices[1] - self.slices[0] + 1
+		self.fstart = self.backer.tell()
 
 
 	def __del__(self):
 		'''
 		Close the open data file on delete.
 		'''
-		self.infile.close()
+		self.backer.close()
 
 
 	def __iter__(self):
@@ -181,37 +186,49 @@ class ReadSlicer(object):
 		self.setslice(0)
 
 		# Yield each slice along the last index
-		for idx in range(self.slices[0], self.slices[1] + 1):
+		for idx in range(self.shape[-1]):
 			yield (idx, self.readslice())
 
 		return
 
 
+	def setslice(self, i):
+		'''
+		Point the file to the start of slice i.
+		'''
+		# Ensure the requested index is valid
+		if -self.shape[-1] > i or i >= self.shape[-1]:
+			raise IndexError('Requested slice is out of bounds')
+
+		# Wrap negative indices in the Python fashion
+		if i < 0: i = i + self.shape[-1]
+
+		# Point to the start of the desired slice
+		self.backer.seek(self.fstart + i * self.slicebytes)
+
+
 	def readslice(self):
 		'''
-		Read the slice at the current file position and reshape it to
-		the slice dimensions.
+		Read the slice at the current file position.
 		'''
-		data = np.fromfile(self.infile, dtype=self.dtype, count=self.nelts)
+		data = np.fromfile(self.backer, dtype=self.dtype, count=self.nelts)
 		if data.size != self.nelts or data is None:
 			raise ValueError('Failed to read current slice')
 		return data.reshape(self.shape[:-1], order='F')
 
 
-	def setslice(self, i):
+	def writeslice(self, slab):
 		'''
-		Point the file to the start of slice i, relative to the
-		starting index.
+		Write the slab at the current file position, converting the
+		data type to that specified for the file. The array will be
+		reshaped with FORTRAN ordering into the expected slab shape.
 		'''
-		# Ensure the requested index is valid
-		if -self.nslices > i or i >= self.nslices:
-			raise IndexError('Requested slice is out of bounds')
+		sflat = slab.ravel('F')
 
-		# Wrap negative indices in the Python fashion
-		if i < 0: i = i + self.nslices
+		if sflat.shape[0] != self.nelts:
+			raise ValueError('Slice size does not agree with output')
 
-		# Point to the start of the desired slice
-		self.infile.seek(self.fstart + i * self.slicebytes)
+		sflat.astype(self.dtype).tofile(self.backer)
 
 
 	def __getitem__(self, key):
@@ -220,21 +237,48 @@ class ReadSlicer(object):
 		'''
 		try:
 			# Treat the key as a slice to pull out multiple slabs
-			idx = key.indices(self.nslices)
+			idx = key.indices(self.shape[-1])
 			# Compute the number of slabs to be read
 			nslab = (idx[1] - idx[0]) / idx[2]
 			if idx[0] + idx[2] * nslab < idx[1]: nslab += 1
 			# Allocate storage for the requested slices
-			shape = list(self.shape[:-1]) + [nslab]
-			data = np.empty(shape, dtype=self.dtype)
+			data = np.empty(list(self.shape[:-1]) + [nslab], dtype=self.dtype)
+			# Create slice objects corresponding to a single slab
+			sl = [slice(None) for s in self.shape[:-1]]
 
 			# Read all of the requested slices
 			for li, i in enumerate(range(*idx)):
 				self.setslice(i)
-				data[:,:,li] = self.readslice()
+				data[sl + [li]] = self.readslice()
 		except AttributeError:
 			# A slice was not provided, grab a single slab
 			self.setslice(key)
 			data = self.readslice()
 
 		return data
+
+
+	def __setitem__(self, key, value):
+		'''
+		Write slices to the file using list-style indexing.
+		'''
+		try:
+			# Treat the key as a slice to write multiple slabs
+			idx = key.indices(self.shape[-1])
+			# Compute the number of slabs to be written
+			nslab = (idx[1] - idx[0]) / idx[2]
+			if idx[0] + idx[2] * nslab < idx[1]: nslab += 1
+			# Check that the number of slices matches
+			if value.shape[-1] != nslab:
+				raise IndexError('Numbers of input and output slices do not agree')
+
+			# Create slice objects corresponding to a single slab
+			sl = [slice(None) for s in value.shape[:-1]]
+
+			for li, i in enumerate(range(*idx)):
+				self.setslice(i)
+				self.writeslice(value[sl + [li]])
+		except AttributeError:
+			# A slice was not provided, write a single slab
+			self.setslice(key)
+			self.writeslice(value)

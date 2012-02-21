@@ -18,7 +18,7 @@ def filemax (infile):
 	'''
 
 	return cutil.complexmax(np.array([cutil.complexmax(s)
-		for idx, s in mio.ReadSlicer(infile)]))
+		for idx, s in mio.Slicer(infile)]))
 
 
 def errslice (infiles, nfacts):
@@ -32,7 +32,7 @@ def errslice (infiles, nfacts):
 	den = 0.
 
 	# Prepare the file-slicer generators
-	slgens = [mio.ReadSlicer(fn) for fn in infiles]
+	slgens = [mio.Slicer(fn) for fn in infiles]
 
 	# Loop through each slice as it is read
 	for slices in izip(*slgens):
