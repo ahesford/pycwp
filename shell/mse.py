@@ -12,43 +12,34 @@ def usage (progname = 'mse.py'):
 	print "Usage:", binfile, "[-h] [-n] <cmpfile> [...] <reffile>"
 
 
-def filemax (infile):
+def filemax (mat):
 	'''
-	Perform a slice-by-slice scan of infile and identify the maximum value.
+	Perform a slice-by-slice scan of mat and identify the maximum value.
 	'''
-
-	return cutil.complexmax(np.array([cutil.complexmax(s)
-		for idx, s in mio.Slicer(infile)]))
+	return cutil.complexmax(np.array([cutil.complexmax(s) for i, s in mat]))
 
 
-def errslice (infiles, nfacts):
+def errslice (mats, nfacts):
 	'''
-	Perform a slice-by-slice comparison of the inputs infiles. If nfacts is
+	Perform a slice-by-slice comparison of the matices mats. If nfacts is
 	provided for each file and is not None, the data is normalized by the
 	corresponding factor. The last file is the reference.
 	'''
 
-	err = np.array([0.] * len(infiles[:-1]))
+	err = np.array([0.] * (len(mats) - 1))
 	den = 0.
 
-	# Prepare the file-slicer generators
-	slgens = [mio.Slicer(fn) for fn in infiles]
+	# Perform no normalization if nfacts was omitted
+	if nfacts is None: nfacts = [1.] * len(mats)
 
 	# Loop through each slice as it is read
-	for slices in izip(*slgens):
-		# Strip out the slice index
-		data = [s[1] for s in slices]
-
-		# Normalize each chunk, if desired
-		if nfacts is not None:
-			data = [d / nf for d, nf in izip(data, nfacts)]
-
-		# The last file is the reference
-		ref = data[-1]
+	for slices in izip(*mats):
+		# Strip out the slice index and normalize if appropriate
+		data = [s[1] / nf for s, nf in izip(slices, nfacts)]
 
 		# Update the numerator and denominator
-		err += np.array([np.sum(np.abs(d - ref)**2) for d in data[:-1]])
-		den += np.sum(np.abs(ref)**2)
+		err += np.array([np.sum(np.abs(d - data[-1])**2) for d in data[:-1]])
+		den += np.sum(np.abs(data[-1])**2)
 
 	# Return the error
 	return np.sqrt(err / den)
@@ -76,20 +67,20 @@ def main (argv = None):
 		usage (progname)
 		return 128
 
-	# Attempt to open all files and grab the matrix dimensions and types
-	msizes = [mio.getmattype(open(name, 'rb'))[0] for name in args]
+	# Attempt to open all files
+	mats = [mio.Slicer(name) for name in args]
 
 	# Check that the matrix shapes match
-	for mf, ms in zip(args, msizes[:-1]):
-		if ms.tolist() != msizes[-1].tolist():
+	for mf, ms in zip(args, mats):
+		if list(ms.shape) != list(mats[-1].shape):
 			raise IndexError('File %s has wrong shape' % mf)
 
 	# Find the normalizing factors, if desired
-	if normalize: nfacts = [filemax(mf) for mf in args]
+	if normalize: nfacts = [filemax(m) for m in mats]
 	else: nfacts = None
 
 	# Compute the MSE for each file relative to the reference
-	err = errslice (args, nfacts)
+	err = errslice (mats, nfacts)
 
 	# Report the MSE for each pair
 	for idx, e in enumerate (err):
