@@ -12,6 +12,26 @@ from itertools import izip
 from .cutil import rotate
 from . import mio
 
+def spd2ct(c, cbg, atn = None):
+	'''
+	Convert a wave speed profile c and an optional attenuation profile atn
+	into a unitless, complex contrast profile relative to the background
+	wave speed cbg.
+
+	The speed units are mm / us; attenuation units are dB / cm / MHz.
+	'''
+
+	try:
+		# The factor 0.1 converts dB / cm / MHz to dB / mm / MHz
+		# The factor log(10) / 20 converts dB to Np
+		scale = 0.1 * math.log(10) / 20
+		# Multiplying atn by cbg converts it to dB per wavelength
+		k = 2. * math.pi * cbg / c + 1j * cbg * scale * atn 
+	except TypeError: k = 2. * math.pi * cbg / c
+
+	# Return the contrast profile
+	return (k / 2. / math.pi)**2 - 1.
+
 def directivity(pos, src, d, a):
 	'''
 	Evaluate a directivity pattern cos(theta) exp(-a sin(theta)**2), where
