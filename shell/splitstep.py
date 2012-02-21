@@ -5,7 +5,7 @@ from pyajh import mio, wavetools
 
 def usage(execname):
 	binfile = os.path.basename(execname)
-	print 'USAGE:', binfile, '[-h] [-a <a,t>] [-f f] [-s s] [-c c] [-w] [-d x,y,z,w]', '<src> <infile> <outfmt>'
+	print 'USAGE:', binfile, '[-h] [-a <a,t>] [-f f] [-s s] [-c c] [-w] [-m] [-d x,y,z,w]', '<src> <infile> <outfmt>'
 	print '''
 	Using the split-step method, compute the field induced in a contrast
 	medium specified in infile by a point source at location src = x,y,z.
@@ -24,6 +24,7 @@ def usage(execname):
 	-s: Specify the grid spacing, s, in mm (default: 0.05)
 	-c: Specify the sound speed, c, in mm/us (default: 1.5)
 	-w: Disable wide-angle corrections
+	-m: Disable amplitude corrections
 	-d: Specify a directivity axis x,y,z with width parameter w (default: none)
 	'''
 
@@ -32,9 +33,9 @@ if __name__ == '__main__':
 	execname = sys.argv[0]
 
 	# Store the default parameters
-	a, s, f, k0, d, w = (7.0, 10), 0.05, 3.0, 2 * math.pi, None, True
+	a, s, f, k0, d, w, m = (7.0, 10), 0.05, 3.0, 2 * math.pi, None, True, True
 
-	optlist, args = getopt.getopt(sys.argv[1:], 'hwa:f:s:c:d:')
+	optlist, args = getopt.getopt(sys.argv[1:], 'hwma:f:s:c:d:')
 
 	for opt in optlist:
 		if opt[0] == '-a':
@@ -45,6 +46,7 @@ if __name__ == '__main__':
 		elif opt[0] == '-s': s = float(opt[1])
 		elif opt[0] == '-c': c = float(opt[1])
 		elif opt[0] == '-w': w = False
+		elif opt[0] == '-m': m = False
 		else:
 			usage(execname)
 			sys.exit(128)
@@ -64,12 +66,12 @@ if __name__ == '__main__':
 
 	# Create a generator to read the matrix slab by slab
 	inmat = mio.ReadSlicer(args[1])
-	objdim = inmat.matsize
+	objdim = inmat.shape
 
 	outfmt = args[2]
 
 	# Pad the domain with the attenuation borders
-	grid = [m + 2 * a[1] for m in objdim[:-1]]
+	grid = [n + 2 * a[1] for n in objdim[:-1]]
 	sse = wavetools.SplitStepEngine(k0, grid[0], grid[1], h)
 
 	# Create a slice tuple to strip out the padding when writing
@@ -96,6 +98,6 @@ if __name__ == '__main__':
 
 	# Loop through all slices and compute the propagated field
 	for idx in range(objdim[-1] - 1, -1, -1):
-		obj[sl] = inmat.getslice(idx)
-		fld = sse.advance(fld, obj, w)
+		obj[sl] = inmat[idx]
+		fld = sse.advance(fld, obj, w, m)
 		mio.writebmat(fld[sl].astype(inmat.dtype), outfmt % idx)

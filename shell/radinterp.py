@@ -48,7 +48,7 @@ if __name__ == '__main__':
 	inmat = mio.ReadSlicer(args[1])
 
 	# Compute the input number of samples of the polar angle
-	ntc = int(2. + math.sqrt(4. + 0.5 * (inmat.matsize[0] - 10.)))
+	ntc = int(2. + math.sqrt(4. + 0.5 * (inmat.shape[0] - 10.)))
 
 	# The total number of output samples
 	nsamp = 2 * (ntf - 2)**2 + 2
@@ -65,7 +65,7 @@ if __name__ == '__main__':
 	# Interpolate each column of the matrix and write it to a file
 	with open(args[2], 'wb') as output:
 		# Write the output matrix size
-		np.array([nsamp, inmat.matsize[-1]], dtype=np.int32).tofile(output)
+		np.array([nsamp, inmat.shape[-1]], dtype=np.int32).tofile(output)
 
 		if not gpu:
 			for row in inmat:

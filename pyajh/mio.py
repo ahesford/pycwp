@@ -138,10 +138,10 @@ class ReadSlicer(object):
 		self.infile = infile
 
 		# Grab the matrix header, size, and data type
-		self.matsize, self.dtype = getmattype(infile, dim, dtype)
+		self.shape, self.dtype = getmattype(infile, dim, dtype)
 
 		# The number of elements to read per slice
-		self.nelts = cutil.prod(self.matsize[:-1])
+		self.nelts = cutil.prod(self.shape[:-1])
 
 		# The number of bytes per slice
 		self.slicebytes = self.nelts * self.dtype().nbytes
@@ -153,13 +153,13 @@ class ReadSlicer(object):
 		if slices is not None:
 			if len(slices) != 2:
 				raise ValueError('Slices list must contain two elements.')
-			if (0 > slices[0] >= self.matsize[-1]) or (0 > slices[1] >= self.matsize[-1]):
+			if (0 > slices[0] >= self.shape[-1]) or (0 > slices[1] >= self.shape[-1]):
 				raise ValueError('Slice indices outside of valid range.')
 			# Copy the slice range
 			self.slices = slices[:]
 			# Move the starting position to the first desired slice
 			self.fstart += self.slices[0] * self.slicebytes
-		else: self.slices = [0, self.matsize[-1] - 1]
+		else: self.slices = [0, self.shape[-1] - 1]
 
 		# Store the total number of slices to be read
 		self.nslices = self.slices[1] - self.slices[0] + 1
@@ -195,7 +195,7 @@ class ReadSlicer(object):
 		data = np.fromfile(self.infile, dtype=self.dtype, count=self.nelts)
 		if data.size != self.nelts or data is None:
 			raise ValueError('Failed to read current slice')
-		return data.reshape(self.matsize[:-1], order='F')
+		return data.reshape(self.shape[:-1], order='F')
 
 
 	def setslice(self, i):
@@ -214,9 +214,27 @@ class ReadSlicer(object):
 		self.infile.seek(self.fstart + i * self.slicebytes)
 
 
-	def getslice(self, i):
+	def __getitem__(self, key):
 		'''
-		Grab the slice at index i, relative to the starting index.
+		Grab slices from the data file using list-style indexing.
 		'''
-		self.setslice(i)
-		return self.readslice()
+		try:
+			# Treat the key as a slice to pull out multiple slabs
+			idx = key.indices(self.nslices)
+			# Compute the number of slabs to be read
+			nslab = (idx[1] - idx[0]) / idx[2]
+			if idx[0] + idx[2] * nslab < idx[1]: nslab += 1
+			# Allocate storage for the requested slices
+			shape = list(self.shape[:-1]) + [nslab]
+			data = np.empty(shape, dtype=self.dtype)
+
+			# Read all of the requested slices
+			for li, i in enumerate(range(*idx)):
+				self.setslice(i)
+				data[:,:,li] = self.readslice()
+		except AttributeError:
+			# A slice was not provided, grab a single slab
+			self.setslice(key)
+			data = self.readslice()
+
+		return data

@@ -32,22 +32,22 @@ def spd2ct(c, cbg, atn = None):
 	# Return the contrast profile
 	return (k / 2. / math.pi)**2 - 1.
 
-def directivity(pos, src, d, a):
+
+def directivity(obs, src, d, a):
 	'''
 	Evaluate a directivity pattern cos(theta) exp(-a sin(theta)**2), where
-	theta is the angle between a direction d and the distance r = (pos -
-	src), where pos is the position of the observer and src is the position
-	of the source.
+	theta is the angle between a direction d and the distance r = (obs -
+	src), where obs and src are the respective positions of the observer
+	and source.
 	'''
 	# Compute the distance r and its norm
-	r = [x - y for x, y in izip(src, pos)]
+	r = [x - y for x, y in izip(obs, src)]
+	# Compute the norms of the distance and focal axis
 	rn = np.sqrt(reduce(np.add, [rv**2 for rv in r]))
-	# Normalize the directivity
 	dn = np.sqrt(reduce(np.add, [dv**2 for dv in d]))
-	d = [dv / dn for dv in d]
 
 	# Compute the cosine of the angle
-	ctheta = reduce(np.add, [x * y for x, y in izip(r, d)]) / rn
+	ctheta = reduce(np.add, [x * y for x, y in izip(r, d)]) / rn / dn
 	# Compute and return the pattern
 	return ctheta * np.exp(-a * np.sin(np.arccos(ctheta))**2)
 
@@ -315,6 +315,7 @@ class SplitStepEngine(object):
 		# The default propagator and attenuation screen are None
 		self._propagator = None
 		self._attenuator = None
+		self._lasteta = None
 
 
 	def kxysq(self):
@@ -430,27 +431,63 @@ class SplitStepEngine(object):
 		wave number eta. If the step size dz is not specified, the
 		isotropic in-plane step is used. Results are not cached.
 		'''
-
 		# Use the default step size if necessary
 		if dz is None: dz = self.h
-
 		return np.exp(1j * dz * self.k0 * (eta - 1.))
 
 
-	def wideangle(self, fld, eta, dz = None):
+	def wideangle(self, fld, eta, dz = None, lap = None):
 		'''
 		Apply wide-angle corrections to the propagated field fld
 		corresponding to a medium with scaled wave number eta.
+
+		If the pre-computed Laplacian lap of fld is supplied, it will
+		not be recomputed for these calculations.
 		'''
+		# Use the default step size if necessary
 		if dz is None: dz = self.h
 
-		# Compute the Laplacian term and the spatial correction
-		kbar = self.kxysq() / self.k0**2
+		# Compute the Laplacian term if necessary
+		if lap is None: lap = self.laplacian(fld)
+		# Compute the spatial correction factor
 		cor = 1j * self.k0 * dz * (eta - 1.) / (2. * eta)
-		return fld + cor * fft.ifftn(kbar * fft.fftn(fld))
+		return fld + cor * lap
 
 
-	def advance(self, fld, obj, w = True, dz = None):
+	def laplacian(self, fld):
+		'''
+		Compute and return the 2-D Laplacian (in the plane
+		perpendicular to propagation) of the field fld.
+		'''
+		kbar = self.kxysq() / self.k0**2
+		return fft.ifftn(kbar * fft.fftn(fld))
+
+
+	def amplcorr(self, fld, eta, lap = None):
+		'''
+		Apply amplitude corrections to the propagated field fld
+		corresponding to a mediume with scaled wave number eta.
+
+		If the pre-computed Laplacian lap of fld is supplied, it will
+		not be recomputed for these calculations.
+		'''
+		# If no previous slab was stored, there is no derivative
+		if self._lasteta is None: l = np.zeros_like(fld)
+		else:
+			etadiff = eta - self._lasteta
+			etadiff /= 2 * eta
+			# Compute the Laplacian if necessary
+			if lap is None: lap = self.laplacian(fld)
+			v = lap / (2 * eta**2)
+			# This is the final correction term
+			l = etadiff * (fld + v) / (fld - v)
+
+		# Make a copy of the medium for this slab
+		self._lasteta = eta.copy()
+		return np.exp(-l) * fld
+
+
+	def advance(self, fld, obj, w = True, a = True, dz = None):
 		'''
 		Use the spectral propagator, the phase screen for the current
 		slab, and the attenuation screen to advance the field through
@@ -458,7 +495,6 @@ class SplitStepEngine(object):
 		propagator and attenuation screen must have previously been
 		established.
 		'''
-
 		# Convert the contrast to a scaled wave number
 		eta = np.sqrt(obj + 1.)
 
@@ -468,8 +504,12 @@ class SplitStepEngine(object):
 		# Propagate the field through one step
 		fld = self.propfield(fld)
 
-		# Apply wide-angle corrections, if desired
-		if w: fld = self.wideangle(fld, eta, dz)
+		# Pre-compute the Laplacian of the field
+		lap = self.laplacian(fld)
+
+		# Apply wide-angle and amplitude corrections, if desired
+		if w: fld = self.wideangle(fld, eta, dz, lap)
+		if a: fld = self.amplcorr(fld, eta, lap)
 
 		# Apply the phase screen for this slab
 		fld = self.phasescreen(eta, dz) * fld
