@@ -13,8 +13,8 @@ class ProgressBar:
 		'''
 		# Copy the bounds and bar width
 		self.bounds = bounds[:]
-		self.range = bounds[1] - bounds[0] + 1
-		self.width = width
+		self.range = bounds[1] - bounds[0]
+		self.barwidth = width
 
 		# Initialize the string and the counter
 		self.string = ''
@@ -25,7 +25,7 @@ class ProgressBar:
 		'''
 		Increment the internal counter by a specified amount.
 		'''
-		if amount + self.value > self.bounds[1] + 1:
+		if amount + self.value > self.bounds[1]:
 			raise ValueError('Cannot increment counter beyond upper bound')
 
 		self.value += amount
@@ -38,8 +38,8 @@ class ProgressBar:
 		'''
 		pct = float(self.value - self.bounds[0]) / float(self.range)
 		# Figure the number of complete characters in the bar
-		nchar = int(self.width * pct)
-		string = '#' * nchar + ' ' * (self.width - nchar)
+		nchar = int(self.barwidth * pct)
+		string = '#' * nchar + ' ' * (self.barwidth - nchar)
 
 		self.string = '[' + string + '] %5.1f%%' % (100 * pct)
 

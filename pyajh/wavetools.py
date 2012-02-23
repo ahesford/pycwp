@@ -375,14 +375,6 @@ class SplitStepEngine(object):
 	@propagator.deleter
 	def propagator(self): del self._propagator
 
-
-	def propfield(self, fld):
-		'''
-		Apply the spectral propagator to the provided field.
-		'''
-		return fft.ifftn(self.propagator * fft.fftn(fld))
-
-
 	@property
 	def attenuator(self):
 		'''
@@ -437,55 +429,41 @@ class SplitStepEngine(object):
 		return np.exp(1j * dz * self.k0 * (eta - 1.))
 
 
-	def wideangle(self, fld, eta, dz = None, lap = None):
+	def wideangle(self, lap, eta, dz = None):
 		'''
-		Apply wide-angle corrections to the propagated field fld
-		corresponding to a medium with scaled wave number eta.
-
-		If the pre-computed Laplacian lap of fld is supplied, it will
-		not be recomputed for these calculations.
+		Return the wide-angle corrections to a field with Laplacian lap
+		propagating through a medium slab with scaled wave number eta.
 		'''
 		# Use the default step size if necessary
 		if dz is None: dz = self.h
 
-		# Compute the Laplacian term if necessary
-		if lap is None: lap = self.laplacian(fld)
 		# Compute the spatial correction factor
 		cor = 1j * self.k0 * dz * (eta - 1.) / (2. * eta)
-		return fld + cor * lap
+		return cor * lap
 
 
-	def laplacian(self, fld):
+	def amplcorr(self, fld, lap, eta):
 		'''
-		Compute and return the 2-D Laplacian (in the plane
-		perpendicular to propagation) of the field fld.
-		'''
-		kbar = self.kxysq() / self.k0**2
-		return fft.ifftn(kbar * fft.fftn(fld))
+		Return the amplitude correction to the field fld, with
+		Laplacian lap, propagating through a medium slab with scaled
+		wave number eta.
 
-
-	def amplcorr(self, fld, eta, lap = None):
-		'''
-		Apply amplitude corrections to the propagated field fld
-		corresponding to a mediume with scaled wave number eta.
-
-		If the pre-computed Laplacian lap of fld is supplied, it will
-		not be recomputed for these calculations.
+		A step size is not required because the step factor in the
+		exponential cancels the inverse step size in the
+		finite-difference approximation to the medium derivative.
 		'''
 		# If no previous slab was stored, there is no derivative
-		if self._lasteta is None: l = np.zeros_like(fld)
+		if self._lasteta is None: l = np.zeros_like(eta)
 		else:
 			etadiff = eta - self._lasteta
 			etadiff /= 2 * eta
-			# Compute the Laplacian if necessary
-			if lap is None: lap = self.laplacian(fld)
 			v = lap / (2 * eta**2)
 			# This is the final correction term
 			l = etadiff * (fld + v) / (fld - v)
 
 		# Make a copy of the medium for this slab
 		self._lasteta = eta.copy()
-		return np.exp(-l) * fld
+		return np.exp(-l)
 
 
 	def advance(self, fld, obj, w = True, a = True, dz = None):
@@ -502,17 +480,18 @@ class SplitStepEngine(object):
 		# Incorporate an absorbing boundary if one was desired
 		if self.attenuator is not None: eta += self.attenuator
 
-		# Propagate the field through one step
-		fld = self.propfield(fld)
+		# Homogeneously propagate the field in phase space
+		fld = self.propagator * fft.fftn(fld)
 
 		# Pre-compute the Laplacian of the field
-		lap = self.laplacian(fld)
+		kbar = self.kxysq() / self.k0**2
+		lap = fft.ifftn(kbar * fld)
+		# Return the field to the spatial domain
+		fld = fft.ifftn(fld)
 
 		# Apply wide-angle and amplitude corrections, if desired
-		if w: fld = self.wideangle(fld, eta, dz, lap)
-		if a: fld = self.amplcorr(fld, eta, lap)
+		if w: fld = fld + self.wideangle(lap, eta, dz)
+		if a: fld = self.amplcorr(fld, lap, eta) * fld
 
-		# Apply the phase screen for this slab
-		fld = self.phasescreen(eta, dz) * fld
-
-		return fld
+		# Apply the phase screen as the final step of propagation
+		return self.phasescreen(eta, dz) * fld

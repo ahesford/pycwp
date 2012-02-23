@@ -82,11 +82,14 @@ if __name__ == '__main__':
 	# Create a slice tuple to strip out the padding when writing
 	sl = [slice(lv, -(pv - gv - lv)) for pv, gv, lv in zip(p, inmat.shape, lpad)]
 
+	print 'Computing propagator and attenuation screen... ',
 	# Create a propagator for an isotropic step size
 	sse.propagator = sse.h
 	# Create the attenuation screen
 	sse.attenuator = [a] + lpad
+	print 'finished'
 
+	print 'Computing incident field... ',
 	# Compute the z-offset of the slab before the first computed slab
 	zoff = 0.5 * float(inmat.shape[-1] + 1) * sse.h
 	# Compute the x, y (array) coordinates of the start slab
@@ -96,10 +99,12 @@ if __name__ == '__main__':
 	fld = np.exp(1j * k0 * r) / (4. * math.pi * r)
 	# Include any specified directivity pattern
 	if d is not None: fld *= wavetools.directivity(crd, src, d[:3], d[3])
+	print 'finished'
 
 	# Create a buffer to store the current, padded contrast
 	obj = np.zeros(p, inmat.dtype)
 
+	print 'Stepping through slabs...'
 	# Create a progress bar and print a blank
 	bar = util.ProgressBar([0, inmat.shape[-1]], width=50)
 	bar.makebar()
