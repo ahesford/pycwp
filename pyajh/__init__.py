@@ -5,4 +5,4 @@ data.
 '''
 
 __all__ = [ "cutil", "focusing", "geom", "harmonic", "mio", "wavetools",
-		"wavecl", "aca", "shtransform", "scattering", "fdtd" ]
+		"wavecl", "aca", "shtransform", "scattering", "fdtd", "util" ]

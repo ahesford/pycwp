@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 import numpy as np, math, sys, getopt, os
-from pyajh import mio, wavetools
+from pyajh import mio, wavetools, util
 
 def usage(execname):
 	binfile = os.path.basename(execname)
@@ -64,9 +64,10 @@ if __name__ == '__main__':
 	print 'Split-step simulation, frequency %g MHz, background %g mm/us' % (f, c)
 	print 'Step size in wavelengths is %g, maximum attenuation is %g' % (h, a)
 
-	# Read and write the input and output slab-by-slab
+	# Set up a slice-wise input reader
 	inmat = mio.Slicer(args[1])
-	outmat = mio.Slicer(args[2], inmat.shape, inmat.dtype)
+	# Set up a slice-wise output writer, clobbering any existing file
+	outmat = mio.Slicer(args[2], inmat.shape, inmat.dtype, True)
 
 	# Automatically pad the domain, if necessary
 	if p is None: p = [2**(int(np.log2(g)) + 1) for g in inmat.shape[:-1]]
@@ -102,13 +103,20 @@ if __name__ == '__main__':
 	# Create a buffer to store the current, padded contrast
 	obj = np.zeros(p, inmat.dtype)
 
+	# Create a progress bar and print a blank
+	bar = util.ProgressBar([0, inmat.shape[-1]], width=50)
+	bar.makebar()
+	print str(bar), '\r',
+	sys.stdout.flush()
+
 	# Loop through all slices and compute the propagated field
 	for idx in reversed(range(inmat.shape[-1])):
 		obj[sl] = inmat[idx]
 		fld = sse.advance(fld, obj, w, m)
 		outmat[idx] = fld[sl]
-		slabstr = 'Slab' + ' ' * (len(str(inmat.shape[-1])) - len(str(idx)))
-		print slabstr, idx, 'finished\r',
+		# Increment and print the progress bar
+		bar.increment()
+		print str(bar), '\r',
 		sys.stdout.flush()
 
 	print

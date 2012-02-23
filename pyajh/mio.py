@@ -118,13 +118,16 @@ class Slicer(object):
 	less than the whole set, i.e., one column of a FORTRAN-ordered matrix
 	or one slab of a FORTRAN-ordered three-dimensional grid.
 	'''
-	def __init__(self, f, dim = None, dtype = None):
+	def __init__(self, f, dim = None, dtype = None, trunc = False):
 		'''
 		If f is a file object or a string corresponding to an existing
-		file name, create a Slicer object backed by the existing file.
-		In this case, optional arguments dim and dtype may be used to
-		avoid automatic dimensionality and type detection. In this
-		case, dim must be the number of dimensions in the file.
+		file name, create a Slicer object referring to the data stored
+		in the file. In this case, dim and dtype are optional arguments
+		used to avoid automatic dimensionality and type detection. In
+		this case, dim must be the number of dimensions in the file.
+
+		If trunc is True, any existing file is treated as if it did not
+		exist and is overwritten.
 
 		If f is a string corresponding to a file name that does not
 		exist, an empty data file is created. In this case, dim and
@@ -132,31 +135,33 @@ class Slicer(object):
 		object specifying the length of the data in each dimension.
 		'''
 		try:
-			# Treat the file as if it already exists
-			# If the name is a string, open the file for reading
-			if isinstance(f, (str, unicode)):
-				f = open(f, mode='rb+')
+			# Try to open for read/write an existing file,
+			# unless truncation is desired
+			if trunc: raise IOError('Ignoring any existing file')
+
+			# Open a file if a name was provided
+			if isinstance(f, (str, unicode)): f = open(f, mode='rb+')
 
 			# Grab the matrix header, size, and data type
 			self.shape, self.dtype = getmattype(f, dim, dtype)
 		except IOError:
-			# If the file does not exist, the name must be a string
-			if not isinstance(f, (str, unicode)):
-				raise TypeError('Specify a string to create a Slicer backing file')
-
+			# The file does not exist or should be clobbered
 			# Make sure the dimensions and data type are specified
 			if dim is None or dtype is None:
 				raise ValueError('Grid dimensions and data type must be specified to create file')
+
+			# Open a file if a name was provided
+			if isinstance(f, (str, unicode)): f = open(f, mode='wb+')
+			else: f.truncate(0)
 
 			# Copy the matrix shape and data type
 			self.shape = dim[:]
 			self.dtype = dtype
 
 			# Open the file and write the header
-			f = open(f, mode='wb+')
 			np.array(self.shape, dtype=np.int32).tofile(f)
 
-			# Truncate the file to the desired size
+			# Set the desired size of the output
 			f.truncate(f.tell() + cutil.prod(self.shape) * self.dtype().nbytes)
 
 		# Copy the backer file
