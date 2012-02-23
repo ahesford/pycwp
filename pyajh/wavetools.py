@@ -397,20 +397,21 @@ class SplitStepEngine(object):
 	def attenuator(self, aparm):
 		'''
 		Generate a screen to supresses the field in each slab. The
-		tuple aparm takes the form (a, t), where a is the maximum
-		attenuation exp(-a), and t is the thickness of the border over
-		which the attenuation increases from zero to the maximum.
+		tuple aparm takes the form (a, ntx, nty), where a is the
+		maximum attenuation exp(-a), and ntx and nty are the
+		thicknesses of the borders in x and y, respectively, over which
+		the attenuation increases from zero to the maximum.
 		'''
 		# Unfold the parameter tuple
-		atten, nt = aparm
+		atten, ntx, nty = aparm
 		# Build an index grid centered on the origin
 		nx, ny = self.grid
 		sl = np.mgrid[:nx,:ny].astype(float)
 		sl[0] -= (nx - 1.) / 2.
 		sl[1] -= (ny - 1.) / 2.
 		# Positive points lie within the absorbing boundaries
-		x = (np.abs(sl[0]) - (0.5 * nx - nt)) / float(nt)
-		y = (np.abs(sl[1]) - (0.5 * ny - nt)) / float(nt)
+		x = (np.abs(sl[0]) - (0.5 * nx - ntx)) / float(ntx)
+		y = (np.abs(sl[1]) - (0.5 * ny - nty)) / float(nty)
 
 		# Compute the attenuation profile
 		wx = 1 - np.sin(0.5 * math.pi * (x > 0).choose(0, x))**2

@@ -181,7 +181,7 @@ class HarmonicSpline(object):
 		c[-1] = l[1] * (c[-1] + np.dot(c[:p,].T, zpn[1:p+1]).T)
 
 		# Compute the remaining anti-causal polar coefficients
-		for i in range(c.shape[0] - 2, -1, -1):
+		for i in reversed(range(c.shape[0] - 1)):
 			c[i, :] = zp * (c[i + 1, :] - c[i,:])
 
 		# Correct the length and coefficients for the azimuthal angle
@@ -214,14 +214,14 @@ class HarmonicSpline(object):
 		if (p > k): c[:-m:-1, -1] += l[1] * np.dot(c[:-m:-1, :p-k], zpn[k+1:p+1])
 
 		# Compute the remaining coefficients of the second hemisphere
-		for i in range(c.shape[1] - 2, -1, -1):
+		for i in reversed(range(c.shape[1] - 1)):
 			c[-m+1:, i] = zp * (c[-m+1:, i + 1] - c[-m+1:, i])
 
 		# Populate the initial coefficients of the first hemisphere
 		c[1:m, -1] = zp * (c[:-m:-1, 0] - c[1:m, -1])
 
 		# Compute the remaining coefficients of the first hemisphere
-		for i in range(c.shape[1] - 2, -1, -1):
+		for i in reversed(range(c.shape[1] - 1)):
 			c[1:m, i] = zp * (c[1:m, i + 1] - c[1:m, i])
 
 		# The polar azimuthal coefficients are special cases in which
@@ -245,7 +245,7 @@ class HarmonicSpline(object):
 			c[i, -1] = l[1] * (c[i, -1] + np.dot(c[i, :p], zpn[1:p+1]))
 
 			# Compute the remaining anti-causal azimuthal coefficients
-			for j in range(c.shape[1] - 2, -1, -1):
+			for j in reversed(range(c.shape[1] - 1)):
 				c[i, j] = zp * (c[i, j + 1] - c[i, j])
 
 		return c

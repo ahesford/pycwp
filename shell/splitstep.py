@@ -5,26 +5,30 @@ from pyajh import mio, wavetools
 
 def usage(execname):
 	binfile = os.path.basename(execname)
-	print 'USAGE:', binfile, '[-h] [-a <a,t>] [-f f] [-s s] [-c c] [-w] [-m] [-d x,y,z,w]', '<src> <infile> <outfile>'
+	print 'USAGE:', binfile, '[-h] [-a a] [-f f] [-s s] [-c c] [-w] [-m] [-p nx,ny] [-d x,y,z,w]', '<src> <infile> <outfile>'
 	print '''
-	Using the split-step method, compute the field induced in a contrast
-	medium specified in infile by a point source at location src = x,y,z.
-	The coordinate origin is at the center of the contrast file.
-	Propagation happens downward; the topmost slab (the last in the file)
-	first receives the incident field. A configurable attenuation profile
-	is applied to each edge of each slice.
+  Using the split-step method, compute the field induced in a contrast
+  medium specified in infile by a point source at location src = x,y,z.
+  The coordinate origin is at the center of the contrast file.
+  Propagation happens downward; the topmost slab (the last in the file)
+  first receives the incident field. A configurable attenuation profile
+  is applied to each edge of each slice.
+  
+  The solution is written to outfile.
 
-	The solution is written to outfile.
-
-	OPTIONAL ARGUMENTS:
-	-h: Display this message and exit
-	-a: Use a maximum attenuation a, increased over t cells (default: 7.0, 10)
-	-f: Specify the incident frequency, f, in MHz (default: 3.0)
-	-s: Specify the grid spacing, s, in mm (default: 0.05)
-	-c: Specify the sound speed, c, in mm/us (default: 1.5)
-	-w: Disable wide-angle corrections
-	-m: Disable amplitude corrections
-	-d: Specify a directivity axis x,y,z with width parameter w (default: none)
+  The computational domain is padded to the next larger power of 2 for
+  artificial attenuation.
+  
+  OPTIONAL ARGUMENTS:
+  -h: Display this message and exit
+  -a: Specify a maximum attenuation of a at the boundary (default: 50)
+  -f: Specify the incident frequency, f, in MHz (default: 3.0)
+  -s: Specify the grid spacing, s, in mm (default: 0.05)
+  -c: Specify the sound speed, c, in mm/us (default: 1.5)
+  -p: Pad the domain to [nx,ny] pixels for attenuation (default: next power of 2)
+  -w: Disable wide-angle corrections
+  -m: Enable amplitude corrections
+  -d: Specify a directivity axis x,y,z with width parameter w (default: none)
 	'''
 
 if __name__ == '__main__':
@@ -32,20 +36,20 @@ if __name__ == '__main__':
 	execname = sys.argv[0]
 
 	# Store the default parameters
-	a, s, f, k0, d, w, m = (7.0, 10), 0.05, 3.0, 2 * math.pi, None, True, True
+	a, c, s, f, k0, d, p = 50.0, 1.5, 0.05, 3.0, 2 * math.pi, None, None
+	w, m = True, False
 
-	optlist, args = getopt.getopt(sys.argv[1:], 'hwma:f:s:c:d:')
+	optlist, args = getopt.getopt(sys.argv[1:], 'hwma:f:s:c:d:p:')
 
 	for opt in optlist:
-		if opt[0] == '-a':
-			av = opt[1].split(',')
-			a = float(av[0]), int(av[1])
+		if opt[0] == '-a': a = float(opt[1])
 		elif opt[0] == '-d': d = [float(ds) for ds in opt[1].split(',')]
+		elif opt[0] == '-p': p = [int(ps) for ps in opt[1].split(',')]
 		elif opt[0] == '-f': f = float(opt[1])
 		elif opt[0] == '-s': s = float(opt[1])
 		elif opt[0] == '-c': c = float(opt[1])
 		elif opt[0] == '-w': w = False
-		elif opt[0] == '-m': m = False
+		elif opt[0] == '-m': m = True
 		else:
 			usage(execname)
 			sys.exit(128)
@@ -58,31 +62,35 @@ if __name__ == '__main__':
 	h = s * f / c
 
 	print 'Split-step simulation, frequency %g MHz, background %g mm/us' % (f, c)
-	print 'Step size in wavelengths is %g, attenuation is %g over %d pixels' % (h, a[0], a[1])
+	print 'Step size in wavelengths is %g, maximum attenuation is %g' % (h, a)
+
+	# Read and write the input and output slab-by-slab
+	inmat = mio.Slicer(args[1])
+	outmat = mio.Slicer(args[2], inmat.shape, inmat.dtype)
+
+	# Automatically pad the domain, if necessary
+	if p is None: p = [2**(int(np.log2(g)) + 1) for g in inmat.shape[:-1]]
+	# Note the padding on the left side
+	lpad = [(pv - gv) / 2 for pv, gv in zip(p, inmat.shape)]
+
+	print 'Computing on expanded grid', p
 
 	# Grab the source location in wavelengths
 	src = tuple(float(s) * f / c for s in args[0].split(','))
 
-	# Create a generator to read the matrix slab by slab
-	inmat = mio.Slicer(args[1])
-	objdim = inmat.shape
-	# Create the output file
-	outmat = mio.Slicer(args[2], objdim, dtype=inmat.dtype)
-
 	# Pad the domain with the attenuation borders
-	grid = [n + 2 * a[1] for n in objdim[:-1]]
-	sse = wavetools.SplitStepEngine(k0, grid[0], grid[1], h)
+	sse = wavetools.SplitStepEngine(k0, p[0], p[1], h)
 
 	# Create a slice tuple to strip out the padding when writing
-	sl = [slice(a[1], -a[1]) for i in range(2)]
+	sl = [slice(lv, -(pv - gv - lv)) for pv, gv, lv in zip(p, inmat.shape, lpad)]
 
 	# Create a propagator for an isotropic step size
 	sse.propagator = sse.h
 	# Create the attenuation screen
-	sse.attenuator = a
+	sse.attenuator = [a] + lpad
 
 	# Compute the z-offset of the slab before the first computed slab
-	zoff = 0.5 * float(objdim[-1] + 1) * sse.h
+	zoff = 0.5 * float(inmat.shape[-1] + 1) * sse.h
 	# Compute the x, y (array) coordinates of the start slab
 	crd = sse.slicecoords() + [zoff]
 	# Compute and write the values of the Green's function in this slab
@@ -92,10 +100,15 @@ if __name__ == '__main__':
 	if d is not None: fld *= wavetools.directivity(crd, src, d[:3], d[3])
 
 	# Create a buffer to store the current, padded contrast
-	obj = np.zeros(grid, inmat.dtype)
+	obj = np.zeros(p, inmat.dtype)
 
 	# Loop through all slices and compute the propagated field
-	for idx in range(objdim[-1] - 1, -1, -1):
+	for idx in reversed(range(inmat.shape[-1])):
 		obj[sl] = inmat[idx]
 		fld = sse.advance(fld, obj, w, m)
 		outmat[idx] = fld[sl]
+		slabstr = 'Slab' + ' ' * (len(str(inmat.shape[-1])) - len(str(idx)))
+		print slabstr, idx, 'finished\r',
+		sys.stdout.flush()
+
+	print
