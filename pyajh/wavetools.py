@@ -66,6 +66,30 @@ def green2d(k, r):
 	return 0.25j * (spec.j0(k * r) + 1j * spec.y0(k * r))
 
 
+def green3dpar(k, r, z):
+	'''
+	Return the 3-D Green's function for the parabolic wave equation for a
+	total distance r, wave number k, and a distance z along the propagation
+	axis. This formulation omits the exp(-ikz) factor present in Levy
+	(2000) that converts the wave field into a slowly-varying function in
+	z. Consequently, steps in z should be small with respect to wavelength.
+	'''
+	ikr = 1j * k * r
+	return np.exp(ikr) * (1. - ikr) * z / (2. * math.pi * r**3)
+
+
+def green2dpar(k, r, z):
+	'''
+	Return the 2-D Green's function for the parabolic wave equation for a
+	total distance r, wave number k, and a distance z along the propagation
+	axis. This formulation omits the exp(-ikz) factor present in Levy
+	(2000) that converts the wave field into a slowly-varying function in
+	z. Consequently, steps in z should be small with respect to wavelength.
+	'''
+	h1 = spec.j1(k * r) + 1j * spec.y1(k * r)
+	return 0.5j * k * z * h1 / r
+
+
 def greenduf3d(k, x, u, v):
 	'''
 	Evaluate the Green's function in Duffy-transformed coordinates.
@@ -296,26 +320,29 @@ def kscale(inc, scat, mag, delta):
 	return mag * np.abs(inc + scat) * np.exp(1j * (delta - np.angle(inc + scat)))
 
 
-class SplitStepEngine(object):
+class SplitStep(object):
 	'''
 	A class to advance a wavefront through an arbitrary medium according to
 	the split-step method.
 	'''
 
-	def __init__(self, k0, nx, ny, h):
+	def __init__(self, k0, nx, ny, h, dz = None):
 		'''
 		Initialize a split-step engine over an nx-by-ny grid with
-		isotropic step size h. The unitless wave number is k0.
+		isotropic step size h. The unitless wave number is k0. The wave
+		is advanced in steps of dz or (if dz is not provided) h.
 		'''
 
 		# Copy the parameters
 		self.grid = nx, ny
 		self.h, self.k0 = h, k0
+		# Set the step length
+		self.dz = dz if dz else h
 
-		# The default propagator and attenuation screen are None
-		self._propagator = None
+		# The default attenuation screen is None
 		self._attenuator = None
-		self._lasteta = None
+		# Build the Green's function for the stepper
+		self.buildgreen()
 
 
 	def kxysq(self):
@@ -323,11 +350,10 @@ class SplitStepEngine(object):
 		Return the square of the transverse wave number, caching the
 		result if it has not already been computed.
 		'''
-
 		try: return self._kxysq
 		except AttributeError:
 			# Get the coordinate indices for each slab
-			nx, ny = self.grid
+			nx, ny = self.grf.shape
 			sl = np.mgrid[-nx/2:nx/2, -ny/2:ny/2].astype(float)
 
 			# Compute the transverse wave numbers
@@ -335,7 +361,27 @@ class SplitStepEngine(object):
 			ky = 2. * math.pi * sl[1] / (ny * self.h)
 
 			self._kxysq = fft.fftshift(kx**2 + ky**2)
-			return self._kxysq 
+			return self._kxysq
+
+
+	def buildgreen(self, dz = None):
+		'''
+		Build the Green's for propagation through a step dz. If dz is
+		not provided, use the default specified for the class instance.
+
+		The exact spectral representation of the Green's function is
+		used. This seems to yield some error relative to the FFT of the
+		spatial representation computed with green3dpar.
+		'''
+		if dz is not None: self.dz = dz
+
+		# At twice the grid size, this should be spectrally accurate
+		nx, ny = [2 * g for g in self.grid]
+		sl = np.mgrid[-nx/2:nx/2, -ny/2:ny/2].astype(float)
+		kx = 2. * math.pi * sl[0] / (nx * self.h)
+		ky = 2. * math.pi * sl[1] / (ny * self.h)
+		kz = np.sqrt(complex(self.k0**2) - kx**2 - ky**2)
+		self.grf = fft.fftshift(np.exp(1j * kz * self.dz))
 
 
 	def slicecoords(self):
@@ -347,33 +393,6 @@ class SplitStepEngine(object):
 		cg = np.mgrid[:g[0], :g[1]].astype(float)
 		return [(c - 0.5 * (n - 1.)) * self.h for c, n in zip(cg, g)]
 
-
-	@property
-	def propagator(self):
-		'''
-		Return a propagator to advance wabes to the next slab.
-		'''
-		return self._propagator
-
-
-	@propagator.setter
-	def propagator(self, dz):
-		'''
-		Generate and cache the slab propagator for a step size dz. If
-		dz is None, use a step that matches the transverse step.
-		'''
-		# Make the grid isotropic if slab thickness isn't specified
-		if dz is None: dz = self.h
-
-		# Get the longitudinal wave number
-		kz = np.sqrt(complex(self.k0**2) - self.kxysq())
-
-		# Compute the propagator
-		self._propagator = np.exp(1j * kz * dz)
-
-
-	@propagator.deleter
-	def propagator(self): del self._propagator
 
 	@property
 	def attenuator(self):
@@ -418,61 +437,29 @@ class SplitStepEngine(object):
 	def attenuator(self): del self._attenuator
 
 
-	def phasescreen(self, eta, dz = None):
+	def phasescreen(self, eta):
 		'''
 		Generate the phase screen for a slab characterized by scaled
-		wave number eta. If the step size dz is not specified, the
-		isotropic in-plane step is used. Results are not cached.
+		wave number eta.
 		'''
-		# Use the default step size if necessary
-		if dz is None: dz = self.h
-		return np.exp(1j * dz * self.k0 * (eta - 1.))
+		return np.exp(1j * self.dz * self.k0 * (eta - 1.))
 
 
-	def wideangle(self, lap, eta, dz = None):
+	def wideangle(self, lap, eta):
 		'''
 		Return the wide-angle corrections to a field with Laplacian lap
-		propagating through a medium slab with scaled wave number eta.
+		propagating through a medium slab with index of refraction eta.
 		'''
-		# Use the default step size if necessary
-		if dz is None: dz = self.h
-
-		# Compute the spatial correction factor
-		cor = 1j * self.k0 * dz * (eta - 1.) / (2. * eta)
+		cor = 1j * self.k0 * self.dz * (eta - 1.) / (2. * eta)
 		return cor * lap
 
 
-	def amplcorr(self, fld, lap, eta):
-		'''
-		Return the amplitude correction to the field fld, with
-		Laplacian lap, propagating through a medium slab with scaled
-		wave number eta.
-
-		A step size is not required because the step factor in the
-		exponential cancels the inverse step size in the
-		finite-difference approximation to the medium derivative.
-		'''
-		# If no previous slab was stored, there is no derivative
-		if self._lasteta is None: l = np.zeros_like(eta)
-		else:
-			etadiff = eta - self._lasteta
-			etadiff /= 2 * eta
-			v = lap / (2 * eta**2)
-			# This is the final correction term
-			l = etadiff * (fld + v) / (fld - v)
-
-		# Make a copy of the medium for this slab
-		self._lasteta = eta.copy()
-		return np.exp(-l)
-
-
-	def advance(self, fld, obj, w = True, a = True, dz = None):
+	def advance(self, fld, obj):
 		'''
 		Use the spectral propagator, the phase screen for the current
 		slab, and the attenuation screen to advance the field through
 		one layer of a specified medium with contrast obj. The
-		propagator and attenuation screen must have previously been
-		established.
+		attenuation screen must have previously been established.
 		'''
 		# Convert the contrast to a scaled wave number
 		eta = np.sqrt(obj + 1.)
@@ -480,18 +467,17 @@ class SplitStepEngine(object):
 		# Incorporate an absorbing boundary if one was desired
 		if self.attenuator is not None: eta += self.attenuator
 
-		# Homogeneously propagate the field in phase space
-		fld = self.propagator * fft.fftn(fld)
+		# Compute the extended Green's-function convolution in spectrum
+		efld = self.grf * fft.fftn(fld, s=self.grf.shape)
+
+		# Prepare the domain truncation slice objects
+		sl = [slice(g) for g in self.grid]
 
 		# Pre-compute the Laplacian of the field
 		kbar = self.kxysq() / self.k0**2
-		lap = fft.ifftn(kbar * fld)
-		# Return the field to the spatial domain
-		fld = fft.ifftn(fld)
-
-		# Apply wide-angle and amplitude corrections, if desired
-		if w: fld = fld + self.wideangle(lap, eta, dz)
-		if a: fld = self.amplcorr(fld, lap, eta) * fld
+		lap = fft.ifftn(kbar * efld)[sl]
+		# Return the field to the spatial domain with wide-angle corrections
+		fld = fft.ifftn(efld)[sl] + self.wideangle(lap, eta)
 
 		# Apply the phase screen as the final step of propagation
-		return self.phasescreen(eta, dz) * fld
+		return self.phasescreen(eta) * fld
