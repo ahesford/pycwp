@@ -29,11 +29,11 @@ def usage(execname):
   
   OPTIONAL ARGUMENTS:
   -h: Display this message and exit
-  -a: Specify a maximum attenuation of a at the boundary (default: 50)
+  -a: Specify the width of the Hann attenuating window at each edge (default: 50)
   -f: Specify the incident frequency, f, in MHz (default: 3.0)
   -s: Specify the grid spacing, s, in mm (default: 0.05)
   -c: Specify the sound speed, c, in mm/us (default: 1.5)
-  -p: Pad the domain to [nx,ny] pixels for attenuation (default: next power of 2)
+  -p: Pad the domain to [nx,ny] pixels for attenuation (default: domain plus Hann window)
   -d: Specify a directivity axis x,y,z with width parameter w (default: none)
 	'''
 
@@ -42,12 +42,12 @@ if __name__ == '__main__':
 	execname = sys.argv[0]
 
 	# Store the default parameters
-	a, c, s, f, k0, d, p = 50.0, 1.5, 0.05, 3.0, 2 * math.pi, None, None
+	a, c, s, f, k0, d, p = 50, 1.5, 0.05, 3.0, 2 * math.pi, None, None
 
 	optlist, args = getopt.getopt(sys.argv[1:], 'ha:f:s:c:d:p:')
 
 	for opt in optlist:
-		if opt[0] == '-a': a = float(opt[1])
+		if opt[0] == '-a': a = int(opt[1])
 		elif opt[0] == '-d': d = [float(ds) for ds in opt[1].split(',')]
 		elif opt[0] == '-p': p = [int(ps) for ps in opt[1].split(',')]
 		elif opt[0] == '-f': f = float(opt[1])
@@ -70,9 +70,7 @@ if __name__ == '__main__':
 	# Set up a slice-wise input reader
 	inmat = mio.Slicer(args[1])
 	# Automatically pad the domain, if necessary
-	if p is None: p = [2**(int(np.log2(g)) + 1) for g in inmat.shape[:-1]]
-	# Note the padding on the left side
-	lpad = [(pv - gv) / 2 for pv, gv in zip(p, inmat.shape)]
+	if p is None: p = [g + 2 * a for g in inmat.shape[:-1]]
 
 	print 'Computing on expanded grid', p
 
@@ -84,10 +82,11 @@ if __name__ == '__main__':
 	print 'finished'
 
 	# Create a slice tuple to strip out the padding when writing
+	lpad = [(pv - gv) / 2 for pv, gv in zip(p, inmat.shape)]
 	sl = [slice(lv, -(pv - gv - lv)) for pv, gv, lv in zip(p, inmat.shape, lpad)]
 
 	# Create the attenuation screen
-	sse.attenuator = [a] + lpad
+	sse.attenuator = a
 
 	printflush('Computing incident field... ')
 	# Compute the z-offset of the slab before the first computed slab

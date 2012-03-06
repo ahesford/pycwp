@@ -372,11 +372,16 @@ class SplitStep(object):
 		The exact spectral representation of the Green's function is
 		used. This seems to yield some error relative to the FFT of the
 		spatial representation computed with green3dpar.
+
+		For a fully accurate spatial convolution, the Green's function
+		should be evaluated on a grid twice as large in each dimension
+		as the field samples. However, since the spectral Green's
+		function decays exponentially on the extended grid, sufficient
+		accuracy seems to be obtained without extending the grid.
 		'''
 		if dz is not None: self.dz = dz
 
-		# At twice the grid size, this should be spectrally accurate
-		nx, ny = [2 * g for g in self.grid]
+		nx, ny = self.grid
 		sl = np.mgrid[-nx/2:nx/2, -ny/2:ny/2].astype(float)
 		kx = 2. * math.pi * sl[0] / (nx * self.h)
 		ky = 2. * math.pi * sl[1] / (ny * self.h)
@@ -405,32 +410,26 @@ class SplitStep(object):
 
 
 	@attenuator.setter
-	def attenuator(self, aparm):
+	def attenuator(self, l):
 		'''
-		Generate a screen to supresses the field in each slab. The
-		tuple aparm takes the form (a, ntx, nty), where a is the
-		maximum attenuation exp(-a), and ntx and nty are the
-		thicknesses of the borders in x and y, respectively, over which
-		the attenuation increases from zero to the maximum.
+		Generate attenuate screens using the Hann function with the
+		specified width l.
 		'''
-		# Unfold the parameter tuple
-		atten, ntx, nty = aparm
-		# Build an index grid centered on the origin
+		def hann(t, l): return np.sin(math.pi * t / (2 * l - 1.))**2
 		nx, ny = self.grid
-		sl = np.mgrid[:nx,:ny].astype(float)
-		sl[0] -= (nx - 1.) / 2.
-		sl[1] -= (ny - 1.) / 2.
-		# Positive points lie within the absorbing boundaries
-		x = (np.abs(sl[0]) - (0.5 * nx - ntx)) / float(ntx)
-		y = (np.abs(sl[1]) - (0.5 * ny - nty)) / float(nty)
+		# Create the left half of the window
+		t = np.arange(nx)
+		wx = (t < l).choose(1., hann(t, l))
+		# Multiply by the reverse to symmetrize the window
+		wx = wx * wx[::-1]
 
-		# Compute the attenuation profile
-		wx = 1 - np.sin(0.5 * math.pi * (x > 0).choose(0, x))**2
-		wy = 1 - np.sin(0.5 * math.pi * (y > 0).choose(0, y))**2
-		w = wx * wy
+		# Now make the y screen
+		t = np.arange(ny)
+		wy = (t < l).choose(1., hann(t, l))
+		wy = wy * wy[::-1]
 
-		# This is the imaginary part of the wave number in the boundary
-		self._attenuator = 1j * atten * (1. - w) / self.k0
+		# Store the attenuation screens in a broadcastable form
+		self._attenuator = (wx[:,np.newaxis], wy[np.newaxis,:])
 
 
 	@attenuator.deleter
@@ -464,8 +463,9 @@ class SplitStep(object):
 		# Convert the contrast to a scaled wave number
 		eta = np.sqrt(obj + 1.)
 
-		# Incorporate an absorbing boundary if one was desired
-		if self.attenuator is not None: eta += self.attenuator
+		# Attenuate the field if desired
+		if self.attenuator is not None:
+			fld = (fld * self.attenuator[0]) * self.attenuator[1]
 
 		# Compute the extended Green's-function convolution in spectrum
 		efld = self.grf * fft.fftn(fld, s=self.grf.shape)
@@ -478,6 +478,5 @@ class SplitStep(object):
 		lap = fft.ifftn(kbar * efld)[sl]
 		# Return the field to the spatial domain with wide-angle corrections
 		fld = fft.ifftn(efld)[sl] + self.wideangle(lap, eta)
-
-		# Apply the phase screen as the final step of propagation
+		# Apply the phase screen as the final step
 		return self.phasescreen(eta) * fld
