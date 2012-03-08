@@ -100,8 +100,10 @@ if __name__ == '__main__':
 	if d is not None: fld *= wavetools.directivity(crd, src, d[:3], d[3])
 	print 'finished'
 
-	# Create a buffer to store the current, padded contrast
-	obj = np.zeros(p, inmat.dtype)
+	# This array will store the current and previous contrast
+	obj = [np.zeros(inmat.shape[:-1], inmat.dtype)]
+	# This buffer will store the average contrast value on an expanded grid
+	ct = np.zeros(p, inmat.dtype)
 
 	print 'Stepping through slabs...'
 	# Create a progress bar and print a blank
@@ -115,8 +117,14 @@ if __name__ == '__main__':
 	try:
 		# Loop through all slices and compute the propagated field
 		for idx in reversed(range(inmat.shape[-1])):
-			obj[sl] = inmat[idx]
-			fld = sse.advance(fld, obj)
+			# Read the current contrast slab into the buffer
+			obj.append(inmat[idx])
+			# Compute the average of the current and previous slab
+			ct[sl] = 0.5 * (obj[0] + obj[1])
+			# Through out the last slab for the next iteration
+			obj.pop(0)
+			# Advance and write the field
+			fld = sse.advance(fld, ct)
 			outmat[idx] = fld[sl]
 			# Increment and print the progress bar
 			bar.increment()
