@@ -7,7 +7,7 @@ solvers, Green's functions, and a split-step solver.
 import math, cmath, numpy as np, scipy as sp
 import numpy.fft as fft, scipy.special as spec, scipy.sparse.linalg as la
 from numpy.linalg import norm
-from itertools import izip
+from itertools import izip, product
 
 from .cutil import rotate
 from . import mio
@@ -174,19 +174,19 @@ def srcint(k, src, obs, cell, ifunc, n = 4, wts = None):
 	# Grab the roots and weights of the Legendre polynomial of order n
 	if wts is None: wts = spec.legendre(n).weights
 
-	# Compute a coordinate grid for sampling within the cell
-	coords = np.mgrid[[slice(n) for i in range(dim)]]
-	# Flatten the coordinate grid into an array of tuples
-	coords = zip(*[c.flat for c in coords])
+	# Compute a sparse coordinate grid for sampling within the cell
+	coords = np.ogrid[[slice(n) for i in range(dim)]]
+	# Create an iterator factory to loop through coordinate pairs
+	enum = lambda c: product(*[cv.flat for cv in c])
 
 	# Compute the cell-relative quadrature points
-	qpts = [[o + s * wts[i][0] for i, o, s in zip(c, src, sc)] for c in coords]
+	qpts = ([o + s * wts[i][0] for i, o, s in zip(c, src, sc)] for c in enum(coords))
 
 	# Compute the corresponding quadrature weights
-	qwts = [np.prod([wts[i][1] for i in c]) for c in coords]
+	qwts = (np.prod([wts[i][1] for i in c]) for c in enum(coords))
 
 	# Sum all contributions to the integral
-	ival = np.sum(w * ifunc(k, p, obs) for w, p in zip(qwts, qpts))
+	ival = np.sum(w * ifunc(k, p, obs) for w, p in izip(qwts, qpts))
 
 	return ival * np.prod(cell) / 2.**dim
 
@@ -211,7 +211,7 @@ class CGFFT(object):
 			raise ValueError('Dimensionality of cell and grid lists must agree.')
 		
 		# Build the coordinate index arrays in floating-point
-		coords = np.mgrid[[slice(2 * g) for g in grid]].astype(np.float)
+		coords = np.ogrid[[slice(2 * g) for g in grid]]
 		
 		# Wrap the coordinate arrays and convert to cell coordinates
 		coords = [c * (x < g).choose(x - 2 * g, x)
@@ -345,23 +345,23 @@ class SplitStep(object):
 		self.buildgreen()
 
 
-	def kxysq(self):
+	def kxy(self):
 		'''
-		Return the square of the transverse wave number, caching the
-		result if it has not already been computed.
+		Cache and return the FFT-shifted values of kx and ky on the grid.
 		'''
-		try: return self._kxysq
+		try: return self._kxy
 		except AttributeError:
 			# Get the coordinate indices for each slab
-			nx, ny = self.grf.shape
-			sl = np.mgrid[-nx/2:nx/2, -ny/2:ny/2].astype(float)
+			nx, ny = self.grid
+			sl = np.ogrid[-nx/2:nx/2, -ny/2:ny/2]
 
 			# Compute the transverse wave numbers
-			kx = 2. * math.pi * sl[0] / (nx * self.h)
-			ky = 2. * math.pi * sl[1] / (ny * self.h)
+			dk = 2. * math.pi / self.h
+			kx, ky = [fft.fftshift((dk * s) / n) 
+					for s, n in zip(sl, [nx, ny])]
 
-			self._kxysq = fft.fftshift(kx**2 + ky**2)
-			return self._kxysq
+			self._kxy = kx, ky
+			return self._kxy
 
 
 	def buildgreen(self, dz = None):
@@ -381,12 +381,9 @@ class SplitStep(object):
 		'''
 		if dz is not None: self.dz = dz
 
-		nx, ny = self.grid
-		sl = np.mgrid[-nx/2:nx/2, -ny/2:ny/2].astype(float)
-		kx = 2. * math.pi * sl[0] / (nx * self.h)
-		ky = 2. * math.pi * sl[1] / (ny * self.h)
+		kx, ky = self.kxy()
 		kz = np.sqrt(complex(self.k0**2) - kx**2 - ky**2)
-		self.grf = fft.fftshift(np.exp(1j * kz * self.dz))
+		self.grf = np.exp(1j * self.dz * kz)
 
 
 	def slicecoords(self):
@@ -395,7 +392,7 @@ class SplitStep(object):
 		current engine. The origin is in the center of the slab.
 		'''
 		g = self.grid
-		cg = np.mgrid[:g[0], :g[1]].astype(float)
+		cg = np.ogrid[:g[0], :g[1]]
 		return [(c - 0.5 * (n - 1.)) * self.h for c, n in zip(cg, g)]
 
 
@@ -417,16 +414,11 @@ class SplitStep(object):
 		'''
 		def hann(t, l): return np.sin(math.pi * t / (2 * l - 1.))**2
 		nx, ny = self.grid
-		# Create the left half of the window
-		t = np.arange(nx)
-		wx = (t < l).choose(1., hann(t, l))
+		# Create the left half of the window along each axis
+		tx, ty = np.arange(nx), np.arange(ny)
+		wx, wy = [(t < l).choose(1., hann(t, l)) for t in [tx, ty]]
 		# Multiply by the reverse to symmetrize the window
-		wx = wx * wx[::-1]
-
-		# Now make the y screen
-		t = np.arange(ny)
-		wy = (t < l).choose(1., hann(t, l))
-		wy = wy * wy[::-1]
+		wx, wy = [w * w[::-1] for w in [wx, wy]]
 
 		# Store the attenuation screens in a broadcastable form
 		self._attenuator = (wx[:,np.newaxis], wy[np.newaxis,:])
@@ -474,9 +466,143 @@ class SplitStep(object):
 		sl = [slice(g) for g in self.grid]
 
 		# Pre-compute the Laplacian of the field
-		kbar = self.kxysq() / self.k0**2
-		lap = fft.ifftn(kbar * efld)[sl]
+		kx, ky = self.kxy()
+		lap = fft.ifftn((kx**2 * efld + ky**2 * efld) / self.k0**2)[sl]
 		# Return the field to the spatial domain with wide-angle corrections
 		fld = fft.ifftn(efld)[sl] + self.wideangle(lap, eta)
 		# Apply the phase screen as the final step
 		return self.phasescreen(eta) * fld
+
+
+class FDPE(object):
+	'''
+	A class to advance a wavefront through an arbitrary medium using a
+	Crank-Nicolson finite difference scheme to solve the parabolic wave
+	equation with a quadratically increasing PML along each edge.
+	'''
+	def __init__(self, k0, nx, ny, h, sigma, l, dz = None):
+		'''
+		Initialize a class to solve the Crank-Nicolson finite
+		difference equations corresponding to the parabolic wave
+		equation. The phase variation exp(ikz) is canceled to ensure
+		the field is slowly varying along the propagation axis.
+		'''
+		# Copy the parameters
+		self.grid = nx, ny
+		self.h, self.k0 = h, k0
+		# Set the step length
+		self.dz = dz if dz else h
+
+		# Compute the PML profile of width l for grid indices c
+		def sigprof(c):
+			n = c.size
+			# The left and right PML boundaries
+			o, p = l - 0.5, n - l - 0.5
+			# The values c - o, p - c are less than zero inside the PML
+			prof = np.minimum(np.minimum(c - o, p - c), 0.)**2
+			return 1. + 1j * sigma * h**2 * prof
+
+		# Create some convenient coordinate indices
+		x, y = np.ogrid[:nx, :ny]
+
+		# Compute the x and y profiles for the PML
+		sp = [[sigprof(c + s * 0.5) for s in [0., 1., -1.]] for c in [x, y]]
+
+		# Replace the PML profiles with the reciprocals of the
+		# products required in the second-order differences
+		# The first entry of each sigma takes the form sigma[i] * sigma[i + 1/2]
+		# The second takes the form sigma[i] * sigma[i - 1/2]
+		self.sigx, self.sigy = [[1. / (s[0] * sv) for sv in s[1:]] for s in sp]
+
+		# Compute the scale parameters a- and a+
+		self.a = [0.25 * (1. + d * self.k0 * self.dz) for d in [-1j, +1j]]
+
+		# Keep track of the number of slabs
+		self.slab = 0
+
+
+	def slicecoords(self):
+		'''
+		Return the meshgrid coordinate arrays for an x-y slab in the
+		current engine. The origin is in the center of the slab.
+		'''
+		g = self.grid
+		cg = np.ogrid[:g[0], :g[1]]
+		return [(c - 0.5 * (n - 1.)) * self.h for c, n in zip(cg, g)]
+
+
+	def applydiffs(self, q, fld, left = True):
+		'''
+		Apply the finite-difference operator to a field fld propagating
+		through a medium with acoustic contrast q.
+
+		If left is True, the operator is applied at the next slab using
+		the a- parameter (1 - ikz); otherwise, the operator is applied
+		at the current slab with the a+ operator (1 + ikz).
+		'''
+		a = self.a[0] if left else self.a[1]
+		ap = a / (self.k0 * self.h)**2
+
+		# Compute all of the self, unstretched terms first
+		res = (1. + a * q) * fld
+
+		# Add the central part of the derivatives
+		res -= ap * (self.sigx[0] + self.sigx[1]) * fld
+		res -= ap * (self.sigy[0] + self.sigy[1]) * fld
+
+		# Add the side terms of the derivatives
+		res[1:-1,:] += ap * self.sigx[0][1:-1,:] * fld[2:,:]
+		res[1:-1,:] += ap * self.sigx[1][1:-1,:] * fld[:-2,:]
+		res[:,1:-1] += ap * self.sigy[0][:,1:-1] * fld[:,2:]
+		res[:,1:-1] += ap * self.sigy[1][:,1:-1] * fld[:,:-2]
+
+		# Enforce Dirichlet boundary conditions
+		res[0,:] = 0
+		res[-1,:] = 0
+		res[:,0] = 0
+		res[:,-1] = 0
+
+		return res
+
+
+	def matvec(self, vec):
+		'''
+		Apply the finite-difference operator to a field propagating
+		through the next slab in a Crank-Nicolson scheme. The vector
+		vec should hold the field, flattened in FORTRAN order, and any
+		index of refraction should have been assigned to the "eta"
+		attribute of the class instance. Otherwise, the index of
+		refraction is assumed to be unity.
+		'''
+		vv = np.reshape(vec, self.grid, order='F')
+		try: q = self.q
+		except AttributeError: q = np.ones_like(vv)
+		vv = self.applydiffs(q, vv)
+		return np.ravel(vv, order='F')
+
+
+	def advance(self, fld, q):
+		'''
+		Advance the field fld through a slab with index of refraction
+		eta by solving the sparse linear system resulting from
+		Crank-Nicolson finite differences of the parabolic wave
+		equation.
+		'''
+		self.q = q
+		# Advance the current slice for accurate phase calculation
+		self.slab += 1
+		# Compute the differences of the current field
+		rhs = self.applydiffs(q, fld, False)
+		# Create a LinearOperator to represent the matrix equation
+		n = self.grid[0] * self.grid[1]
+		op = la.LinearOperator((n,n), matvec=self.matvec, dtype=rhs.dtype)
+		nfld, info = la.gmres(op, rhs.ravel('F'),
+				tol = 1e-3, maxiter = 50, x0 = fld.ravel('F'))
+		return np.reshape(nfld, self.grid, order='F')
+
+
+	def getphase(self):
+		'''
+		Return the phase exp(ikz) corresponding to the current slab.
+		'''
+		return np.exp(1j * self.k0 * self.slab * self.dz)
