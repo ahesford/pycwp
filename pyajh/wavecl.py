@@ -7,6 +7,14 @@ from itertools import product, chain
 from mako.template import Template
 from . import fdtd, wavetools
 
+def grabcontext(context = None):
+	'''
+	If context is not None, return the provided context. Otherwise, create
+	one for the default device and return it.
+	'''
+	if context is not None: return context
+	return cl.Context(dev_type = cl.device_type.DEFAULT)
+
 class SplineInterpolator(object):
 	'''
 	Use OpenCL to quickly interpolate harmonic functions defined at regular
@@ -40,10 +48,8 @@ class SplineInterpolator(object):
 		# Don't let the precision exceed the number of samples!
 		self.precision = min(self.precision, min(ntheta, nphi))
 
-		# Build an OpenCL context if one hasn't been provided
-		if context is None:
-			self.context = cl.Context(dev_type=cl.device_type.DEFAULT)
-		else: self.context = context
+		# Grab the provided context or create a default
+		self.context = grabcontext(context)
 
 		# Build the program for the context
 		t = Template(filename=SplineInterpolator._kernel, output_encoding='ascii')
@@ -154,10 +160,8 @@ class FarMatrix:
 		default context is used.
 		'''
 
-		# Build an OpenCL context if one hasn't been provided
-		if context is None:
-			self.context = cl.Context(dev_type=cl.device_type.DEFAULT)
-		else: self.context = context
+		# Grab the provided context or create a default
+		self.context = grabcontext(context)
 
 		# Compute the quadrature points and weights
 		self.pts, self.wts = spec.legendre(n).weights.T.tolist()[:2]
@@ -266,9 +270,8 @@ class Helmholtz(fdtd.Helmholtz):
 		self.srcidx = srcidx[:]
 		self.source = srcfunc()
 
-		# Copy or create the PyOpenCL context
-		if context is not None: self.context = context
-		else: self.context = cl.Context(dev_type=cl.device_type.DEFAULT)
+		# Grab the provided context or create a default
+		self.context = grabcontext(context)
 
 		# Create a command queue for the context
 		self.queue = cl.CommandQueue(self.context)
@@ -390,10 +393,8 @@ class SplitStep(object):
 		# Set the step length
 		self.dz = dz if dz else h
 
-		# Build an OpenCL context if one hasn't been provided
-		if context is None:
-			self.context = cl.Context(dev_type=cl.device_type.DEFAULT)
-		else: self.context = context
+		# Grab the provided context or create a default
+		self.context = grabcontext(context)
 
 		# Build the program for the context
 		t = Template(filename=SplitStep._kernel, output_encoding='ascii')
