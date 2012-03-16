@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 import numpy as np, math, sys, getopt, os
-from pyajh import mio, wavetools, util
+from pyajh import mio, wavetools, wavecl, util
 
 def printflush(string):
 	'''
@@ -78,15 +78,12 @@ if __name__ == '__main__':
 	src = tuple(float(s) * f / c for s in args[0].split(','))
 
 	printflush('Creating split-step engine... ')
-	sse = wavetools.SplitStep(k0, p[0], p[1], h)
+	sse = wavecl.SplitStep(k0, p[0], p[1], h, a)
 	print 'finished'
 
 	# Create a slice tuple to strip out the padding when writing
 	lpad = [(pv - gv) / 2 for pv, gv in zip(p, inmat.shape)]
 	sl = [slice(lv, -(pv - gv - lv)) for pv, gv, lv in zip(p, inmat.shape, lpad)]
-
-	# Create the attenuation screen
-	sse.attenuator = a
 
 	printflush('Computing incident field... ')
 	# Compute the z-offset of the slab before the first computed slab
@@ -131,6 +128,6 @@ if __name__ == '__main__':
 			printflush(str(bar) + '\r')
 
 		print
-	except KeyboardInterrupt:
+	except:
 		# Truncate the output file to quickly end
 		outmat.backer.truncate(0)

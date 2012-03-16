@@ -1,9 +1,11 @@
 import numpy as np, scipy.special as spec, math
 import pyopencl as cl, pyopencl.array as cla, os.path as path
 
+from pyfft.cl import Plan
+
 from itertools import product, chain
 from mako.template import Template
-from . import fdtd
+from . import fdtd, wavetools
 
 class SplineInterpolator(object):
 	'''
@@ -45,7 +47,7 @@ class SplineInterpolator(object):
 
 		# Build the program for the context
 		t = Template(filename=SplineInterpolator._kernel, output_encoding='ascii')
-		self.prog = cl.Program(self.context, t.render(ntheta = ntheta, 
+		self.prog = cl.Program(self.context, t.render(ntheta = ntheta,
 			nphi = nphi, p = self.precision)).build()
 
 		# Create a command queue for the context
@@ -360,3 +362,106 @@ class Helmholtz(fdtd.Helmholtz):
 		cl.enqueue_copy(self.queue, p, self.pa[0]).wait()
 
 		return p
+
+
+class SplitStep(object):
+	'''
+	An OpenCL version of the split-step parabolic equation solver.
+	'''
+
+	_kernel = path.join(path.split(path.abspath(__file__))[0], 'splitstep.mako')
+
+	def __init__(self, k0, nx, ny, h, l = 0, dz = None, context = None):
+		'''
+		Initialize a split-step engine over an nx-by-ny grid with
+		isotropic step size h. The unitless wave number is k0. The wave
+		is advanced in steps of dz or (if dz is not provided) h.
+
+		If l is specified and greater than zero, it is the width of a
+		Hann window used to attenuate the field along each edge.
+		'''
+		# Check that the grid is a power of two
+		if nx & -nx != nx or ny & -ny != ny:
+			raise ValueError('Grid dimensions must be powers of 2')
+
+		# Copy the parameters
+		self.grid = nx, ny
+		self.h, self.k0, self.l = h, k0, l
+		# Set the step length
+		self.dz = dz if dz else h
+
+		# Build an OpenCL context if one hasn't been provided
+		if context is None:
+			self.context = cl.Context(dev_type=cl.device_type.DEFAULT)
+		else: self.context = context
+
+		# Build the program for the context
+		t = Template(filename=SplitStep._kernel, output_encoding='ascii')
+		self.prog = cl.Program(self.context, t.render(grid = self.grid,
+			k0 = k0, h = h, l = l, dz = self.dz)).build()
+
+		# Create a command queue for the context
+		self.queue = cl.CommandQueue(self.context)
+
+		# Create an FFT plan in the OpenCL queue
+		self.fftplan = Plan((nx, ny), queue=self.queue)
+
+		# Buffers to store the field, Laplacian, refraction index
+		mf = cl.mem_flags
+		nbytes = nx * ny * np.complex64().nbytes
+		self.eta = cl.Buffer(self.context, mf.READ_WRITE, nbytes)
+		self.fld = cl.Buffer(self.context, mf.READ_WRITE, nbytes)
+		self.lap = cl.Buffer(self.context, mf.READ_WRITE, nbytes)
+
+
+	def slicecoords(self):
+		'''
+		Return the meshgrid coordinate arrays for an x-y slab in the
+		current engine. The origin is in the center of the slab.
+		'''
+		g = self.grid
+		cg = np.ogrid[:g[0], :g[1]]
+		return [(c - 0.5 * (n - 1.)) * self.h for c, n in zip(cg, g)]
+
+
+	def advance(self, fld, obj):
+		'''
+		Advance the field fld through a slab characterized by object
+		contrast obj.
+		'''
+		# Copy the field and the object contrast to the GPU
+		cl.enqueue_copy(self.queue, self.fld,
+				fld.astype(np.complex64).ravel('F'), is_blocking=False)
+		cl.enqueue_copy(self.queue, self.eta,
+				obj.astype(np.complex64).ravel('F'), is_blocking=False)
+
+		# Convert the contrast to the index of refraction
+		self.prog.obj2eta(self.queue, self.grid, None, self.eta)
+
+		# Attenuate the boundaries using a Hann window
+		self.prog.attenx(self.queue, (self.l, self.grid[1]), None, self.fld)
+		self.prog.atteny(self.queue, (self.grid[0], self.l), None, self.fld)
+
+		# Take the forward FFT of the field and apply the propagator
+		self.fftplan.execute(self.fld)
+		self.prog.propagate(self.queue, self.grid, None, self.fld)
+
+		# Compute the Laplacian in the spectral domain
+		self.prog.laplacian(self.queue, self.grid, None, self.lap, self.fld)
+
+		# Take the inverse FFT of the field and the Laplacian
+		self.fftplan.execute(self.fld, inverse=True)
+		self.fftplan.execute(self.lap, inverse=True)
+
+		# Add the wide-angle correction term
+		self.prog.wideangle(self.queue, self.grid, None,
+				self.fld, self.lap, self.eta)
+
+		# Multiply by the phase screen
+		self.prog.screen(self.queue, self.grid, None, self.fld, self.eta)
+
+		# Copy the field to a new output array
+		fld = np.empty_like(fld, dtype=np.complex64, order='F')
+		cl.enqueue_copy(self.queue, fld, self.fld).wait()
+
+		return fld
