@@ -13,7 +13,7 @@ def printflush(string):
 
 def usage(execname):
 	binfile = os.path.basename(execname)
-	print 'USAGE:', binfile, '[-h] [-a a] [-f f] [-s s] [-c c] [-p nx,ny] [-d x,y,z,w]', '<src> <infile> <outfile>'
+	print 'USAGE:', binfile, '[-h] [-a a] [-g g] [-f f] [-s s] [-c c] [-p nx,ny] [-d x,y,z,w]', '<src> <infile> <outfile>'
 	print '''
   Using the split-step method, compute the field induced in a contrast
   medium specified in infile by a point source at location src = x,y,z.
@@ -35,6 +35,7 @@ def usage(execname):
   -c: Specify the sound speed, c, in mm/us (default: 1.5)
   -p: Pad the domain to [nx,ny] pixels for attenuation (default: domain plus Hann window)
   -d: Specify a directivity axis x,y,z with width parameter w (default: none)
+  -g: Use OpenCL computing device g on the first platform (default: system default device)
 	'''
 
 if __name__ == '__main__':
@@ -42,9 +43,10 @@ if __name__ == '__main__':
 	execname = sys.argv[0]
 
 	# Store the default parameters
-	a, c, s, f, k0, d, p = 50, 1.5, 0.05, 3.0, 2 * math.pi, None, None
+	a, c, s, f, k0, = 50, 1.5, 0.05, 3.0, 2 * math.pi
+	d, p, ctx = [None]*3
 
-	optlist, args = getopt.getopt(sys.argv[1:], 'ha:f:s:c:d:p:')
+	optlist, args = getopt.getopt(sys.argv[1:], 'ha:f:s:c:d:p:g:')
 
 	for opt in optlist:
 		if opt[0] == '-a': a = int(opt[1])
@@ -53,6 +55,7 @@ if __name__ == '__main__':
 		elif opt[0] == '-f': f = float(opt[1])
 		elif opt[0] == '-s': s = float(opt[1])
 		elif opt[0] == '-c': c = float(opt[1])
+		elif opt[0] == '-g': ctx = int(opt[1])
 		else:
 			usage(execname)
 			sys.exit(128)
@@ -78,7 +81,7 @@ if __name__ == '__main__':
 	src = tuple(float(s) * f / c for s in args[0].split(','))
 
 	printflush('Creating split-step engine... ')
-	sse = wavecl.SplitStep(k0, p[0], p[1], h, a)
+	sse = wavecl.SplitStep(k0, p[0], p[1], h, a, context = ctx)
 	print 'finished'
 
 	# Create a slice tuple to strip out the padding when writing

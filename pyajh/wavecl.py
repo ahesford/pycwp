@@ -9,11 +9,21 @@ from . import fdtd, wavetools
 
 def grabcontext(context = None):
 	'''
-	If context is not None, return the provided context. Otherwise, create
-	one for the default device and return it.
+	If context is unspecified or is None, create and return the default
+	context. Otherwise, context must either be an PyOpenCL Context instance
+	or an integer. If context is a PyOpenCL Context, do nothing but return
+	the argument. Otherwise, return the device at the corresponding
+	(zero-based) index of the first platform available on the system. 
 	'''
-	if context is not None: return context
-	return cl.Context(dev_type = cl.device_type.DEFAULT)
+	# Return a default context if nothing was specified
+	if context is None: return cl.Context(dev_type = cl.device_type.DEFAULT)
+
+	# The provided argument is a context, return it
+	if isinstance(context, cl.Context): return context
+
+	# Try to return the specified device
+	return cl.Context(devices=[cl.get_platforms()[0].get_devices()[context]])
+
 
 class SplineInterpolator(object):
 	'''
