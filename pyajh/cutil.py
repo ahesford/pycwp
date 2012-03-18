@@ -6,6 +6,16 @@ import numpy, math, operator
 from scipy import special as spec
 from .geom import sph2cart
 
+def ceilpow2(x):
+	'''
+	Find the smallest power of 2 not less than the specified integer x.
+	'''
+	xc, y = x, 1
+	while xc > 1:
+		xc >>= 1
+		y <<= 1
+	return y if y >= x else (y << 1)
+
 def rlocate(arr, val):
 	'''
 	Search the monotonically increasing or decreasing list arr for an index

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 import numpy as np, math, sys, getopt, os
-from pyajh import mio, wavetools, wavecl, util
+from pyajh import mio, wavetools, wavecl, util, cutil
 
 def printflush(string):
 	'''
@@ -73,7 +73,7 @@ if __name__ == '__main__':
 	# Set up a slice-wise input reader
 	inmat = mio.Slicer(args[1])
 	# Automatically pad the domain, if necessary
-	if p is None: p = [g + 2 * a for g in inmat.shape[:-1]]
+	if p is None: p = [cutil.ceilpow2(g) for g in inmat.shape[:-1]]
 
 	print 'Computing on expanded grid', p
 
@@ -100,10 +100,8 @@ if __name__ == '__main__':
 	if d is not None: fld *= wavetools.directivity(crd, src, d[:3], d[3])
 	print 'finished'
 
-	# This array will store the current and previous contrast
-	obj = [np.zeros(inmat.shape[:-1], inmat.dtype)]
 	# This buffer will store the average contrast value on an expanded grid
-	ct = np.zeros(p, inmat.dtype)
+	obj = np.zeros(p, inmat.dtype)
 
 	print 'Stepping through slabs...'
 	# Create a progress bar and print a blank
@@ -118,13 +116,9 @@ if __name__ == '__main__':
 		# Loop through all slices and compute the propagated field
 		for idx in reversed(range(inmat.shape[-1])):
 			# Read the current contrast slab into the buffer
-			obj.append(inmat[idx])
-			# Compute the average of the current and previous slab
-			ct[sl] = 0.5 * (obj[0] + obj[1])
-			# Through out the last slab for the next iteration
-			obj.pop(0)
+			obj[sl] = inmat[idx]
 			# Advance and write the field
-			fld = sse.advance(fld, ct)
+			fld = sse.advance(fld, obj)
 			outmat[idx] = fld[sl]
 			# Increment and print the progress bar
 			bar.increment()

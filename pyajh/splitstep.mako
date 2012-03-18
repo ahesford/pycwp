@@ -102,6 +102,22 @@ __kernel void obj2eta(${gfc} obj) {
 	obj[idx] = eval;
 }
 
+/* Compute, in place, the average index of refraction. On input, eta stores
+ * half of the index of refraction for the previous slab; aug stores the whole
+ * index of refraction for the next slab. On output, eta stores the entire
+ * average index of refraction for the two slabs; aug stores half of the index
+ * of refraction for the next slab. The global work grid should be (nx, ny). */
+__kernel void avgeta(${gfc} eta, ${gfc} aug) {
+	${getindices('i', 'j', 'idx')}
+
+	/* Compute the next half contribution to the average. */
+	const float2 nval = (float2) (0.5) * aug[idx];
+	/* Update the average index of refraction. */
+	eta[idx] += nval;
+	/* Store the halved index of refraction for the next average. */
+	aug[idx] = nval;
+}
+
 /* Apply the homogeneous propagator to the field in the spectral domain. The
  * dimensions of the global grid should be (nx, ny). */
 __kernel void propagate(${gfc} fld) {
