@@ -1,5 +1,5 @@
 '''
-Routines useful for wave physics computations, including CG-FFT, phase and 
+Routines useful for wave physics computations, including CG-FFT, phase and
 magnitude correction for comparison of k-space (FDTD) and integral equation
 solvers, Green's functions, and a split-step solver.
 '''
@@ -11,6 +11,64 @@ from itertools import izip, product
 
 from .cutil import rotate
 from . import mio
+
+
+def gencompress(c, rho, atn):
+	'''
+	Convert the sound speed c (m/s at zero frequency), the density rho
+	(kg/m**3) and the attenuation slope atn (dB/cm/MHz) into two
+	generalized compressibilities k = (k1, k2) used to define the sound
+	speed according to Nachman, Smith and Waag (JASA, 1990).
+
+	The time constants for the compressibilities k1 and k2 are,
+	respectively, t1 = 11.49 ns and t2 = 77.29 ns.
+	'''
+	# Define polynomial coefficients for the curve fit
+	a1 = (1.37424E-09, -7.86182E-09, 1.62596E-08, -1.23225E-08,
+			5.42641E-06, -3.78429E-11, 2.76741E-10, -7.16265E-10,
+			7.99459E-10, -3.46054E-10)
+
+	a2 = (-6.85660E-09, 4.41817E-08, -9.61036E-08, 8.18166E-08,
+			5.44780E-06, -3.47953E-12, 2.83491E-11, -8.23410E-11,
+			1.04052E-10, -5.07517E-11)
+
+	# Watch for zero attenuation
+	alpha = (np.abs(atn) > 1e-6).choose(1., atn)
+	asq = np.sqrt(alpha)
+
+	# Compute the compressibilities
+	k1, k2 = [((a[0] / c + a[5]) / alpha + (a[1] / c + a[6]) / asq +
+			(a[2] / c + a[7]) + (a[3] / c + a[8]) * asq +
+			(a[4] / c + a[9]) * alpha) / rho for a in [a1, a2]]
+
+	# Correct the compressibilities where there is zero attenuation
+	k1, k2 = [(np.abs(atn) > 1e-6).choose(0., k) for k in [k1, k2]]
+
+	return k1, k2
+
+
+def compress2spd(c, rho, k, f):
+	'''
+	Convert the sound speed c (m/s at zero frequency), the density rho
+	(kg/m**3) and the generalized compressibilities k = (k1, k2) returned
+	by the gencompress function into a sound speed at the specified
+	frequency f (MHz).
+
+	The time constants are fixed at t1 = 11.49 ns and t2 = 77.29 ns.
+	'''
+	# Compute the high-frequency asymptotic compressibility
+	kinf = (1 / c**2 / rho) - np.sum(k, axis=0)
+	# Compute the radian frequency and the fixed time constants
+	w = 2 * math.pi * f
+	tau = (11.49e-9, 77.29e-9)
+	# Compute the first-order terms
+	kt = kinf + np.sum((kv / (1. + (w * t)**2) for kv, t in zip(k, tau)), axis=0)
+	# Compute the second-order corrections
+	ks = np.sum((kv * t * w / (1. + (w * t)**2) for kv, t in zip(k, tau)), axis=0)
+	# Return the sound speed at the desired frequency
+	c = math.sqrt(2. / rho) / np.sqrt(kt + np.sqrt(kt**2 + ks**2))
+	return c
+
 
 def spd2ct(c, cbg, atn = None):
 	'''
@@ -26,7 +84,7 @@ def spd2ct(c, cbg, atn = None):
 		# The factor log(10) / 20 converts dB to Np
 		scale = 0.1 * math.log(10) / 20
 		# Multiplying atn by cbg converts it to dB per wavelength
-		k = 2. * math.pi * cbg / c + 1j * cbg * scale * atn 
+		k = 2. * math.pi * cbg / c + 1j * cbg * scale * atn
 	except TypeError: k = 2. * math.pi * cbg / c
 
 	# Return the contrast profile
@@ -357,7 +415,7 @@ class SplitStep(object):
 
 			# Compute the transverse wave numbers
 			dk = 2. * math.pi / self.h
-			kx, ky = [fft.fftshift((dk * s) / n) 
+			kx, ky = [fft.fftshift((dk * s) / n)
 					for s, n in zip(sl, [nx, ny])]
 
 			self._kxy = kx, ky
