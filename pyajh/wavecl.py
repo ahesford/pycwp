@@ -436,7 +436,15 @@ class SplitStep(object):
 		return [(c - 0.5 * (n - 1.)) * self.h for c, n in zip(cg, g)]
 
 
-	def advance(self, fld, obj):
+	def setfield(self, fld):
+		'''
+		Copy the provided field into the CL field buffer.
+		'''
+		cl.enqueue_copy(self.queue, self.fld,
+				fld.astype(np.complex64).ravel('F'))
+
+
+	def advance(self, obj):
 		'''
 		Advance the field fld through a slab with object contrast obj.
 		'''
@@ -445,9 +453,7 @@ class SplitStep(object):
 		# Update the index for the next iteration
 		self.slab = (self.slab + 1) % 2
 
-		# Copy the field and the augmenting object contrast to the GPU
-		cl.enqueue_copy(self.queue, self.fld,
-				fld.astype(np.complex64).ravel('F'))
+		# Copy the augmenting object contrast to the GPU
 		cl.enqueue_copy(self.queue, aug, obj.astype(np.complex64).ravel('F'))
 
 		# Convert the contrast to the index of refraction
@@ -476,8 +482,13 @@ class SplitStep(object):
 		# Multiply by the phase screen
 		self.prog.screen(self.queue, self.grid, None, self.fld, eta)
 
+
+	def getfield(self):
+		'''
+		Return a copy of the CL field buffer.
+		'''
 		# Copy the field to a new output array
-		fld = np.empty_like(fld, dtype=np.complex64, order='F')
+		fld = np.empty(self.grid, dtype=np.complex64, order='F')
 		cl.enqueue_copy(self.queue, fld, self.fld).wait()
 
 		return fld

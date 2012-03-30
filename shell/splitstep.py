@@ -98,6 +98,7 @@ if __name__ == '__main__':
 	fld = np.exp(1j * k0 * r) / (4. * math.pi * r)
 	# Include any specified directivity pattern
 	if d is not None: fld *= wavetools.directivity(crd, src, d[:3], d[3])
+	sse.setfield(fld)
 	print 'finished'
 
 	# This buffer will store the average contrast value on an expanded grid
@@ -118,8 +119,8 @@ if __name__ == '__main__':
 			# Read the current contrast slab into the buffer
 			obj[sl] = inmat[idx]
 			# Advance and write the field
-			fld = sse.advance(fld, obj)
-			outmat[idx] = fld[sl]
+			sse.advance(obj)
+			outmat[idx] = sse.getfield()[sl]
 			# Increment and print the progress bar
 			bar.increment()
 			printflush(str(bar) + '\r')
