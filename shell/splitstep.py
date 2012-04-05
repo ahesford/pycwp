@@ -81,7 +81,7 @@ if __name__ == '__main__':
 	src = tuple(float(s) * f / c for s in args[0].split(','))
 
 	printflush('Creating split-step engine... ')
-	sse = wavecl.SplitStep(k0, p[0], p[1], h, a, context = ctx)
+	sse = wavecl.SplitStep(k0, p[0], p[1], h, src=src, d=d, l=a, context=ctx)
 	print 'finished'
 
 	# Create a slice tuple to strip out the padding when writing
@@ -89,16 +89,9 @@ if __name__ == '__main__':
 	sl = [slice(lv, -(pv - gv - lv)) for pv, gv, lv in zip(p, inmat.shape, lpad)]
 
 	printflush('Computing incident field... ')
-	# Compute the z-offset of the slab before the first computed slab
-	zoff = 0.5 * float(inmat.shape[-1] + 1) * sse.h
-	# Compute the x, y (array) coordinates of the start slab
-	crd = sse.slicecoords() + [zoff]
-	# Compute and write the values of the Green's function in this slab
-	r = np.sqrt(reduce(np.add, map(lambda (x, y): (x - y)**2, zip(crd, src))))
-	fld = np.exp(1j * k0 * r) / (4. * math.pi * r)
-	# Include any specified directivity pattern
-	if d is not None: fld *= wavetools.directivity(crd, src, d[:3], d[3])
-	sse.setfield(fld)
+	# Compute the z height of a specified slab
+	zoff = lambda i: sse.h * (float(i) - 0.5 * float(inmat.shape[-1] - 1.))
+	sse.setincident(zoff(inmat.shape[-1]))
 	print 'finished'
 
 	# This buffer will store the average contrast value on an expanded grid
@@ -120,12 +113,10 @@ if __name__ == '__main__':
 			obj[sl] = inmat[idx]
 			# Advance and write the field
 			sse.advance(obj)
-			outmat[idx] = sse.getfield()[sl]
+			outmat[idx] = sse.copyfield()[sl]
 			# Increment and print the progress bar
 			bar.increment()
 			printflush(str(bar) + '\r')
 
 		print
-	except:
-		# Truncate the output file to quickly end
-		outmat.backer.truncate(0)
+	except: outmat.backer.truncate(0)

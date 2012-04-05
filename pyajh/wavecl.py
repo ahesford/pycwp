@@ -384,14 +384,22 @@ class SplitStep(object):
 
 	_kernel = path.join(path.split(path.abspath(__file__))[0], 'splitstep.mako')
 
-	def __init__(self, k0, nx, ny, h, l = 0, dz = None, context = None):
+	def __init__(self, k0, nx, ny, h, src, d=None, l=0, dz=None, context=None):
 		'''
 		Initialize a split-step engine over an nx-by-ny grid with
 		isotropic step size h. The unitless wave number is k0. The wave
 		is advanced in steps of dz or (if dz is not provided) h.
 
+		The source location is specified in a three-tuple src with
+		units of wavelengths. If d is provided, it is a 4-tuple that
+		describes the directivity of the source as d = (dx, dy, dz, w),
+		where (dx, dy, dz) is the directivity axis and w is the beam
+		width parameter.
+
 		If l is specified and greater than zero, it is the width of a
 		Hann window used to attenuate the field along each edge.
+
+
 		'''
 		# Copy the parameters
 		self.grid = nx, ny
@@ -405,7 +413,7 @@ class SplitStep(object):
 		# Build the program for the context
 		t = Template(filename=SplitStep._kernel, output_encoding='ascii')
 		self.prog = cl.Program(self.context, t.render(grid = self.grid,
-			k0 = k0, h = h, l = l, dz = self.dz)).build()
+			k0=k0, h=h, src=src, d=d, l=l, dz=self.dz)).build()
 
 		# Create a command queue for the context
 		self.queue = cl.CommandQueue(self.context)
@@ -414,16 +422,14 @@ class SplitStep(object):
 		self.fftplan = Plan((nx, ny), queue=self.queue)
 
 		# Buffers to store the field and Laplacian
-		mf = cl.mem_flags
-		nbytes = nx * ny * np.complex64().nbytes
-		self.fld = cl.Buffer(self.context, mf.READ_WRITE, nbytes)
-		self.lap = cl.Buffer(self.context, mf.READ_WRITE, nbytes)
+		queue, grid = self.queue, self.grid
+		self.fld = cla.empty(queue, grid, np.complex64, order='F')
+		self.lap = cla.empty(queue, grid, np.complex64, order='F')
 		# The index of refraction gets two buffers for averaging
-		self.eta = [cl.Buffer(self.context, mf.READ_WRITE, nbytes) for i in range(2)]
+		self.eta = [cla.empty(queue, grid, np.complex64, order='F') for i in range(2)]
 		# Initialize the first half contribution in the rolling buffer
 		self.slab = 0
-		cl.enqueue_copy(self.queue, self.eta[self.slab],
-				0.5 * np.ones(self.grid, dtype = np.complex64))
+		self.eta[self.slab].set(0.5 * np.ones(grid, dtype=np.complex64))
 
 
 	def slicecoords(self):
@@ -436,59 +442,63 @@ class SplitStep(object):
 		return [(c - 0.5 * (n - 1.)) * self.h for c, n in zip(cg, g)]
 
 
-	def setfield(self, fld):
+	def copyfield(self, fld = None):
 		'''
-		Copy the provided field into the CL field buffer.
+		If fld is provided, copy the provided field into the CL field
+		buffer. Otherwise, return a NumPy array containing a copy of
+		the already-populated CL field buffer.
 		'''
-		cl.enqueue_copy(self.queue, self.fld,
-				fld.astype(np.complex64).ravel('F'))
+		if fld: self.fld.set(fld.astype(np.complex64).ravel('F'))
+		else: return self.fld.get()
+
+
+	def setincident(self, zoff):
+		'''
+		Set the value of the CL field buffer to the incident field at a
+		height zoff.
+		'''
+		inc = self.fld.data
+		self.prog.green3d(self.queue, self.grid, None, inc, np.float32(zoff))
 
 
 	def advance(self, obj):
 		'''
 		Advance the field fld through a slab with object contrast obj.
 		'''
+		prog, queue, grid = self.prog, self.queue, self.grid
+		# Copy the augmenting object contrast to the GPU
+		self.eta[self.slab - 1].set(obj.astype(np.complex64).ravel('F'))
 		# Point to the augmenting index of refraction and the average eta
-		aug, eta = self.eta[self.slab - 1], self.eta[self.slab]
-		# Update the index for the next iteration
+		aug, eta = [self.eta[i].data for i in [self.slab - 1, self.slab]]
+		# Poin to the field and Laplacian data
+		fld, lap = self.fld.data, self.lap.data
+
+		# Roll over the slab counter
 		self.slab = (self.slab + 1) % 2
 
-		# Copy the augmenting object contrast to the GPU
-		cl.enqueue_copy(self.queue, aug, obj.astype(np.complex64).ravel('F'))
-
 		# Convert the contrast to the index of refraction
-		self.prog.obj2eta(self.queue, self.grid, None, aug)
+		prog.obj2eta(queue, grid, None, aug)
 		# Update the average index of refraction
-		self.prog.avgeta(self.queue, self.grid, None, eta, aug)
+		prog.avgeta(queue, grid, None, eta, aug)
 
-		# Attenuate the boundaries using a Hann window
-		self.prog.attenx(self.queue, (self.l, self.grid[1]), None, self.fld)
-		self.prog.atteny(self.queue, (self.grid[0], self.l), None, self.fld)
+		# Attenuate the boundaries using a Hann window, if desired
+		if self.l > 0:
+			prog.attenx(queue, (self.l, grid[1]), None, fld)
+			prog.atteny(queue, (grid[0], self.l), None, fld)
 
 		# Take the forward FFT of the field and apply the propagator
-		self.fftplan.execute(self.fld)
-		self.prog.propagate(self.queue, self.grid, None, self.fld)
+		self.fftplan.execute(fld)
+		prog.propagate(queue, grid, None, fld)
 
 		# Compute the Laplacian in the spectral domain
-		self.prog.laplacian(self.queue, self.grid, None, self.lap, self.fld)
+		prog.laplacian(queue, grid, None, lap, fld)
 
 		# Take the inverse FFT of the field and the Laplacian
-		self.fftplan.execute(self.fld, inverse=True)
-		self.fftplan.execute(self.lap, inverse=True)
+		self.fftplan.execute(fld, inverse=True)
+		self.fftplan.execute(lap, inverse=True)
 
 		# Add the wide-angle correction term
-		self.prog.wideangle(self.queue, self.grid, None, self.fld, self.lap, eta)
+		prog.wideangle(queue, grid, None, fld, lap, eta)
 
 		# Multiply by the phase screen
-		self.prog.screen(self.queue, self.grid, None, self.fld, eta)
-
-
-	def getfield(self):
-		'''
-		Return a copy of the CL field buffer.
-		'''
-		# Copy the field to a new output array
-		fld = np.empty(self.grid, dtype=np.complex64, order='F')
-		cl.enqueue_copy(self.queue, fld, self.fld).wait()
-
-		return fld
+		prog.screen(queue, grid, None, fld, eta)

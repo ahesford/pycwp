@@ -1,19 +1,30 @@
 <%!
-	import math
+	import math, operator as op
 %>
 
 <%
 	nx, ny = grid
 	gfc = '__global float2 * const'
+
+	if d:
+		dn = reduce(op.add, [dv**2 for dv in d[:-1]])
+		dirax = [dv / dn for dv in d[:-1]]
+		dirmag = d[-1]
 %>
 
 #define cmul(a, b) (float2)(mad(-(a).y, (b).y, (a).x * (b).x), mad((a).y, (b).x, (a).x * (b).y))
 #define cdiv(a, b) (float2)(mad((a).x, (b).x, (a).y * (b).y), mad((a).y, (b).x, -(a).x * (b).y)) / (float2)((b).x * (b).x + (b).y * (b).y)
+#define eikr(a) (float2) (cos((float) (a)), sin((float) (a)))
 #define imul(a) (float2) (-(a).y, (a).x)
 
 ## Wrap the coordinate index in accordance with the FFT.
 <%def name="wrap(n,i)">
 	(float) ((${i} < ${n / 2}) ? (int) ${i} : (int) ${i} - ${n})
+</%def>
+
+## Compute the coordinates for grid indices
+<%def name="crd(n,i)">
+	(${h} * (${i} - ${0.5 * (n - 1.)}))
 </%def>
 
 ## Compute the spatial frequencies for unwrapped indices
@@ -173,4 +184,27 @@ __kernel void screen(${gfc} fld, ${gfc} eta) {
 	const float2 phase = ampl * (float2) (cos(arg.y), sin(arg.y));
 
 	fld[idx] = cmul(phase, fld[idx]);
+}
+
+/* Compute the value of the Green's function at a slab with height zoff. */
+__kernel void green3d(${gfc} fld, const float zoff) {
+	${getindices('i', 'j', 'idx')}
+
+	/* Compute the position of the observer. */
+	const float3 obs = (float3) (${crd(nx, 'i')}, ${crd(ny, 'j')}, zoff);
+	/* Compute the vector separation between source and observer. */
+	const float3 rv = obs - (float3) ${tuple(src)};
+	/* Compute the scalar distance between source and observer. */
+	const float r = length(rv);
+
+	/* Compute the value of the Green's function. */
+	const float2 grf = eikr(${k0} * r) / (float2) (${4. * math.pi} * r);
+
+	% if d:
+		const float ctheta = dot(rv / (float3) r, (float3) ${tuple(dirax)});
+		const float stheta = sin(acos(ctheta));
+		const float mag = ctheta * exp((float) ${-dirmag} * stheta * stheta);
+	% endif
+
+	fld[idx] = ${'' if d is None else '(float2) mag *'} grf;
 }
