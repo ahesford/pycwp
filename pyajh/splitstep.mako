@@ -104,6 +104,9 @@ float2 cexp(const float2 v) {
 	}
 % endfor
 
+## All subsequent kernels should use a global work grid size of (nx, ny) unless
+## otherwise noted. The local work grid size is not significant.
+
 /* Convert, in place, an object contrast into an index of refraction. The
  * global work grid should be (nx, ny). */
 __kernel void obj2eta(${gfc} obj) {
@@ -113,24 +116,21 @@ __kernel void obj2eta(${gfc} obj) {
 	obj[idx] = eval;
 }
 
-/* Compute, in place, the average index of refraction. On input, eta stores
- * half of the index of refraction for the previous slab; aug stores the whole
- * index of refraction for the next slab. On output, eta stores the entire
- * average index of refraction for the two slabs; aug stores half of the index
- * of refraction for the next slab. The global work grid should be (nx, ny). */
+/* Compute, in place, the average index of refraction. On input, eta stores the
+ * index of refraction for the previous slab; aug stores the index of
+ * refraction for the next slab. On output, eta stores the average index of
+ * refraction for the two slabs. */
 __kernel void avgeta(${gfc} eta, ${gfc} aug) {
 	${getindices('i', 'j', 'idx')}
 
 	/* Compute the next half contribution to the average. */
-	const float2 nval = (float2) (0.5) * aug[idx];
+	const float2 nval = aug[idx];
+	const float2 oval = eta[idx];
 	/* Update the average index of refraction. */
-	eta[idx] += nval;
-	/* Store the halved index of refraction for the next average. */
-	aug[idx] = nval;
+	eta[idx] = (float2) (0.5) * (nval + oval);
 }
 
-/* Apply the homogeneous propagator to the field in the spectral domain. The
- * dimensions of the global grid should be (nx, ny). */
+/* Apply the homogeneous propagator to the field in the spectral domain. */
 __kernel void propagate(${gfc} fld) {
 	/* Grab the spectral sample to be propagated. */
 	${getindices('i', 'j', 'idx')}
@@ -145,7 +145,7 @@ __kernel void propagate(${gfc} fld) {
 }
 
 /* Compute the Laplacian of the field in the spectral domain and divide by the
- * square of the wave number. The global grid should be (nx, ny). */
+ * square of the wave number. */
 __kernel void laplacian(${gfc} lap, ${gfc} fld) {
 	/* Grab the spectral sample for the current work item. */
 	${getindices('i', 'j', 'idx')}
@@ -202,7 +202,7 @@ __kernel void green3d(${gfc} fld, const float zoff) {
 
 	% if d:
 		const float ctheta = dot(rv / (float3) r, (float3) ${tuple(dirax)});
-		const float stheta = sin(acos(ctheta));
+		const float stheta = sin(acos(clamp(ctheta, -1.0f, 1.0f)));
 		const float mag = ctheta * exp((float) ${-dirmag} * stheta * stheta);
 	% endif
 

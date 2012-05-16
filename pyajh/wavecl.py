@@ -429,7 +429,7 @@ class SplitStep(object):
 		self.eta = [cla.empty(queue, grid, np.complex64, order='F') for i in range(2)]
 		# Initialize the first half contribution in the rolling buffer
 		self.slab = 0
-		self.eta[self.slab].set(0.5 * np.ones(grid, dtype=np.complex64))
+		self.eta[self.slab].set(np.ones(grid, dtype=np.complex64))
 
 
 	def slicecoords(self):
@@ -461,25 +461,34 @@ class SplitStep(object):
 		self.prog.green3d(self.queue, self.grid, None, inc, np.float32(zoff))
 
 
+	def etaupdate(self, obj):
+		'''
+		Update the average refractive index for the slab with a new
+		contribution from the provided object contrast obj.
+		'''
+		prog, queue, grid = self.prog, self.queue, self.grid
+		aug, eta = [self.eta[i] for i in [self.slab - 1, self.slab]]
+		# Copy the new contribution and convert to refractive index
+		aug.set(obj.astype(np.complex64).ravel('F'))
+		prog.obj2eta(queue, grid, None, aug.data)
+		# Update the average
+		prog.avgeta(queue, grid, None, eta.data, aug.data)
+		# Increment the rolling slab counter
+		self.slab = (self.slab + 1) % 2
+
+		# Return a pointer to the new average CL array
+		return eta
+
+
 	def advance(self, obj):
 		'''
 		Advance the field fld through a slab with object contrast obj.
 		'''
 		prog, queue, grid = self.prog, self.queue, self.grid
-		# Copy the augmenting object contrast to the GPU
-		self.eta[self.slab - 1].set(obj.astype(np.complex64).ravel('F'))
-		# Point to the augmenting index of refraction and the average eta
-		aug, eta = [self.eta[i].data for i in [self.slab - 1, self.slab]]
-		# Poin to the field and Laplacian data
+		# Update the average refractive index and grab the CL buffer
+		eta = self.etaupdate(obj).data
+		# Point to the field and Laplacian data
 		fld, lap = self.fld.data, self.lap.data
-
-		# Roll over the slab counter
-		self.slab = (self.slab + 1) % 2
-
-		# Convert the contrast to the index of refraction
-		prog.obj2eta(queue, grid, None, aug)
-		# Update the average index of refraction
-		prog.avgeta(queue, grid, None, eta, aug)
 
 		# Attenuate the boundaries using a Hann window, if desired
 		if self.l > 0:
