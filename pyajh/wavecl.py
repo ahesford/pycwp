@@ -448,8 +448,8 @@ class SplitStep(object):
 		buffer. Otherwise, return a NumPy array containing a copy of
 		the already-populated CL field buffer.
 		'''
-		if fld: self.fld.set(fld.astype(np.complex64).ravel('F'))
-		else: return self.fld.get()
+		if fld is None: return self.fld.get()
+		else: self.fld.set(fld.astype(np.complex64).ravel('F'))
 
 
 	def setincident(self, zoff):
