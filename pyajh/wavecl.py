@@ -421,15 +421,19 @@ class SplitStep(object):
 		# Create an FFT plan in the OpenCL queue
 		self.fftplan = Plan((nx, ny), queue=self.queue)
 
-		# Buffers to store the field and Laplacian
 		queue, grid = self.queue, self.grid
-		self.fld = cla.empty(queue, grid, np.complex64, order='F')
-		self.lap = cla.empty(queue, grid, np.complex64, order='F')
+		empty = lambda : cla.empty(queue, grid, np.complex64, order='F')
+		# Buffers to store the propagating field and its Laplacian
+		self.fld, self.lap = empty(), empty()
+		# Buffers to store the existing backward fields
+		self.bfld = empty()
 		# The index of refraction gets two buffers for averaging
-		self.eta = [cla.empty(queue, grid, np.complex64, order='F') for i in range(2)]
-		# Initialize the first half contribution in the rolling buffer
+		self.eta = [empty() for i in range(2)]
 		self.slab = 0
-		self.eta[self.slab].set(np.ones(grid, dtype=np.complex64))
+		# The ration of refractive indices is used for two-way propagation
+		self.efrac = empty()
+		# Initialize refractive index and fields
+		self.reset()
 
 
 	def slicecoords(self):
@@ -440,6 +444,22 @@ class SplitStep(object):
 		g = self.grid
 		cg = np.ogrid[:g[0], :g[1]]
 		return [(c - 0.5 * (n - 1.)) * self.h for c, n in zip(cg, g)]
+
+
+	def reset(self):
+		'''
+		Reset the propagating and backward fields to zero and the prior
+		refractive index buffer to unity.
+		'''
+		grid = self.grid
+
+		o = np.ones(grid, dtype=np.complex64)
+		self.eta[0].set(o)
+		self.eta[1].set(o)
+
+		z = np.zeros(grid, dtype=np.complex64)
+		self.bfld.set(z)
+		self.fld.set(z)
 
 
 	def copyfield(self, fld = None):
@@ -468,10 +488,12 @@ class SplitStep(object):
 		'''
 		prog, queue, grid = self.prog, self.queue, self.grid
 		aug, eta = [self.eta[i] for i in [self.slab - 1, self.slab]]
-		# Copy the new contribution and convert to refractive index
+		# Copy and convert the new contribution to the average
 		aug.set(obj.astype(np.complex64).ravel('F'))
 		prog.obj2eta(queue, grid, None, aug.data)
-		# Update the average
+		# Compute the ratio for backscattering
+		prog.etafrac(queue, grid, None, self.efrac.data, eta.data, aug.data)
+		# Update the average for propagation
 		prog.avgeta(queue, grid, None, eta.data, aug.data)
 		# Increment the rolling slab counter
 		self.slab = (self.slab + 1) % 2
@@ -480,9 +502,13 @@ class SplitStep(object):
 		return eta
 
 
-	def advance(self, obj):
+	def advance(self, obj, bfld = None):
 		'''
-		Advance the field fld through a slab with object contrast obj.
+		Propagate a field through a slab with object contrast obj and
+		use it to compute an estimate of the actual field in the slab.
+
+		The field bfld, if provided, is the current guess of a field
+		running counter to the field to be updated.
 		'''
 		prog, queue, grid = self.prog, self.queue, self.grid
 		# Update the average refractive index and grab the CL buffer
@@ -511,3 +537,10 @@ class SplitStep(object):
 
 		# Multiply by the phase screen
 		prog.screen(queue, grid, None, fld, eta)
+
+		# Copy the guessed backward field if provided
+		if bfld is not None:
+			self.bfld.set(bfld.astype(np.complex64).ravel('F'))
+
+		# Compute a relaxation update
+		prog.update(queue, grid, None, fld, self.bfld.data, self.efrac.data)

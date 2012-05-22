@@ -130,6 +130,16 @@ __kernel void avgeta(${gfc} eta, ${gfc} aug) {
 	eta[idx] = (float2) (0.5) * (nval + oval);
 }
 
+/* Compute the ratio of the current to the next average indices of refraction. */
+__kernel void etafrac(${gfc} efrac, ${gfc} cur, ${gfc} next) {
+	${getindices('i', 'j', 'idx')}
+
+	const float2 nval = next[idx];
+	const float2 cval = cur[idx];
+
+	efrac[idx] = cdiv(cval, nval);
+}
+
 /* Apply the homogeneous propagator to the field in the spectral domain. */
 __kernel void propagate(${gfc} fld) {
 	/* Grab the spectral sample to be propagated. */
@@ -207,4 +217,23 @@ __kernel void green3d(${gfc} fld, const float zoff) {
 	% endif
 
 	fld[idx] = ${'' if d is None else '(float2) mag *'} grf;
+}
+
+/* Update the guess of the field in a slab based on the propagation of the
+ * preceding field and the back-propagated field using a relaxation method with
+ * parameter tau = 2 (no memory of past guesses). */
+__kernel void update(${gfc} fwd, ${gfc} back, ${gfc} efrac) {
+	${getindices('i', 'j', 'idx')}
+
+	const float2 fval = fwd[idx];
+	const float2 bval = back[idx];
+
+	const float2 eval = efrac[idx];
+	const float2 one = (float2) (1., 0.);
+
+	const float2 ep1 = one + eval;
+	const float2 em1 = one - eval;
+
+	const float2 nval = (float2) (0.5) * (cmul(ep1, fval) + cmul(em1, bval));
+	fwd[idx] = nval;
 }

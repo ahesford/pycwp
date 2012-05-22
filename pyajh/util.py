@@ -18,7 +18,8 @@ class ProgressBar:
 
 		# Initialize the string and the counter
 		self.string = ''
-		self.value = self.bounds[0]
+		self.reset()
+
 
 
 	def increment(self, amount = 1):
@@ -42,6 +43,14 @@ class ProgressBar:
 		string = '#' * nchar + ' ' * (self.barwidth - nchar)
 
 		self.string = '[' + string + '] %5.1f%%' % (100 * pct)
+
+
+	def reset(self):
+		'''
+		Reset the bar counter.
+		'''
+		self.value = self.bounds[0]
+		self.makebar()
 
 
 	def __str__(self): return self.string
