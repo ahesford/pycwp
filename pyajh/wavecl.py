@@ -425,8 +425,8 @@ class SplitStep(object):
 		empty = lambda : cla.empty(queue, grid, np.complex64, order='F')
 		# Buffers to store the propagating field and its Laplacian
 		self.fld, self.lap = empty(), empty()
-		# Buffers to store the existing backward fields
-		self.bfld = empty()
+		# Buffers to store the existing backward and forward fields
+		self.bfld, self.ffld = empty(), empty()
 		# The index of refraction gets two buffers for averaging
 		self.eta = [empty() for i in range(2)]
 		self.slab = 0
@@ -459,6 +459,7 @@ class SplitStep(object):
 
 		z = np.zeros(grid, dtype=np.complex64)
 		self.bfld.set(z)
+		self.ffld.set(z)
 		self.fld.set(z)
 
 
@@ -483,18 +484,16 @@ class SplitStep(object):
 
 	def etaupdate(self, obj):
 		'''
-		Update the average refractive index for the slab with a new
-		contribution from the provided object contrast obj.
+		Update the rolling buffer with the refractive index
+		corresponding to the object contrast obj for the next slab.
 		'''
 		prog, queue, grid = self.prog, self.queue, self.grid
 		aug, eta = [self.eta[i] for i in [self.slab - 1, self.slab]]
-		# Copy and convert the new contribution to the average
+		# Copy and convert the next slab index
 		aug.set(obj.astype(np.complex64).ravel('F'))
 		prog.obj2eta(queue, grid, None, aug.data)
 		# Compute the ratio for backscattering
 		prog.etafrac(queue, grid, None, self.efrac.data, eta.data, aug.data)
-		# Update the average for propagation
-		prog.avgeta(queue, grid, None, eta.data, aug.data)
 		# Increment the rolling slab counter
 		self.slab = (self.slab + 1) % 2
 
@@ -502,13 +501,16 @@ class SplitStep(object):
 		return eta
 
 
-	def advance(self, obj, bfld = None):
+	def advance(self, obj, bfld = None, prev = None, tau = 2.):
 		'''
 		Propagate a field through a slab with object contrast obj and
 		use it to compute an estimate of the actual field in the slab.
 
 		The field bfld, if provided, is the current guess of a field
-		running counter to the field to be updated.
+		running counter to the field to be updated. The field prev, if
+		provided, is the current guess of the field to be updated. The
+		update is computed using a relaxation technique with parameter
+		tau >= 2.
 		'''
 		prog, queue, grid = self.prog, self.queue, self.grid
 		# Update the average refractive index and grab the CL buffer
@@ -538,9 +540,13 @@ class SplitStep(object):
 		# Multiply by the phase screen
 		prog.screen(queue, grid, None, fld, eta)
 
-		# Copy the guessed backward field if provided
+		# Copy the backward field if provided
 		if bfld is not None:
 			self.bfld.set(bfld.astype(np.complex64).ravel('F'))
+		# Copy any provided prior guess if it will be used in the update
+		if prev is not None and tau > 2:
+			self.ffld.set(prev.astype(np.complex64).ravel('F'))
 
 		# Compute a relaxation update
-		prog.update(queue, grid, None, fld, self.bfld.data, self.efrac.data)
+		prog.update(queue, grid, None, fld, self.bfld.data,
+				self.efrac.data, self.ffld.data, np.float32(tau))

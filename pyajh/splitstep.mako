@@ -173,10 +173,10 @@ __kernel void wideangle(${gfc} fld, ${gfc} lap, ${gfc} eta) {
 	${getindices('i', 'j', 'idx')}
 
 	const float2 eval = eta[idx];
-	const float2 etafrac = cdiv(eval - (float2) (1., 0.), (float2) (2.) * eval);
+	const float2 efrac = cdiv(eval - (float2) (1., 0.), (float2) (2.) * eval);
 
-	/* Compute i * k0 * dz * etafrac. */
-	const float2 cor = (float2) (${k0 * dz}) * imul(etafrac);
+	/* Compute i * k0 * dz * efrac. */
+	const float2 cor = (float2) (${k0 * dz}) * imul(efrac);
 	/* Multiply the correction by the Laplacian and add to the field. */
 	fld[idx] += cmul(cor, lap[idx]);
 }
@@ -221,12 +221,14 @@ __kernel void green3d(${gfc} fld, const float zoff) {
 
 /* Update the guess of the field in a slab based on the propagation of the
  * preceding field and the back-propagated field using a relaxation method with
- * parameter tau = 2 (no memory of past guesses). */
-__kernel void update(${gfc} fwd, ${gfc} back, ${gfc} efrac) {
+ * parameter tau and prior guess prev. */
+__kernel void update(${gfc} fwd, ${gfc} back, ${gfc} efrac,
+			${gfc} prev, const float tau) {
 	${getindices('i', 'j', 'idx')}
 
 	const float2 fval = fwd[idx];
 	const float2 bval = back[idx];
+	const float2 pval = prev[idx] * (float2) (1. - 2. / tau);
 
 	const float2 eval = efrac[idx];
 	const float2 one = (float2) (1., 0.);
@@ -234,6 +236,6 @@ __kernel void update(${gfc} fwd, ${gfc} back, ${gfc} efrac) {
 	const float2 ep1 = one + eval;
 	const float2 em1 = one - eval;
 
-	const float2 nval = (float2) (0.5) * (cmul(ep1, fval) + cmul(em1, bval));
-	fwd[idx] = nval;
+	const float2 nval = (cmul(ep1, fval) + cmul(em1, bval)) / (float2) (tau);
+	fwd[idx] = pval + nval;
 }

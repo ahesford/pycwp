@@ -197,6 +197,13 @@ class Slicer(object):
 		return
 
 
+	def truncate(self, size = None):
+		'''
+		Truncate the backer file to zero bytes.
+		'''
+		self.backer.truncate(size)
+
+
 	def setslice(self, i):
 		'''
 		Point the file to the start of slice i.
@@ -234,6 +241,7 @@ class Slicer(object):
 			raise ValueError('Slice size does not agree with output')
 
 		sflat.astype(self.dtype).tofile(self.backer)
+		self.backer.flush()
 
 
 	def __getitem__(self, key):
