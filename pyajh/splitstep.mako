@@ -141,7 +141,7 @@ __kernel void etafrac(${gfc} efrac, ${gfc} cur, ${gfc} next) {
 }
 
 /* Apply the homogeneous propagator to the field in the spectral domain. */
-__kernel void propagate(${gfc} fld) {
+__kernel void propagate(${gfc} fld, const float dz) {
 	/* Grab the spectral sample to be propagated. */
 	${getindices('i', 'j', 'idx')}
 
@@ -149,7 +149,7 @@ __kernel void propagate(${gfc} fld) {
 	${getkxy('i', 'j')}
 	const float2 kz = csqrt((float2) (${k0**2} - kxy, 0.));
 	/* Compute the propagator, exp(i * kz * dz). */
-	const float2 prop = cexp(imul(kz) * (float2) (${dz}));
+	const float2 prop = cexp(imul(kz) * (float2) (dz));
 
 	fld[idx] = cmul(fld[idx], prop);
 }
@@ -168,7 +168,7 @@ __kernel void laplacian(${gfc} lap, ${gfc} fld) {
 }
 
 /* Add the wide-angle correction term to the field. */
-__kernel void wideangle(${gfc} fld, ${gfc} lap, ${gfc} eta) {
+__kernel void wideangle(${gfc} fld, ${gfc} lap, ${gfc} eta, const float dz) {
 	/* Grab the spatial sample for the current work item. */
 	${getindices('i', 'j', 'idx')}
 
@@ -176,19 +176,19 @@ __kernel void wideangle(${gfc} fld, ${gfc} lap, ${gfc} eta) {
 	const float2 efrac = cdiv(eval - (float2) (1., 0.), (float2) (2.) * eval);
 
 	/* Compute i * k0 * dz * efrac. */
-	const float2 cor = (float2) (${k0 * dz}) * imul(efrac);
+	const float2 cor = (float2) (${k0} * dz) * imul(efrac);
 	/* Multiply the correction by the Laplacian and add to the field. */
 	fld[idx] += cmul(cor, lap[idx]);
 }
 
 /* To the field, apply the phase screen resulting from medium variations. */
-__kernel void screen(${gfc} fld, ${gfc} eta) {
+__kernel void screen(${gfc} fld, ${gfc} eta, const float dz) {
 	${getindices('i', 'j', 'idx')};
 
 	const float2 eval = eta[idx] - (float2) (1., 0.);
 
 	/* Compute i * k0 * dz * (eta - 1). */
-	const float2 arg = (float2) (${k0 * dz}) * imul(eval);
+	const float2 arg = (float2) (${k0} * dz) * imul(eval);
 	/* Compute phase = exp(arg). */
 	const float2 ampl = (float2) (exp(arg.x));
 	const float2 phase = ampl * (float2) (cos(arg.y), sin(arg.y));

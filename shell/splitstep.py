@@ -111,62 +111,78 @@ if __name__ == '__main__':
 	fmat = mio.Slicer(TemporaryFile(), p, inmat.dtype, True)
 	bmat = mio.Slicer(TemporaryFile(), p, inmat.dtype, True)
 
+	for step in range(1, steps + 1):
+		print 'Iteration %d of %d' % (step, steps)
+		# Reset and print the progress bar
+		bar.reset()
+		printflush(str(bar) + ' (forward) \r')
+
+		# Compute the initial forward-traveling field
+		sse.setincident(zoff(inmat.shape[-1] + 0.5))
+
+		# Propagate the forward field through each slice
+		for idx in reversed(range(p[-1])):
+			# Grab the contrast for the next slab
+			try: obj[sl] = inmat[idx - 1]
+			except IndexError: obj[:,:] = 0.
+			# Read any existing forward and backward fields
+			ffld = fmat[idx - 1]
+			bfld = bmat[idx]
+			# Advance and write the forward-traveling field
+			sse.advance(obj, bfld, ffld, tau if step > 1 else 2.)
+			ffld = sse.copyfield()
+			fmat[idx - 1] = ffld
+			# Increment and print the progress bar
+			bar.increment()
+			printflush(str(bar) + ' (forward) \r')
+
+		# Reset progress bar and propagating field
+		sse.reset()
+		bar.reset()
+		printflush(str(bar) + ' (backward)\r')
+
+		for idx in range(p[-1]):
+			# Grab the contrast for the next slab
+			try: obj[sl] = inmat[idx]
+			except IndexError: obj[:,:] = 0.
+			# Read any existing forward and backward fields
+			ffld = fmat[idx - 1]
+			bfld = bmat[idx]
+			# Advance and write the backward-traveling field
+			sse.advance(obj, ffld, bfld, tau if step > 1 else 2.)
+			bfld = sse.copyfield()
+			bmat[idx] = bfld
+			# Increment and print the progress bar
+			bar.increment()
+			printflush(str(bar) + ' (backward)\r')
+
+		print
+
 	try:
 		# Create the combined output file
 		outmat = mio.Slicer(args[2], inmat.shape, inmat.dtype, True)
 
-		for step in range(1, steps + 1):
-			print 'Iteration %d of %d' % (step, steps)
-			# Reset and print the progress bar
-			bar.reset()
-			printflush(str(bar) + ' (forward) \r')
-
-			# Compute the initial forward-traveling field
-			sse.setincident(zoff(inmat.shape[-1]))
-
-			# Propagate the forward field through each slice
-			for idx in reversed(range(p[-1])):
-				# Grab the contrast for the next slab
-				try: obj[sl] = inmat[idx - 1]
-				except IndexError: obj[:,:] = 0.
-				# Read any existing forward and backward fields
-				ffld = fmat[idx - 1]
-				bfld = bmat[idx]
-				# Advance and write the forward-traveling field
-				sse.advance(obj, bfld, ffld, tau if step > 1 else 2.)
-				ffld = sse.copyfield()
-				fmat[idx - 1] = ffld
-				# Update the combined output file
-				try: outmat[idx - 1] = bfld[sl] + ffld[sl]
-				except IndexError: pass
-				# Increment and print the progress bar
-				bar.increment()
-				printflush(str(bar) + ' (forward) \r')
-
-			# Reset progress bar and propagating field
-			sse.reset()
-			bar.reset()
-			printflush(str(bar) + ' (backward)\r')
-
-			for idx in range(p[-1]):
-				# Grab the contrast for the next slab
-				try: obj[sl] = inmat[idx]
-				except IndexError: obj[:,:] = 0.
-				# Read any existing forward and backward fields
-				ffld = fmat[idx - 1]
-				bfld = bmat[idx]
-				# Advance and write the backward-traveling field
-				sse.advance(obj, ffld, bfld, tau if step > 1 else 2.)
-				bfld = sse.copyfield()
-				bmat[idx] = bfld
-				# Update the combined output file
-				try: outmat[idx - 1] = bfld[sl] + ffld[sl]
-				except IndexError: pass
-				# Increment and print the progress bar
-				bar.increment()
-				printflush(str(bar) + ' (backward)\r')
-
-			print
+		bar = util.ProgressBar([0, inmat.shape[-1]], width=50)
+		sse.reset()
+		# Cut the step size in half and initialize the slab contrast
+		sse.dz *= 0.5
+		obj[sl] = inmat[-1]
+		sse.etaupdate(obj)
+		print 'Combining forward and backward fields'
+		printflush(str(bar) + '\r')
+		for idx in reversed(range(inmat.shape[-1])):
+			# Combine the forward and reversed fields in one slice
+			ffld = fmat[idx]
+			bfld = bmat[idx]
+			sse.copyfield(ffld + bfld)
+			# Grab the next slab contrast
+			try: obj[sl] = inmat[idx - 1]
+			except IndexError: obj[:,:] = 0.
+			# Propagate the field to the midpoint
+			sse.advance(obj)
+			outmat[idx] = sse.copyfield()[sl]
+			bar.increment()
+			printflush(str(bar) + '\r')
 	except:
 		# Failure will always truncate the output
 		outmat.truncate(0)

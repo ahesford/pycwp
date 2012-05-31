@@ -413,7 +413,7 @@ class SplitStep(object):
 		# Build the program for the context
 		t = Template(filename=SplitStep._kernel, output_encoding='ascii')
 		self.prog = cl.Program(self.context, t.render(grid = self.grid,
-			k0=k0, h=h, src=src, d=d, l=l, dz=self.dz)).build()
+			k0=k0, h=h, src=src, d=d, l=l)).build()
 
 		# Create a command queue for the context
 		self.queue = cl.CommandQueue(self.context)
@@ -501,7 +501,7 @@ class SplitStep(object):
 		return eta
 
 
-	def advance(self, obj, bfld = None, prev = None, tau = 2.):
+	def advance(self, obj, bfld = None, prev = None, tau = None):
 		'''
 		Propagate a field through a slab with object contrast obj and
 		use it to compute an estimate of the actual field in the slab.
@@ -511,12 +511,17 @@ class SplitStep(object):
 		provided, is the current guess of the field to be updated. The
 		update is computed using a relaxation technique with parameter
 		tau >= 2.
+
+		If tau is None, forward-only propagation is assumed.
 		'''
 		prog, queue, grid = self.prog, self.queue, self.grid
 		# Update the average refractive index and grab the CL buffer
 		eta = self.etaupdate(obj).data
 		# Point to the field and Laplacian data
 		fld, lap = self.fld.data, self.lap.data
+
+		# The step size of the slab
+		dz = np.float32(self.dz)
 
 		# Attenuate the boundaries using a Hann window, if desired
 		if self.l > 0:
@@ -525,7 +530,7 @@ class SplitStep(object):
 
 		# Take the forward FFT of the field and apply the propagator
 		self.fftplan.execute(fld)
-		prog.propagate(queue, grid, None, fld)
+		prog.propagate(queue, grid, None, fld, dz)
 
 		# Compute the Laplacian in the spectral domain
 		prog.laplacian(queue, grid, None, lap, fld)
@@ -535,10 +540,12 @@ class SplitStep(object):
 		self.fftplan.execute(lap, inverse=True)
 
 		# Add the wide-angle correction term
-		prog.wideangle(queue, grid, None, fld, lap, eta)
+		prog.wideangle(queue, grid, None, fld, lap, eta, dz)
 
 		# Multiply by the phase screen
-		prog.screen(queue, grid, None, fld, eta)
+		prog.screen(queue, grid, None, fld, eta, dz)
+
+		if tau is None: return
 
 		# Copy the backward field if provided
 		if bfld is not None:
