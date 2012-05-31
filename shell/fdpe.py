@@ -110,9 +110,7 @@ if __name__ == '__main__':
 	printflush(str(bar) + '\r')
 
 	# Set up a slice-wise output writer, clobbering any existing file
-	outmat = mio.Slicer(args[2], inmat.shape, inmat.dtype, True)
-
-	try:
+	with mio.Slicer(args[2], inmat.shape, inmat.dtype, True) as outmat:
 		# Loop through all slices and compute the propagated field
 		for idx in reversed(range(inmat.shape[-1])):
 			# Read the current contrast slab into the buffer
@@ -129,6 +127,3 @@ if __name__ == '__main__':
 			printflush(str(bar) + '\r')
 
 		print
-	except KeyboardInterrupt:
-		# Truncate the output file to quickly end
-		outmat.backer.truncate(0)

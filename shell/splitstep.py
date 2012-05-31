@@ -107,7 +107,6 @@ if __name__ == '__main__':
 	bar = util.ProgressBar([0, p[-1]], width=50)
 
 	# Open temporary files to store the forward and backward fields 
-	# Exceptions (not caught) will kill the interpreter, which is desirable
 	fmat = mio.Slicer(TemporaryFile(), p, inmat.dtype, True)
 	bmat = mio.Slicer(TemporaryFile(), p, inmat.dtype, True)
 
@@ -158,10 +157,8 @@ if __name__ == '__main__':
 
 		print
 
-	try:
-		# Create the combined output file
-		outmat = mio.Slicer(args[2], inmat.shape, inmat.dtype, True)
-
+	# Create a combined output file; errors will truncate the file
+	with mio.Slicer(args[2], inmat.shape, inmat.dtype, True) as outmat:
 		bar = util.ProgressBar([0, inmat.shape[-1]], width=50)
 		sse.reset()
 		# Cut the step size in half and initialize the slab contrast
@@ -183,7 +180,3 @@ if __name__ == '__main__':
 			outmat[idx] = sse.copyfield()[sl]
 			bar.increment()
 			printflush(str(bar) + '\r')
-	except:
-		# Failure will always truncate the output
-		outmat.truncate(0)
-		raise

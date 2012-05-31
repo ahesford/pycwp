@@ -144,6 +144,9 @@ class Slicer(object):
 
 			# Grab the matrix header, size, and data type
 			self.shape, self.dtype = getmattype(f, dim, dtype)
+
+			# The file was not created or truncated by the slicer
+			self._created = False
 		except IOError:
 			# The file does not exist or should be clobbered
 			# Make sure the dimensions and data type are specified
@@ -153,6 +156,9 @@ class Slicer(object):
 			# Open a file if a name was provided
 			if isinstance(f, (str, unicode)): f = open(f, mode='wb+')
 			else: f.truncate(0)
+
+			# Note that the file was created or truncated
+			self._created = True
 
 			# Copy the matrix shape and data type
 			self.shape = dim[:]
@@ -165,21 +171,47 @@ class Slicer(object):
 			f.truncate(f.tell() + cutil.prod(self.shape) * self.dtype().nbytes)
 
 		# Copy the backer file
-		self.backer = f
+		self._backer = f
 
 		# The number of elements and bytes per slice
 		self.nelts = cutil.prod(self.shape[:-1])
 		self.slicebytes = self.nelts * self.dtype().nbytes
 
 		# Store the start of the data block
-		self.fstart = self.backer.tell()
+		self.fstart = self._backer.tell()
+
+
+	def __enter__(self):
+		'''
+		Return self to allow the Slicer to act as a context manager.
+		'''
+		return self
+
+
+	def __exit__(self, exc_type, exc_val, exc_tb):
+		'''
+		Close the backer file on context manager exit. If an exception
+		was raised and the file was created or truncated, truncate to
+		zero length to avoid lengthy write-outs on OS X.
+		'''
+		clean = (exc_type is None and exc_val is None and exc_tb is None)
+
+		# Truncate the file on exception
+		if not clean and self._created is True:
+			self._backer.truncate(0)
+
+		# Close the backer
+		self._backer.close()
+
+		# Tell the interpreter whether to raise an exception
+		return clean
 
 
 	def __del__(self):
 		'''
 		Close the open data file on delete.
 		'''
-		self.backer.close()
+		self._backer.close()
 
 
 	def __iter__(self):
@@ -197,13 +229,6 @@ class Slicer(object):
 		return
 
 
-	def truncate(self, size = None):
-		'''
-		Truncate the backer file to zero bytes.
-		'''
-		self.backer.truncate(size)
-
-
 	def setslice(self, i):
 		'''
 		Point the file to the start of slice i.
@@ -216,14 +241,14 @@ class Slicer(object):
 		if i < 0: i = i + self.shape[-1]
 
 		# Point to the start of the desired slice
-		self.backer.seek(self.fstart + i * self.slicebytes)
+		self._backer.seek(self.fstart + i * self.slicebytes)
 
 
 	def readslice(self):
 		'''
 		Read the slice at the current file position.
 		'''
-		data = np.fromfile(self.backer, dtype=self.dtype, count=self.nelts)
+		data = np.fromfile(self._backer, dtype=self.dtype, count=self.nelts)
 		if data.size != self.nelts or data is None:
 			raise ValueError('Failed to read current slice')
 		return data.reshape(self.shape[:-1], order='F')
@@ -240,8 +265,8 @@ class Slicer(object):
 		if sflat.shape[0] != self.nelts:
 			raise ValueError('Slice size does not agree with output')
 
-		sflat.astype(self.dtype).tofile(self.backer)
-		self.backer.flush()
+		sflat.astype(self.dtype).tofile(self._backer)
+		self._backer.flush()
 
 
 	def __getitem__(self, key):
