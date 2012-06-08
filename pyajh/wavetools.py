@@ -732,12 +732,12 @@ class SplitPade(object):
 			uc.append(cv)
 
 		# Remove large denominators and small numerators
-		uc = filter(lambda e: abs(e[1]) <= 1. and abs(e[0]) > tol, uc)
+		uc = [e for e in uc if abs(e[1]) <= 1. and abs(e[0]) > tol]
 
 		# Replace skipped pairs with random values
 		for i in range(self.order - len(uc)):
 			uc.append((random.random(), random.random()))
 
 		# Store the new coefficients in the original arrays
-		self.a[:] = map(lambda e: e[0], uc)
-		self.b[:] = map(lambda e: e[1], uc)
+		self.a[:] = [e[0] for e in uc]
+		self.b[:] = [e[1] for e in uc]
