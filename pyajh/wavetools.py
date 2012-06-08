@@ -5,8 +5,8 @@ solvers, Green's functions, and a split-step solver.
 '''
 
 import math, cmath, numpy as np, scipy as sp
-import numpy.fft as fft, scipy.special as spec, scipy.sparse.linalg as la
-from numpy.linalg import norm
+from numpy import fft, linalg, random
+import scipy.special as spec, scipy.sparse.linalg as la
 from itertools import izip, product
 
 from .cutil import rotate
@@ -532,135 +532,212 @@ class SplitStep(object):
 		return self.phasescreen(eta) * fld
 
 
-class FDPE(object):
+class SplitPade(object):
 	'''
-	A class to advance a wavefront through an arbitrary medium using a
-	Crank-Nicolson finite difference scheme to solve the parabolic wave
-	equation with a quadratically increasing PML along each edge.
+	This class decomposes the split-step solution
+
+		u(x, y, z + dz) = exp(1j * k * dz * sqrt(1 + Q)) u(x, y, z)
+
+	for a differential operator Q into a split-step Padé solution
+
+		u(x, y, z + dz) = e + sum(inv(1 + b[l] * Q) * a[l] * Q * u(x, y, z)),
+
+	where e = exp(1j * k * dz), for l from 1 to some order N and a[l]
+	and b[l] are coefficients subject to the constraint
+
+		sum(a[l] / b[l]) = -1.
+
+	In other words,
+
+		exp(1j * k * dz * sqrt(1 + Q)) = e + sum(a[l] * Q / (1 + b[l] * Q))
+	
+	approximately. The class uses a modified Newton method to find the
+	coefficients a[l] and b[l] for a prescribed order.
 	'''
-	def __init__(self, k0, nx, ny, h, sigma, l, dz = None):
+	def __init__(self, kz, order = 8):
 		'''
-		Initialize a class to solve the Crank-Nicolson finite
-		difference equations corresponding to the parabolic wave
-		equation. The phase variation exp(ikz) is canceled to ensure
-		the field is slowly varying along the propagation axis.
+		Establish a split-step Padé approximant of desired order to the
+		split-step propagation operator characterized by kz = k0 * dz
+		for a propagation step dz.
 		'''
-		# Copy the parameters
-		self.grid = nx, ny
-		self.h, self.k0 = h, k0
-		# Set the step length
-		self.dz = dz if dz else h
+		self.ikz = 1j * kz
+		self.eikz = np.exp(self.ikz)
+		self.order = order
 
-		# Compute the PML profile of width l for grid indices c
-		def sigprof(c):
-			n = c.size
-			# The left and right PML boundaries
-			o, p = l - 0.5, n - l - 0.5
-			# The values c - o, p - c are less than zero inside the PML
-			prof = np.minimum(np.minimum(c - o, p - c), 0.)**2
-			return 1. + 1j * sigma * h**2 * prof
+		# Initialize the coefficient vectors
+		self.b = np.linspace(1e-2, 1., self.order, False).astype(complex)
+		self.a = random.rand(self.order,).astype(complex)
 
-		# Create some convenient coordinate indices
-		x, y = np.ogrid[:nx, :ny]
-
-		# Compute the x and y profiles for the PML
-		sp = [[sigprof(c + s * 0.5) for s in [0., 1., -1.]] for c in [x, y]]
-
-		# Replace the PML profiles with the reciprocals of the
-		# products required in the second-order differences
-		# The first entry of each sigma takes the form sigma[i] * sigma[i + 1/2]
-		# The second takes the form sigma[i] * sigma[i - 1/2]
-		self.sigx, self.sigy = [[1. / (s[0] * sv) for sv in s[1:]] for s in sp]
-
-		# Compute the scale parameters a- and a+
-		self.a = [0.25 * (1. + d * self.k0 * self.dz) for d in [-1j, +1j]]
-
-		# Keep track of the number of slabs
-		self.slab = 0
+		# Initialize the derivative coefficients of the propagator
+		self.derivs = self.operderivs()
 
 
-	def slicecoords(self):
+	@staticmethod
+	def sspcoeffs(p, scale = 1.):
 		'''
-		Return the meshgrid coordinate arrays for an x-y slab in the
-		current engine. The origin is in the center of the slab.
+		Given a series of quasi-polynomial coefficients in the
+		dictionary p, return in np the coefficients for the derivative
+		of the operator
+
+			f(Q) = exp(sqrt(1 + Q)) * sum(p[i] * sqrt(1 + Q)**i)
+
+		such that
+
+			f'(Q) = exp(sqrt(1 + Q)) * sum(np[i] * sqrt(1 + Q)**i).
+
+		The keys of p and np represent the powers of sqrt(1 + Q), while
+		the values are the coefficients.
+
+		Each coefficient will be multiplied by scale, if provided.
 		'''
-		g = self.grid
-		cg = np.ogrid[:g[0], :g[1]]
-		return [(c - 0.5 * (n - 1.)) * self.h for c, n in zip(cg, g)]
+		# A factor of 0.5 appears as a result of the derivative
+		mpy = 0.5 * scale
+		# Drop the power of each coefficient by one
+		shifted = [(s - 1, mpy * c) for s, c in p.iteritems()]
+		# Take the derivative of each term and drop the powers by one
+		shderiv = [(s - 2, mpy * c * s) for s, c in p.iteritems() if s != 0]
+
+		np = dict(shifted)
+		for s, c in shderiv:
+			try: np[s] += c
+			except KeyError: np[s] = c
+
+		return np
 
 
-	def applydiffs(self, q, fld, left = True):
+	def operderivs(self, q = 0):
 		'''
-		Apply the finite-difference operator to a field fld propagating
-		through a medium with acoustic contrast q.
+		Return, in an array, the value of the propagation operator
 
-		If left is True, the operator is applied at the next slab using
-		the a- parameter (1 - ikz); otherwise, the operator is applied
-		at the current slab with the a+ operator (1 + ikz).
+			exp(1j * k0 * z * sqrt(1 + q))
+
+		and its Taylor coefficients to order 2 * self.order - 1.
 		'''
-		a = self.a[0] if left else self.a[1]
-		ap = a / (self.k0 * self.h)**2
+		# Initialize the quasi-polynomial for the propagator
+		p = dict(((0, 1), ))
+		# Compute the function value
+		vals = [np.exp(self.ikz * np.sqrt(1. + q))]
+		# A function to compute each term in the derivative sums
+		qsq = np.sqrt(1. + q)
+		term = lambda n, j: (self.ikz)**(n - j) * p[-n - j] * qsq**(-n - j)
+		# Compute each of the derivatives
+		for n in range(1, 2 * self.order):
+			# Scaling by 1/n yields Taylor coefficients instead of
+			# raw derivatives to avoid overflow
+			p = self.sspcoeffs(p, 1. / n)
+			# Compute the derivative as the sum of its terms
+			vals.append(vals[0] * np.sum([term(n, j) for j in range(n)]))
 
-		# Compute all of the self, unstretched terms first
-		res = (1. + a * q) * fld
-
-		# Add the central part of the derivatives
-		res -= ap * (self.sigx[0] + self.sigx[1]) * fld
-		res -= ap * (self.sigy[0] + self.sigy[1]) * fld
-
-		# Add the side terms of the derivatives
-		res[1:-1,:] += ap * self.sigx[0][1:-1,:] * fld[2:,:]
-		res[1:-1,:] += ap * self.sigx[1][1:-1,:] * fld[:-2,:]
-		res[:,1:-1] += ap * self.sigy[0][:,1:-1] * fld[:,2:]
-		res[:,1:-1] += ap * self.sigy[1][:,1:-1] * fld[:,:-2]
-
-		# Enforce Dirichlet boundary conditions
-		res[0,:] = 0
-		res[-1,:] = 0
-		res[:,0] = 0
-		res[:,-1] = 0
-
-		return res
+		return np.array(vals)
 
 
-	def matvec(self, vec):
+	def padederivs(self, q = 0):
 		'''
-		Apply the finite-difference operator to a field propagating
-		through the next slab in a Crank-Nicolson scheme. The vector
-		vec should hold the field, flattened in FORTRAN order, and any
-		index of refraction should have been assigned to the "eta"
-		attribute of the class instance. Otherwise, the index of
-		refraction is assumed to be unity.
+		Return the value of the Padé approximant
+
+			exp(1j * k0 * dz) + sum(a[l] * q / (1 + b[l] * q))
+
+		and its Taylor coefficients to order 2 * self.order - 1.
 		'''
-		vv = np.reshape(vec, self.grid, order='F')
-		try: q = self.q
-		except AttributeError: q = np.ones_like(vv)
-		vv = self.applydiffs(q, vv)
-		return np.ravel(vv, order='F')
+		# Compute the function value
+		vals = [self.eikz + np.sum(self.a * q / (1. + self.b * q))]
+		# Compute each of the derivatives
+		a, b = self.a, self.b
+		for n in range(1, 2 * self.order):
+			d = np.sum(a * (-b)**(n - 1) / (1. + b * q)**(n + 1))
+			vals.append(d)
+
+		return np.array(vals)
 
 
-	def advance(self, fld, q):
+	def costfunc(self):
 		'''
-		Advance the field fld through a slab with index of refraction
-		eta by solving the sparse linear system resulting from
-		Crank-Nicolson finite differences of the parabolic wave
-		equation.
+		Return the value of the cost functional that constrains the
+		coefficients of the Padé approximant.
 		'''
-		self.q = q
-		# Advance the current slice for accurate phase calculation
-		self.slab += 1
-		# Compute the differences of the current field
-		rhs = self.applydiffs(q, fld, False)
-		# Create a LinearOperator to represent the matrix equation
-		n = self.grid[0] * self.grid[1]
-		op = la.LinearOperator((n,n), matvec=self.matvec, dtype=rhs.dtype)
-		nfld, info = la.gmres(op, rhs.ravel('F'),
-				tol = 1e-3, maxiter = 50, x0 = fld.ravel('F'))
-		return np.reshape(nfld, self.grid, order='F')
+		cost = self.padederivs() - self.derivs
+		cost[0] = np.sum(self.a / self.b) + self.eikz
+		return cost
 
 
-	def getphase(self):
+	def jacobian(self):
 		'''
-		Return the phase exp(ikz) corresponding to the current slab.
+		Return the Jacobian of the cost functional.
 		'''
-		return np.exp(1j * self.k0 * self.slab * self.dz)
+		jac = np.empty([2 * self.order] * 2, dtype=complex)
+
+		# Build the Taylor-matching rows of the Jacobian
+		for n in range(1, 2 * self.order):
+			jac[n, :self.order] = (-self.b)**(n - 1)
+			jac[n, self.order:] = -(n - 1) * self.a * (-self.b)**(n - 2)
+
+		# Build the constraint (stability) row of the Jacobian
+		jac[0, :self.order] = 1. / self.b
+		jac[0, self.order:] = -self.a / self.b**2
+
+		return jac
+
+
+	def newton(self, maxiter = 100, epsilon = 1., tol = 1e-6):
+		'''
+		Run a modified Newton method with a maximum of maxiter
+		iterations to compute the cofficients of the split-step Padé
+		approximation to the propagation operator.
+
+		The parameter epsilon may be less than 1 to stabilize the
+		convergence behavior.
+
+		Iteration will terminate early if the magnitude of the update,
+		relative to the existing solution, falls below tol.
+		'''
+		for i in range(maxiter):
+			# Compute the Jacobian at the current point
+			j = self.jacobian()
+			# Solve for the next update
+			v = linalg.lstsq(j, self.costfunc())[0]
+			# Copy the updated solution into the class parameters
+			self.a -= epsilon * v[:self.order]
+			self.b -= epsilon * v[self.order:]
+			# Check for degeneracy
+			self.stabilize(tol)
+
+			if linalg.norm(self.costfunc()) < tol:
+				print 'Convergence after %d iterations' % i
+				break
+
+
+	def stabilize(self, tol = 1e-6):
+		'''
+		Detect whether more than one Padé denominator coefficients are
+		close within tolerance tol (a sign of degeneration to
+		lower-order approximants) and change one (and its corresponding
+		numerator) randomly.
+
+		Also detect denominator coefficients with magnitudes greater
+		than unity (which can instability or degeneracy) and numerator
+		coefficients with magnitudes below the tolerance tol (another
+		sign of degeneracy) and replace the corresponding numerator,
+		denominator pair with randomly selected values.
+		'''
+		# Sort the numerator and denominator pairs by denominator
+		c = [(a, b) for a, b in zip(self.a, self.b)]
+		c.sort(key = lambda e: (e[1].real, e[1].imag))
+
+		# Seed the first pair
+		uc = [c[0]]
+		for cv in c[1:]:
+			# Skip current values too close to the last unique value
+			if abs(cv[-1] - uc[-1][1]) / abs(uc[-1][1]) < tol: continue
+			# Otherwise, update the last unique value
+			uc.append(cv)
+
+		# Remove large denominators and small numerators
+		uc = filter(lambda e: abs(e[1]) <= 1. and abs(e[0]) > tol, uc)
+
+		# Replace skipped pairs with random values
+		for i in range(self.order - len(uc)):
+			uc.append((random.random(), random.random()))
+
+		# Store the new coefficients in the original arrays
+		self.a[:] = map(lambda e: e[0], uc)
+		self.b[:] = map(lambda e: e[1], uc)
