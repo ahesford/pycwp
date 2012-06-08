@@ -45,7 +45,7 @@ def hadamard(x, y):
 	'''
 	Compute the Hadamard product of iterables x and y.
 	'''
-	return map(lambda x, y: x * y, x, y)
+	return map(operator.mul, x, y)
 
 def prod(a):
 	'''
