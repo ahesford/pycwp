@@ -4,6 +4,7 @@ import numpy as np, math, sys, getopt, os
 from tempfile import TemporaryFile
 from pyajh import mio, wavetools, util, cutil
 from pyajh.opencl import wavecl
+from pyajh.f2py import splitstep
 
 def usage(execname):
 	binfile = os.path.basename(execname)
@@ -92,6 +93,9 @@ if __name__ == '__main__':
 			if d is None: return ptsrc
 			else: return ptsrc * wavetools.directivity(obs, src, d[:-1], d[-1])
 		sse.setincgen(srcfld)
+		# Initialize the underlying FFTW library to use threads
+		print 'Using %d threads for calculation' % splitstep.initfft()
+
 	print 'finished'
 
 	# Create a slice tuple to strip out the padding when writing
