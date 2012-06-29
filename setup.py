@@ -17,6 +17,7 @@ def configuration(parent_package='', top_path=None):
 			delegate_options_to_subpackages=True,
 			quiet=True)
 	config.add_subpackage('pyajh')
+	config.add_scripts(['shell/*.py'])
 
 	return config
 
