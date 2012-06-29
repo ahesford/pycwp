@@ -399,6 +399,32 @@ class SplitStep(object):
 
 		# The default attenuation screen is None
 		self._attenuator = None
+		# The default incident field function is None
+		self.setincident = None
+		self.reset()
+
+
+	def reset(self):
+		'''
+		Reset the propagating field and the index of refraction.
+		'''
+		# The default field to propagate is None
+		self.fld = np.zeros(self.grid, dtype=np.complex64, order='F')
+		# Initialize the index of refraction
+		self.eta = [np.ones(self.grid, dtype=np.complex64, order='F')]
+
+
+	def setincgen(self, func):
+		'''
+		Given a function func(obs), where obs is an (x,y,z) triple of
+		coordinates in an observer plane, assign to self.setincident a
+		function of the form f(z) that takes the height z of the slab
+		and sets in self.fld the incident field in the slab.
+		'''
+		def f(z):
+			x, y = self.slicecoords()
+			self.fld = func((x, y, z),)
+		self.setincident = f
 
 
 	def kxy(self):
@@ -458,24 +484,60 @@ class SplitStep(object):
 	def attenuator(self): del self._attenuator
 
 
-	def advance(self, fld, obj):
+	def copyfield(self, fld = None):
 		'''
-		Use the spectral propagator, the phase screen for the current
-		slab, and the attenuation screen to advance the field through
-		one layer of a specified medium with contrast obj. The
-		attenuation screen must have previously been established.
+		If fld is provided, copy the provided field to self.fld.
+		Otherwise, return the contents of self.fld.
+		'''
+		if fld is None: return self.fld
+		else: self.fld = fld
+
+
+	def etaupdate(self, obj):
+		'''
+		Update the rolling buffer with the refractive index
+		corresponding to the object contrast obj for the next slab.
+		'''
+		self.eta.append(splitstep.obj2eta(obj))
+		efrac = splitstep.etafrac(*self.eta)
+		self.eta.pop(0)
+
+		return self.eta[0], efrac
+
+
+	def advance(self, obj, bfld = None, prev = None, tau = None):
+		'''
+		Propagate a field through a slab with object contrast obj and
+		use it to compute an estimate of the actual field in the slab.
+
+		The field bfld, if provided, is the current guess of a field
+		running counter to the field to be updated. The field prev, if
+		provided, is the current guess of the field to be updated. The
+		update is computed using a relaxation technique with parameter
+		tau >= 2.
+
+		If tau is None, forward-only propagation is assumed.
 		'''
 		# Convert the contrast to a scaled wave number
-		eta = np.sqrt(obj + 1.)
+		eta, efrac = self.etaupdate(obj)
 
 		# Attenuate the field if desired
 		if self.attenuator is not None:
-			fld = (fld * self.attenuator[0]) * self.attenuator[1]
+			self.fld = (self.fld * self.attenuator[0]) * self.attenuator[1]
 
+		# Propagate the field
 		kx, ky = self.kxy()
-		fld = splitstep.advance(fld, eta, self.k0, kx, ky, self.dz)
+		self.fld = splitstep.advance(self.fld, eta, self.k0, kx, ky, self.dz)
 
-		return fld
+		if tau is None: return
+
+		# If no backward-traveling or previous fields were provided,
+		# assume they are zero
+		if bfld is None: bfld = np.zeros(self.grid, dtype=obj.dtype, order='F')
+		if prev is None: prev = np.zeros(self.grid, dtype=obj.dtype, order='F')
+
+		# Apply a relaxation update to the traveling field
+		self.fld = splitstep.update(self.fld, bfld, prev, efrac, tau)
 
 
 class SplitPade(object):

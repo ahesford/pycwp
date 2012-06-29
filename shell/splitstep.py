@@ -79,7 +79,19 @@ if __name__ == '__main__':
 	src = tuple(float(s) * f / c for s in args[0].split(','))
 
 	util.printflush('Creating split-step engine... ')
-	sse = wavecl.SplitStep(k0, p[0], p[1], h, src=src, d=d, l=a, context=ctx)
+	if ctx is not None:
+		sse = wavecl.SplitStep(k0, p[0], p[1], h, src=src, d=d, l=a, context=ctx)
+	else:
+		sse = wavetools.SplitStep(k0, p[0], p[1], h)
+		# Set the desired Hann attenuation profile
+		sse.attenuator=a
+		# Set the incident field generator
+		def srcfld(obs):
+			r = np.sqrt(reduce(np.add, ((s - o)**2 for s, o in zip(src, obs))))
+			ptsrc = wavetools.green3d(k0, r)
+			if d is None: return ptsrc
+			else: return ptsrc * wavetools.directivity(obs, src, d[:-1], d[-1])
+		sse.setincgen(srcfld)
 	print 'finished'
 
 	# Create a slice tuple to strip out the padding when writing
@@ -105,12 +117,13 @@ if __name__ == '__main__':
 
 	for step in range(1, steps + 1):
 		print 'Iteration %d of %d' % (step, steps)
-		# Reset and print the progress bar
-		bar.reset()
-		util.printflush(str(bar) + ' (forward) \r')
 
 		# Compute the initial forward-traveling field
 		sse.setincident(zoff(inmat.shape[-1] + 0.5))
+
+		# Reset and print the progress bar
+		bar.reset()
+		util.printflush(str(bar) + ' (forward) \r')
 
 		# Propagate the forward field through each slice
 		for idx in reversed(range(p[-1])):

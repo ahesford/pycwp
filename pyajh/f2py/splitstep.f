@@ -206,6 +206,51 @@ cf2py intent(hide) :: m, n
 !$OMP END PARALLEL DO
       end subroutine laplacian
 
+c Convert an object contrast into an index of refraction
+      subroutine obj2eta(eta, obj, m, n)
+c Arguments:
+c     eta: The index of refraction
+c     obj: The object contrast
+c     m,n: The dimensions of the array
+cf2py intent(out) :: eta
+cf2py intent(hide) :: m,n
+      implicit none
+      integer m,n
+      complex obj(m,n), eta(m,n)
+
+      integer i, j, k, np
+
+      np = m * n
+!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j,k)
+      do 01 k = 1, np
+        call idxmap(i, j, k, m)
+01      eta(i,j) = csqrt(obj(i,j) + 1.)
+!$OMP END PARALLEL DO
+        end subroutine obj2eta
+
+c Compute the ratio of the current index of refraction to the next one
+        subroutine etafrac(efrac, cur, next, m, n)
+c Arguments:
+c       efrac: The ratio of refractive indices
+c       cur:   The refractive index in the current slab
+c       next:  The refractive index in the next slab
+c       m,n:   The dimensions of the arrays
+cf2py intent(out) :: efrac
+cf2py intent(hide) :: m,n
+        implicit none
+        integer m,n
+        complex efrac(m,n), cur(m,n), next(m,n)
+
+        integer i, j, k, np
+
+        np = m * n
+!$OMP PARALLEL DO DEFAULT(SHARED) private(i,j,k)
+        do 01 k = 1, np
+          call idxmap(i, j, k, m)
+01        efrac(i,j) = cur(i,j) / next(i,j)
+!$OMP END PARALLEL DO
+        end subroutine etafrac
+
 c Advance the field through a slice of medium
       subroutine advance(fld, eta, k0, kx, ky, h, m, n)
 c Arguments:
@@ -239,3 +284,36 @@ c Apply wide-angle corrections and the inhomogeneous phase screen
       call wideangle(fld, buf, eta, k0, h, m, n)
       call phasescreen(fld, eta, k0, h, m, n)
       end subroutine advance
+
+c Apply a relaxation update to the field propagated through a slab
+      subroutine update(fwd, back, prev, efrac, tau, m, n)
+c Arguments:
+c     fwd:   The forward-propagating field to be udpated
+c     back:  The field proapgting counter to the field
+c     prev:  The prior guess of the forward-traveling field
+c     efrac: The ratio of the current to the next refractive indices
+c     tau:   The relaxation paramter
+c     m,n:   The dimensions of the field
+cf2py intent(in,out) :: fwd
+cf2py intent(hide) :: m,n
+cf2py optional :: tau=2.
+      implicit none
+      integer m, n
+      complex fwd(m,n), back(m,n), prev(m,n), efrac(m,n)
+      real tau
+
+      integer i, j, k, np
+      complex pval, nval, ep1, em1
+
+      np = m * n
+
+!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j,k,pval,nval,ep1,em1)
+      do 01 k = 1, np
+        call idxmap(i, j, k, m)
+        ep1 = 1. + efrac(i,j)
+        em1 = 1. - efrac(i,j)
+        pval = prev(i,j) * (1. - 2. / tau)
+        nval = (ep1 * fwd(i,j) + em1 * back(i,j)) / tau
+01      fwd(i,j) = pval + nval
+!$OMP END PARALLEL DO
+      end subroutine update
