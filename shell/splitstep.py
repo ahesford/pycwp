@@ -83,9 +83,7 @@ if __name__ == '__main__':
 	if ctx is not None:
 		sse = wavecl.SplitStep(k0, p[0], p[1], h, src=src, d=d, l=a, context=ctx)
 	else:
-		sse = wavetools.SplitStep(k0, p[0], p[1], h)
-		# Set the desired Hann attenuation profile
-		sse.attenuator=a
+		sse = wavetools.SplitStep(k0, p[0], p[1], h, l=a)
 		# Set the incident field generator
 		def srcfld(obs):
 			r = np.sqrt(reduce(np.add, ((s - o)**2 for s, o in zip(src, obs))))

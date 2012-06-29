@@ -54,7 +54,7 @@ cf2py intent(hide) :: m, n
       integer*8 plan
       integer i, j, k, p
 
-      call sfftw_plan_dft_2d(plan, m, n, output, 
+      call sfftw_plan_dft_2d(plan, m, n, output,
      +                       output, dir, FFTW_MEASURE)
 
       p = m * n
@@ -228,6 +228,34 @@ cf2py intent(hide) :: m,n
 !$OMP END PARALLEL DO
         end subroutine obj2eta
 
+c Apply Hann windowing to the boundaries of a field
+        subroutine hann(fld, l, m, n)
+c Arguments:
+c       fld: The field to be windowed
+c       l:   The thickness of the boundary that will be windowed
+c       m,n: The dimensions of the field
+cf2py intent(in,out) :: fld
+cf2py intent(hide) :: m,n
+cf2py integer, optional :: l = 10
+        integer m, n, l
+        complex fld(m,n)
+
+        integer i, k
+        real pi, h
+        parameter (pi = 3.141592653589793)
+
+!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,k,h)
+        do 01 k = 1, l
+          h = sin(pi * real(k - 1) / real(2 * l - 1.))**2
+          do 02 i = 1, m
+            fld(i,k) = fld(i,k) * h
+02          fld(i,n-k+1) = fld(i,n-k+1) * h
+           do 01 i = 1, n
+             fld(k,i) = fld(k,i) * h
+01           fld(m-k+1,i) = fld(m-k+1,i) * h
+!$OMP END PARALLEL DO
+        end subroutine hann
+
 c Compute the ratio of the current index of refraction to the next one
         subroutine etafrac(efrac, cur, next, m, n)
 c Arguments:
@@ -251,24 +279,72 @@ cf2py intent(hide) :: m,n
 !$OMP END PARALLEL DO
         end subroutine etafrac
 
+c Build arrays of x and y spatial frequencies
+        subroutine buildkxy(kx, ky, h, m, n)
+c Arguments:
+c       kx,ky: The x and y spatial frequency arrays
+c       h:     The sample spacing
+c       m,n:   The length of the kx and ky arrays, respectively
+cf2py intent(out) :: kx, ky
+        integer m, n
+        real kx(m), ky(n), h
+
+        real pi
+        parameter (pi = 3.141592653589793)
+        integer i, half, kv
+
+        half = (m - 1) / 2
+
+!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,kv)
+        do 01 i = 1, m
+          if (i .LE. half + 1) then
+            kv = i - 1
+          else
+            kv = i - m - 1
+          endif
+01        kx(i) = 2. * pi * kv / (h * m)
+!$OMP END PARALLEL DO
+
+        half = (n - 1) / 2
+
+!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,kv)
+        do 02 i = 1, n
+          if (i .LE. half + 1) then
+            kv = i - 1
+          else
+            kv = i - n - 1
+          endif
+02        ky(i) = 2. * pi * kv / real(h * n)
+!$OMP END PARALLEL DO
+        end subroutine buildkxy
+
 c Advance the field through a slice of medium
-      subroutine advance(fld, eta, k0, kx, ky, h, m, n)
+      subroutine advance(fld, eta, k0, h, l, m, n)
 c Arguments:
 c     fld:   The field to be advanced
 c     eta:   The index of refraction of the medium
 c     k0:    The reference wave number, unitless
-c     kx,ky: The transverse spatial frequencies
 c     h:     The propagate distance in wavelengths
+c     l:     The width of a Hann window to apply to the field boundaries
 c     m,n:   The dimensions of the slice
 cf2py intent(in,out) :: fld
 cf2py intent(hide) :: m, n
+cf2py integer, optional :: l = 10
       implicit none
       include 'fftw3.f'
-      integer m,n
+      integer m, n, l
       complex fld(m,n), eta(m,n)
-      real k0, h, kx(m), ky(n)
+      real k0, h
 
       complex lap(m,n), buf(m,n)
+      real kx(m), ky(n)
+
+      if (l > 0) then
+        call hann(fld, l, m, n)
+      endif
+
+c Build the spatial frequencies
+      call buildkxy(kx, ky, h, m, n)
 
 c Tranform and propagate the field
       call fftfield(FFTW_FORWARD, buf, fld, m, n)
@@ -296,7 +372,7 @@ c     tau:   The relaxation paramter
 c     m,n:   The dimensions of the field
 cf2py intent(in,out) :: fwd
 cf2py intent(hide) :: m,n
-cf2py optional :: tau=2.
+cf2py real, optional :: tau=2.
       implicit none
       integer m, n
       complex fwd(m,n), back(m,n), prev(m,n), efrac(m,n)
