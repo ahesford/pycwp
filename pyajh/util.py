@@ -2,6 +2,14 @@
 General-purpose, non-numerical routines.
 '''
 
+def printflush(string):
+	'''
+	Print a string, without a newline, and flush stdout.
+	'''
+	from sys import stdout
+	print string,
+	stdout.flush()
+
 class ProgressBar:
 	'''
 	Generate a string representing a progress bar on the console.

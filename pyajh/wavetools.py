@@ -4,13 +4,13 @@ magnitude correction for comparison of k-space (FDTD) and integral equation
 solvers, Green's functions, and a split-step solver.
 '''
 
-import math, cmath, numpy as np, scipy as sp
+import sys, math, cmath, numpy as np, scipy as sp
 from numpy import fft, linalg, random
-import scipy.special as spec, scipy.sparse.linalg as la
-from itertools import izip, product
+import scipy.special as spec, scipy.sparse.linalg as la, scipy.sparse as sparse
+from itertools import izip, product, repeat
 
-from .cutil import rotate
-from . import mio
+from . import mio, cutil
+from .f2py import pade, splitstep
 
 
 def gencompress(c, rho, atn):
@@ -199,8 +199,8 @@ def duffyint(k, obs, cell, n = 4, greenfunc = greenduf3d):
 		val += srcint(k, src, [0.]*dim, dc, grf, n)
 
 		# Rotate the next axis into the x position
-		obs = rotate(obs)
-		cell = rotate(cell)
+		obs = cutil.rotate(obs)
+		cell = cutil.rotate(cell)
 
 	return val
 
@@ -256,34 +256,34 @@ class CGFFT(object):
 		use in CG-FFT over a non-extended grid with dimensions
 		specified in the list grid. Each cell has dimensions specified
 		in the list cell.
-		
+
 		The Green's function greenfunc(k,r) takes as arguments the wave
 		number and a scalar distance or numpy array of distances
 		between the source and observation locations. The 3-D Green's
 		function is used by default.
 		'''
-		
+
 		dim = len(grid)
-		
+
 		if dim != len(cell):
 			raise ValueError('Dimensionality of cell and grid lists must agree.')
-		
+
 		# Build the coordinate index arrays in floating-point
 		coords = np.ogrid[[slice(2 * g) for g in grid]]
-		
+
 		# Wrap the coordinate arrays and convert to cell coordinates
 		coords = [c * (x < g).choose(x - 2 * g, x)
 				for c, g, x in zip(cell, grid, coords)]
-		
+
 		# Compute the distances along the coordinate grids
 		r = np.sqrt(np.sum([c**2 for c in coords], axis=0))
-		
+
 		# Evaluate the Green's function on the grid
 		self.grf = greenfunc(k, r) * np.prod(cell)
-		
+
 		# Correct the zero value to remove the singularity
 		self.grf[[slice(1) for d in range(dim)]] = duffyint(k, [0.]*dim, cell)
-		
+
 		# Compute the FFT of the extended-grid Green's function
 		self.grf = fft.fftn(k**2 * self.grf)
 
@@ -294,7 +294,7 @@ class CGFFT(object):
 		'''
 		if len(fld.shape) != len(self.grf.shape):
 			raise ValueError('Arguments must have same dimensionality.')
-		
+
 		# Compute the convolution with the Green's function
 		efld = fft.ifftn(self.grf * fft.fftn(fld, s = self.grf.shape))
 
@@ -317,16 +317,16 @@ class CGFFT(object):
 		rhs. The iterative solver itfunc is used, from
 		scipy.sparse.linalg.
 		'''
-		
+
 		# Compute the dimensions of the linear system
 		n = np.prod(obj.shape)
-		
+
 		# Function to compute the matrix-vector product
 		mvp = lambda v: self.scatmvp(v.reshape(obj.shape, order='F'), obj).ravel('F')
-		
+
 		# Build the scattering operator class
 		scatop = la.LinearOperator((n,n), matvec=mvp, dtype=rhs.dtype)
-		
+
 		# Solve the scattering problem
 		p, info = itfunc(scatop, rhs.flatten('F'), **kwargs)
 		p = p.reshape(obj.shape, order='F')
@@ -399,8 +399,6 @@ class SplitStep(object):
 
 		# The default attenuation screen is None
 		self._attenuator = None
-		# Build the Green's function for the stepper
-		self.buildgreen()
 
 
 	def kxy(self):
@@ -411,37 +409,11 @@ class SplitStep(object):
 		except AttributeError:
 			# Get the coordinate indices for each slab
 			nx, ny = self.grid
-			sl = np.ogrid[-nx/2:nx/2, -ny/2:ny/2]
-
-			# Compute the transverse wave numbers
-			dk = 2. * math.pi / self.h
-			kx, ky = [fft.fftshift((dk * s) / n)
-					for s, n in zip(sl, [nx, ny])]
+			kx = 2. * math.pi * fft.fftfreq(nx, self.h)
+			ky = 2. * math.pi * fft.fftfreq(ny, self.h)
 
 			self._kxy = kx, ky
 			return self._kxy
-
-
-	def buildgreen(self, dz = None):
-		'''
-		Build the Green's for propagation through a step dz. If dz is
-		not provided, use the default specified for the class instance.
-
-		The exact spectral representation of the Green's function is
-		used. This seems to yield some error relative to the FFT of the
-		spatial representation computed with green3dpar.
-
-		For a fully accurate spatial convolution, the Green's function
-		should be evaluated on a grid twice as large in each dimension
-		as the field samples. However, since the spectral Green's
-		function decays exponentially on the extended grid, sufficient
-		accuracy seems to be obtained without extending the grid.
-		'''
-		if dz is not None: self.dz = dz
-
-		kx, ky = self.kxy()
-		kz = np.sqrt(complex(self.k0**2) - kx**2 - ky**2)
-		self.grf = np.exp(1j * self.dz * kz)
 
 
 	def slicecoords(self):
@@ -486,23 +458,6 @@ class SplitStep(object):
 	def attenuator(self): del self._attenuator
 
 
-	def phasescreen(self, eta):
-		'''
-		Generate the phase screen for a slab characterized by scaled
-		wave number eta.
-		'''
-		return np.exp(1j * self.dz * self.k0 * (eta - 1.))
-
-
-	def wideangle(self, lap, eta):
-		'''
-		Return the wide-angle corrections to a field with Laplacian lap
-		propagating through a medium slab with index of refraction eta.
-		'''
-		cor = 1j * self.k0 * self.dz * (eta - 1.) / (2. * eta)
-		return cor * lap
-
-
 	def advance(self, fld, obj):
 		'''
 		Use the spectral propagator, the phase screen for the current
@@ -517,19 +472,10 @@ class SplitStep(object):
 		if self.attenuator is not None:
 			fld = (fld * self.attenuator[0]) * self.attenuator[1]
 
-		# Compute the extended Green's-function convolution in spectrum
-		efld = self.grf * fft.fftn(fld, s=self.grf.shape)
-
-		# Prepare the domain truncation slice objects
-		sl = [slice(g) for g in self.grid]
-
-		# Pre-compute the Laplacian of the field
 		kx, ky = self.kxy()
-		lap = fft.ifftn((kx**2 * efld + ky**2 * efld) / self.k0**2)[sl]
-		# Return the field to the spatial domain with wide-angle corrections
-		fld = fft.ifftn(efld)[sl] + self.wideangle(lap, eta)
-		# Apply the phase screen as the final step
-		return self.phasescreen(eta) * fld
+		fld = splitstep.advance(fld, eta, self.k0, kx, ky, self.dz)
+
+		return fld
 
 
 class SplitPade(object):
@@ -550,17 +496,23 @@ class SplitPade(object):
 	In other words,
 
 		exp(1j * k * dz * sqrt(1 + Q)) = e + sum(a[l] * Q / (1 + b[l] * Q))
-	
+
 	approximately. The class uses a modified Newton method to find the
 	coefficients a[l] and b[l] for a prescribed order.
 	'''
-	def __init__(self, kz, order = 8):
+	def __init__(self, k0, dz, order = 8, l = None):
 		'''
 		Establish a split-step Padé approximant of desired order to the
 		split-step propagation operator characterized by kz = k0 * dz
-		for a propagation step dz.
+		for a propagation step dz through wave number k0.
+
+		When the Padé approximant is used to compute propagation, a
+		Hann window of length l (if provided) is applied to the field
+		to avoid aliasing problems.
 		'''
-		self.ikz = 1j * kz
+		self.k0 = k0
+		self.dz = dz
+		self.ikz = 1j * k0 * dz
 		self.eikz = np.exp(self.ikz)
 		self.order = order
 
@@ -570,6 +522,13 @@ class SplitPade(object):
 
 		# Initialize the derivative coefficients of the propagator
 		self.derivs = self.operderivs()
+
+		# Build the two-sided Hann window for apodization
+		if l is not None and l > 0: self.hann = np.hanning(2 * l)
+		else: self.hann = None
+
+		# Initial guesses
+		self.x0 = [None]*self.order
 
 
 	@staticmethod
@@ -741,3 +700,48 @@ class SplitPade(object):
 		# Store the new coefficients in the original arrays
 		self.a[:] = [e[0] for e in uc]
 		self.b[:] = [e[1] for e in uc]
+
+
+	def propagate(self, fld, obj, solver=la.lgmres, **kwargs):
+		'''
+		Compute the propagation of a field fld through a slab with
+		scattering contrast obj using a split-step Padé approximant.
+
+		The kwargs are passed to the solver to invert the denominator.
+		'''
+		# Attenuate the field before propagation
+		if self.hann is not None:
+			l = len(self.hann) / 2
+			fld[:l,:] *= self.hann[:l, np.newaxis]
+			fld[-l:,:] *= self.hann[-l:, np.newaxis]
+			fld[:,:l] *= self.hann[np.newaxis, :l]
+			fld[:,-l:] *= self.hann[np.newaxis, -l:]
+
+		# Ensure the field and contrast are 128-bit complex values
+		f = fld.astype(complex)
+		o = obj.astype(complex)
+
+		# Define functions to convert between gridded and flattened arrays
+		grid = lambda x: x.reshape(f.shape, order='F')
+		flat = lambda x: x.ravel('F')
+
+		# Compute the first solution term and the RHS for linear systems
+		outfld = self.eikz * f
+
+		# Build the shape of the flattened matrix
+		shape = [np.prod(o.shape)]*2
+
+		for i, (a, b, x0) in enumerate(zip(self.a, self.b, self.x0)):
+			print 'Computing Padé contribution', i + 1
+			mv = lambda x: flat(pade.scatop(o, grid(x), self.dz, self.k0, 1., b))
+			A = la.LinearOperator(shape, dtype=complex, matvec=mv)
+
+			x, info = solver(A, flat(f), x0=x0, **kwargs)
+			if info != 0: print 'Iterative solver failed with error', info
+
+			# Store the (advanced) previous solution for the next round
+			self.x0[i] = x * np.exp(1j * self.k0 * self.dz)
+
+			outfld += pade.scatop(o, grid(x), self.dz, self.k0, 0., a)
+
+		return outfld

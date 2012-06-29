@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 
 import numpy as np, math, sys, getopt, os
-from pyajh import mio, cutil, harmonic, wavecl
+from pyajh import mio, cutil, harmonic
+from pyajh.opencl import wavecl
 
 def usage(execname):
 	binfile = os.path.basename(execname)

@@ -1,29 +1,12 @@
 import numpy as np, scipy.special as spec, math
-import pyopencl as cl, pyopencl.array as cla, os.path as path
+import pyopencl as cl, pyopencl.array as cla
 
 from pyfft.cl import Plan
-
 from itertools import product, chain
 from mako.template import Template
-from . import fdtd, wavetools
 
-def grabcontext(context = None):
-	'''
-	If context is unspecified or is None, create and return the default
-	context. Otherwise, context must either be an PyOpenCL Context instance
-	or an integer. If context is a PyOpenCL Context, do nothing but return
-	the argument. Otherwise, return the device at the corresponding
-	(zero-based) index of the first platform available on the system.
-	'''
-	# Return a default context if nothing was specified
-	if context is None: return cl.Context(dev_type = cl.device_type.DEFAULT)
-
-	# The provided argument is a context, return it
-	if isinstance(context, cl.Context): return context
-
-	# Try to return the specified device
-	return cl.Context(devices=[cl.get_platforms()[0].get_devices()[context]])
-
+from . import util
+from .. import fdtd
 
 class SplineInterpolator(object):
 	'''
@@ -31,7 +14,7 @@ class SplineInterpolator(object):
 	sample points on the sphere using cubic b-splines.
 	'''
 
-	_kernel = path.join(path.split(path.abspath(__file__))[0], 'spline.mako')
+	_kernel = util.srcpath(__file__, 'mako', 'spline.mako')
 
 	def __init__(self, ntheta, nphi, tol = 1e-7, context = None):
 		'''
@@ -59,7 +42,7 @@ class SplineInterpolator(object):
 		self.precision = min(self.precision, min(ntheta, nphi))
 
 		# Grab the provided context or create a default
-		self.context = grabcontext(context)
+		self.context = util.grabcontext(context)
 
 		# Build the program for the context
 		t = Template(filename=SplineInterpolator._kernel, output_encoding='ascii')
@@ -149,7 +132,7 @@ class FarMatrix:
 	Compile an OpenCL kernel that will populate a far-field matrix.
 	'''
 
-	_kernel = path.join(path.split(path.abspath(__file__))[0], 'farmat.mako')
+	_kernel = util.srcpath(__file__, 'mako', 'farmat.mako')
 
 	def __init__(self, theta, dc = 0.1, n = 4, context = None):
 		'''
@@ -171,7 +154,7 @@ class FarMatrix:
 		'''
 
 		# Grab the provided context or create a default
-		self.context = grabcontext(context)
+		self.context = util.grabcontext(context)
 
 		# Compute the quadrature points and weights
 		self.pts, self.wts = spec.legendre(n).weights.T.tolist()[:2]
@@ -261,7 +244,7 @@ class Helmholtz(fdtd.Helmholtz):
 	passed in, but one will be created if none is provided.
 	'''
 
-	_kernel = path.join(path.split(path.abspath(__file__))[0], 'helmkern.mako')
+	_kernel = util.srcpath(__file__, 'mako', 'helmkern.mako')
 
 	def __init__(self, c, dt, h, srcfunc, srcidx, context=None):
 		'''
@@ -281,7 +264,7 @@ class Helmholtz(fdtd.Helmholtz):
 		self.source = srcfunc()
 
 		# Grab the provided context or create a default
-		self.context = grabcontext(context)
+		self.context = util.grabcontext(context)
 
 		# Create a command queue for the context
 		self.queue = cl.CommandQueue(self.context)
@@ -382,7 +365,7 @@ class SplitStep(object):
 	An OpenCL version of the split-step parabolic equation solver.
 	'''
 
-	_kernel = path.join(path.split(path.abspath(__file__))[0], 'splitstep.mako')
+	_kernel = util.srcpath(__file__, 'mako', 'splitstep.mako')
 
 	def __init__(self, k0, nx, ny, h, src, d=None, l=0, dz=None, context=None):
 		'''
@@ -408,7 +391,7 @@ class SplitStep(object):
 		self.dz = dz if dz else h
 
 		# Grab the provided context or create a default
-		self.context = grabcontext(context)
+		self.context = util.grabcontext(context)
 
 		# Build the program for the context
 		t = Template(filename=SplitStep._kernel, output_encoding='ascii')

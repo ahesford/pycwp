@@ -2,15 +2,8 @@
 
 import numpy as np, math, sys, getopt, os
 from tempfile import TemporaryFile
-from pyajh import mio, wavetools, wavecl, util, cutil
-
-def printflush(string):
-	'''
-	Print a string, without a newline, and flush stdout.
-	'''
-	print string,
-	sys.stdout.flush()
-
+from pyajh import mio, wavetools, util, cutil
+from pyajh.opencl import wavecl
 
 def usage(execname):
 	binfile = os.path.basename(execname)
@@ -85,7 +78,7 @@ if __name__ == '__main__':
 	# Grab the source location in wavelengths
 	src = tuple(float(s) * f / c for s in args[0].split(','))
 
-	printflush('Creating split-step engine... ')
+	util.printflush('Creating split-step engine... ')
 	sse = wavecl.SplitStep(k0, p[0], p[1], h, src=src, d=d, l=a, context=ctx)
 	print 'finished'
 
@@ -114,7 +107,7 @@ if __name__ == '__main__':
 		print 'Iteration %d of %d' % (step, steps)
 		# Reset and print the progress bar
 		bar.reset()
-		printflush(str(bar) + ' (forward) \r')
+		util.printflush(str(bar) + ' (forward) \r')
 
 		# Compute the initial forward-traveling field
 		sse.setincident(zoff(inmat.shape[-1] + 0.5))
@@ -133,12 +126,12 @@ if __name__ == '__main__':
 			fmat[idx - 1] = ffld
 			# Increment and print the progress bar
 			bar.increment()
-			printflush(str(bar) + ' (forward) \r')
+			util.printflush(str(bar) + ' (forward) \r')
 
 		# Reset progress bar and propagating field
 		sse.reset()
 		bar.reset()
-		printflush(str(bar) + ' (backward)\r')
+		util.printflush(str(bar) + ' (backward)\r')
 
 		for idx in range(p[-1]):
 			# Grab the contrast for the next slab
@@ -153,7 +146,7 @@ if __name__ == '__main__':
 			bmat[idx] = bfld
 			# Increment and print the progress bar
 			bar.increment()
-			printflush(str(bar) + ' (backward)\r')
+			util.printflush(str(bar) + ' (backward)\r')
 
 		print
 
@@ -166,7 +159,7 @@ if __name__ == '__main__':
 		obj[sl] = inmat[-1]
 		sse.etaupdate(obj)
 		print 'Combining forward and backward fields'
-		printflush(str(bar) + '\r')
+		util.printflush(str(bar) + '\r')
 		for idx in reversed(range(inmat.shape[-1])):
 			# Combine the forward and reversed fields in one slice
 			ffld = fmat[idx]
@@ -179,4 +172,4 @@ if __name__ == '__main__':
 			sse.advance(obj)
 			outmat[idx] = sse.copyfield()[sl]
 			bar.increment()
-			printflush(str(bar) + '\r')
+			util.printflush(str(bar) + '\r')
