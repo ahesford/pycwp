@@ -384,22 +384,21 @@ class SplitStep(object):
 	the split-step method.
 	'''
 
-	def __init__(self, k0, nx, ny, h, l = 0, dz = None):
+	def __init__(self, k0, nx, ny, h, dz = None):
 		'''
 		Initialize a split-step engine over an nx-by-ny grid with
 		isotropic step size h. The unitless wave number is k0. The wave
 		is advanced in steps of dz or (if dz is not provided) h.
-
-		If l > 0, a Hann window of width l is applied to each each of
-		the field before propagation is calculated.
 		'''
 
 		# Copy the parameters
 		self.grid = nx, ny
-		self.h, self.k0, self.l = h, k0, l
+		self.h, self.k0 = h, k0
 		# Set the step length
 		self.dz = dz if dz else h
 
+		# The default attenuation screen is None
+		self._attenuator = None
 		# The default incident field function is None
 		self.setincident = None
 		self.reset()
@@ -424,8 +423,23 @@ class SplitStep(object):
 		'''
 		def f(z):
 			x, y = self.slicecoords()
-			self.fld[:,:] = func((x, y, z),)
+			self.fld = func((x, y, z),)
 		self.setincident = f
+
+
+	def kxy(self):
+		'''
+		Cache and return the FFT-shifted values of kx and ky on the grid.
+		'''
+		try: return self._kxy
+		except AttributeError:
+			# Get the coordinate indices for each slab
+			nx, ny = self.grid
+			kx = 2. * math.pi * fft.fftfreq(nx, self.h)
+			ky = 2. * math.pi * fft.fftfreq(ny, self.h)
+
+			self._kxy = kx, ky
+			return self._kxy
 
 
 	def slicecoords(self):
@@ -438,13 +452,45 @@ class SplitStep(object):
 		return [(c - 0.5 * (n - 1.)) * self.h for c, n in zip(cg, g)]
 
 
+	@property
+	def attenuator(self):
+		'''
+		Return a screen to attenuate the field at each slab edge. If
+		one was not previously set, a screen that does not attenuate is
+		created.
+		'''
+		return self._attenuator
+
+
+	@attenuator.setter
+	def attenuator(self, l):
+		'''
+		Generate attenuate screens using the Hann function with the
+		specified width l.
+		'''
+		def hann(t, l): return np.sin(math.pi * t / (2 * l - 1.))**2
+		nx, ny = self.grid
+		# Create the left half of the window along each axis
+		tx, ty = np.arange(nx), np.arange(ny)
+		wx, wy = [(t < l).choose(1., hann(t, l)) for t in [tx, ty]]
+		# Multiply by the reverse to symmetrize the window
+		wx, wy = [w * w[::-1] for w in [wx, wy]]
+
+		# Store the attenuation screens in a broadcastable form
+		self._attenuator = (wx[:,np.newaxis], wy[np.newaxis,:])
+
+
+	@attenuator.deleter
+	def attenuator(self): del self._attenuator
+
+
 	def copyfield(self, fld = None):
 		'''
 		If fld is provided, copy the provided field to self.fld.
 		Otherwise, return the contents of self.fld.
 		'''
 		if fld is None: return self.fld
-		else: self.fld[:,:] = fld
+		else: self.fld = fld
 
 
 	def etaupdate(self, obj):
@@ -475,8 +521,13 @@ class SplitStep(object):
 		# Convert the contrast to a scaled wave number
 		eta, efrac = self.etaupdate(obj)
 
+		# Attenuate the field if desired
+		if self.attenuator is not None:
+			self.fld = (self.fld * self.attenuator[0]) * self.attenuator[1]
+
 		# Propagate the field
-		self.fld = splitstep.advance(self.fld, eta, self.k0, self.dz, self.l)
+		kx, ky = self.kxy()
+		self.fld = splitstep.advance(self.fld, eta, self.k0, kx, ky, self.dz)
 
 		if tau is None: return
 
