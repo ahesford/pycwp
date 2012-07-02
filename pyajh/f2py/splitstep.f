@@ -231,44 +231,79 @@ cf2py intent(hide) :: m,n
 c Compute the ratio of the current index of refraction to the next one
         subroutine etafrac(efrac, cur, next, m, n)
 c Arguments:
-c       efrac: The ratio of refractive indices
-c       cur:   The refractive index in the current slab
-c       next:  The refractive index in the next slab
-c       m,n:   The dimensions of the arrays
+c     efrac: The ratio of refractive indices
+c     cur:   The refractive index in the current slab
+c     next:  The refractive index in the next slab
+c     m,n:   The dimensions of the arrays
 cf2py intent(out) :: efrac
 cf2py intent(hide) :: m,n
-        implicit none
-        integer m,n
-        complex efrac(m,n), cur(m,n), next(m,n)
+      implicit none
+      integer m,n
+      complex efrac(m,n), cur(m,n), next(m,n)
 
-        integer i, j, k, np
+      integer i, j, k, np
 
-        np = m * n
+      np = m * n
 !$OMP PARALLEL DO DEFAULT(SHARED) private(i,j,k)
-        do 01 k = 1, np
-          call idxmap(i, j, k, m)
-01        efrac(i,j) = cur(i,j) / next(i,j)
+      do 01 k = 1, np
+        call idxmap(i, j, k, m)
+01      efrac(i,j) = cur(i,j) / next(i,j)
 !$OMP END PARALLEL DO
-        end subroutine etafrac
+      end subroutine etafrac
+
+c Apply a Hann window to the boundaries of a field.
+      subroutine hann(fld, l, m, n)
+c Arguments:
+c     fld: The field to be windowed
+c     l:   The width of the Hann window along each border
+c     m,n: The dimensions of the field
+cf2py intent(in,out) :: fld
+cf2py intent(hide) :: m, n
+      implicit none
+      integer m, n, l
+      complex fld(m,n)
+
+      integer i, k
+      real h, pi
+      parameter (pi = 3.141592653589793)
+
+!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(k,i,h)
+      do 01 k = 1, l
+        h = sin(pi * (k - 1) / (2 * l - 1))**2
+        do 02 i = 1, m
+          fld(i,k) = fld(i,k) * h
+02        fld(i,n-k+1) = fld(i,n-k+1) * h
+        do 03 i = 1, n
+          fld(k,i) = fld(k,i) * h
+03        fld(m-k+1,i) = fld(m-k+1,i) * h
+01      continue
+!$OMP END PARALLEL DO
+      end subroutine hann
 
 c Advance the field through a slice of medium
-      subroutine advance(fld, eta, k0, kx, ky, h, m, n)
+      subroutine advance(fld, eta, k0, kx, ky, h, l, m, n)
 c Arguments:
 c     fld:   The field to be advanced
 c     eta:   The index of refraction of the medium
 c     k0:    The reference wave number, unitless
 c     kx,ky: The transverse spatial frequencies
 c     h:     The propagate distance in wavelengths
+c     l:     The width of a Hann window to apply to each boundary
 c     m,n:   The dimensions of the slice
 cf2py intent(in,out) :: fld
 cf2py intent(hide) :: m, n
       implicit none
       include 'fftw3.f'
-      integer m,n
+      integer m,n,l
       complex fld(m,n), eta(m,n)
       real k0, h, kx(m), ky(n)
 
       complex lap(m,n), buf(m,n)
+
+c Window to attenuate the field near the boundaries
+      if (l .GT. 0) then
+        call hann(fld, l, m, n)
+      endif
 
 c Tranform and propagate the field
       call fftfield(FFTW_FORWARD, buf, fld, m, n)
