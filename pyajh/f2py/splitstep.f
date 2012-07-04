@@ -37,6 +37,26 @@ cf2py intent(out) :: i, j
       j = ((k - 1) / m) + 1
       end subroutine idxmap
 
+c Compute the i-th (zero-indexed) DFT frequency bin
+c for an m-point FFT with sample spacing h
+      function fftfreq(i, m, h)
+      real fftfreq, h
+      integer i, m
+
+      integer half
+      real pi
+      parameter (pi = 3.141592653589793)
+
+      half = (m - 1) / 2
+
+      if (i .LE. half) then
+        fftfreq = real(i)
+      else
+        fftfreq = real(i - m)
+      endif
+      fftfreq = fftfreq * 2. * pi / (real(m) * h)
+      end function fftfreq
+
 c Out-of-place (forward or inverse) Fourier transform of an array
       subroutine fftfield(dir, output, input, m, n)
 c Arguments:
@@ -54,14 +74,15 @@ cf2py intent(hide) :: m, n
       integer*8 plan
       integer i, j, k, p
 
-      call sfftw_plan_dft_2d(plan, m, n, output, 
+      call sfftw_plan_dft_2d(plan, m, n, output,
      +                       output, dir, FFTW_MEASURE)
 
       p = m * n
 !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j,k)
       do 01 k = 1, p
         call idxmap(i, j, k, m)
-01      output(i,j) = input(i,j)
+        output(i,j) = input(i,j)
+01      continue
 !$OMP END PARALLEL DO
 
       call sfftw_execute_dft(plan, output, output)
@@ -85,52 +106,57 @@ cf2py intent(hide) :: m, n
 !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j,k)
       do 01 k = 1, p
         call idxmap(i, j, k, m)
-01      fld(i,j) = fld(i,j) / p
+        fld(i,j) = fld(i,j) / p
+01      continue
 !$OMP END PARALLEL DO
       end subroutine fftscale
 
 c Propagate, in-place, a spectral field through a homogeneous medium
-      subroutine propagate(fld, k0, kx, ky, h, m, n)
+      subroutine propagate(fld, k0, h, dz, m, n)
 c Arguments:
-c     fld:   The field to propagte
-c     k0:    The reference wave number, unitless
-c     kx,ky: The x and y spatial frequencies in FFT order
-c     h:     The propagation distance in wavelengths
-c     m,n:   The dimensions of the field
+c     fld: The field to propagte
+c     k0:  The reference wave number, unitless
+c     h:   The transverse spatial sampling interval in wavelengths
+c     dz:   The propagation distance in wavelengths
+c     m,n: The dimensions of the field
 cf2py intent(in,out) :: fld
 cf2py intent(hide) :: m, n
       implicit none
       integer m,n
       complex fld(m,n)
-      real k0, kx(m), ky(n), h
+      real k0, h, dz
 
       integer i, j, k, np
       complex kz
+      real kx, ky, fftfreq
 
       np = m * n
 
-!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(kz,i,j,k)
+!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(kx,ky,kz,i,j,k)
       DO 01 k = 1, np
         call idxmap(i, j, k, m)
-        kz = csqrt(cmplx(k0**2 - kx(i)**2 - ky(j)**2))
-01      fld(i,j) = fld(i,j) * cexp(cmplx(0., 1.) * kz * h)
+        kx = fftfreq(i - 1, m, h) / k0
+        ky = fftfreq(j - 1, n, h) / k0
+        kz = csqrt(cmplx(1. - kx**2 - ky**2))
+        fld(i,j) = fld(i,j) * cexp(cmplx(0., 1.) * k0 * kz * dz)
+01      continue
 !$OMP END PARALLEL DO
       end subroutine propagate
 
 c Apply, in-place, a phase screen to a field
-      subroutine phasescreen(fld, eta, k0, h, m, n)
+      subroutine phasescreen(fld, eta, k0, dz, m, n)
 c Arguments:
 c     fld: The field requiring correction
 c     eta: The index of refraction through which the field is propagated
 c     k0:  The reference wave number, unitless
-c     h:   The propagation distance in wavelengths
+c     dz:   The propagation distance in wavelengths
 c     m,n: The dimensions of the field and medium
 cf2py intent(in,out) :: fld
 cf2py intent(hide) :: m, n
       implicit none
       integer m,n
       complex fld(m,n), eta(m,n)
-      real k0, h
+      real k0, dz
 
       integer i, j, k, np
       complex scr
@@ -140,27 +166,28 @@ cf2py intent(hide) :: m, n
 !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j,k,scr)
       DO 01 k = 1, np
         call idxmap(i, j, k, m)
-        scr = cexp(cmplx(0., 1.) * k0 * h * (eta(i,j) - 1.))
-01      fld(i,j) = scr * fld(i,j)
+        scr = cexp(cmplx(0., 1.) * k0 * dz * (eta(i,j) - 1.))
+        fld(i,j) = scr * fld(i,j)
+01      continue
 !$OMP END PARALLEL DO
       end subroutine phasescreen
 
 
 c Apply, in-place, a wide-angle correction to a propagating field
-      subroutine wideangle(fld, lap, eta, k0, h, m, n)
+      subroutine wideangle(fld, lap, eta, k0, dz, m, n)
 c Arguments:
 c     fld: The field requiring correction
 c     lap: The (negative) scaled Laplacian of the field
 c     eta: The index of refraction through which the field is propagated
 c     k0:  The reference wave number, unitless
-c     h:   The propagation distance in wavelengths
+c     dz:   The propagation distance in wavelengths
 c     m,n: The dimensions of the field and medium
 cf2py intent(in,out) :: fld
 cf2py intent(hide) :: m, n
       implicit none
       integer m,n
       complex fld(m,n), eta(m,n), lap(m,n)
-      real k0, h
+      real k0, dz
 
       integer i, j, k, np
       complex cor, e
@@ -171,38 +198,41 @@ cf2py intent(hide) :: m, n
       DO 01 k = 1, np
         call idxmap(i, j, k, m)
         e = eta(i,j)
-        cor = cmplx(0., 1.) * k0 * h * (e - 1.) / (2. * e)
-01      fld(i,j) = fld(i,j) + cor * lap(i,j)
+        cor = cmplx(0., 1.) * k0 * dz * (e - 1.) / (2. * e)
+        fld(i,j) = fld(i,j) + cor * lap(i,j)
+01      continue
 !$OMP END PARALLEL DO
       end subroutine wideangle
 
 
 c Compute the scaled, negative Laplacian of a field.
 c On output, an inverse Fourier transform is performed on the field.
-      subroutine laplacian(lap, fld, k0, kx, ky, m, n)
+      subroutine laplacian(lap, fld, k0, h, m, n)
 c Arguments:
-c     lap:   The (negative) Laplacian of the field
-c     fld:   The field that will be differentiated
-c     k0:    The reference wave number, unitless
-c     kx,ky: The x and y spatial frequencies in FFT order
-c     m,n:   The dimensions of the field and medium
+c     lap: The (negative) Laplacian of the field
+c     fld: The field that will be differentiated
+c     k0:  The reference wave number, unitless
+c     h:   The transverse spatial sampling rate
+c     m,n: The dimensions of the field and medium
 cf2py intent(in,out) :: lap, fld
 cf2py intent(hide) :: m, n
       implicit none
       integer m,n
       complex fld(m,n), lap(m,n)
-      real k0, kx(m), ky(n)
+      real k0, h
 
       integer i, j, k, np
-      real kt
+      real kx, ky, fftfreq
 
       np = m * n
 
-!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j,k,kt)
+!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j,k,kx,ky)
       DO 01 k = 1, np
         call idxmap(i, j, k, m)
-        kt = (kx(i)**2 + ky(j)**2) / k0**2
-01      lap(i,j) = fld(i,j) * kt
+        kx = fftfreq(i - 1, m, h) / k0
+        ky = fftfreq(j - 1, n, h) / k0
+        lap(i,j) = fld(i,j) * (kx**2 + ky**2)
+01      continue
 !$OMP END PARALLEL DO
       end subroutine laplacian
 
@@ -224,7 +254,8 @@ cf2py intent(hide) :: m,n
 !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j,k)
       do 01 k = 1, np
         call idxmap(i, j, k, m)
-01      eta(i,j) = csqrt(obj(i,j) + 1.)
+        eta(i,j) = csqrt(obj(i,j) + 1.)
+01      continue
 !$OMP END PARALLEL DO
         end subroutine obj2eta
 
@@ -247,7 +278,8 @@ cf2py intent(hide) :: m,n
 !$OMP PARALLEL DO DEFAULT(SHARED) private(i,j,k)
       do 01 k = 1, np
         call idxmap(i, j, k, m)
-01      efrac(i,j) = cur(i,j) / next(i,j)
+        efrac(i,j) = cur(i,j) / next(i,j)
+01      continue
 !$OMP END PARALLEL DO
       end subroutine etafrac
 
@@ -281,22 +313,22 @@ cf2py intent(hide) :: m, n
       end subroutine hann
 
 c Advance the field through a slice of medium
-      subroutine advance(fld, eta, k0, kx, ky, h, l, m, n)
+      subroutine advance(fld, eta, k0, h, dz, l, m, n)
 c Arguments:
-c     fld:   The field to be advanced
-c     eta:   The index of refraction of the medium
-c     k0:    The reference wave number, unitless
-c     kx,ky: The transverse spatial frequencies
-c     h:     The propagate distance in wavelengths
-c     l:     The width of a Hann window to apply to each boundary
-c     m,n:   The dimensions of the slice
+c     fld: The field to be advanced
+c     eta: The index of refraction of the medium
+c     k0:  The reference wave number, unitless
+c     h:   The transverse sampling interval in wavelengths
+c     dz:  The propagation distance in wavelengths
+c     l:   The width of a Hann window to apply to each boundary
+c     m,n: The dimensions of the slice
 cf2py intent(in,out) :: fld
 cf2py intent(hide) :: m, n
       implicit none
       include 'fftw3.f'
       integer m,n,l
       complex fld(m,n), eta(m,n)
-      real k0, h, kx(m), ky(n)
+      real k0, h, dz
 
       complex lap(m,n), buf(m,n)
 
@@ -307,17 +339,17 @@ c Window to attenuate the field near the boundaries
 
 c Tranform and propagate the field
       call fftfield(FFTW_FORWARD, buf, fld, m, n)
-      call propagate(buf, k0, kx, ky, h, m, n)
+      call propagate(buf, k0, h, dz, m, n)
 c Take the Laplacian of the field
-      call laplacian(lap, buf, k0, kx, ky, m, n)
+      call laplacian(lap, buf, k0, h, m, n)
 c Inverse transform (and scale) the field and its Laplacian
       call fftfield(FFTW_BACKWARD, fld, buf, m, n)
       call fftscale(fld, m, n)
       call fftfield(FFTW_BACKWARD, buf, lap, m, n)
       call fftscale(buf, m, n)
 c Apply wide-angle corrections and the inhomogeneous phase screen
-      call wideangle(fld, buf, eta, k0, h, m, n)
-      call phasescreen(fld, eta, k0, h, m, n)
+      call wideangle(fld, buf, eta, k0, dz, m, n)
+      call phasescreen(fld, eta, k0, dz, m, n)
       end subroutine advance
 
 c Apply a relaxation update to the field propagated through a slab
@@ -349,6 +381,7 @@ cf2py optional :: tau=2.
         em1 = 1. - efrac(i,j)
         pval = prev(i,j) * (1. - 2. / tau)
         nval = (ep1 * fwd(i,j) + em1 * back(i,j)) / tau
-01      fwd(i,j) = pval + nval
+        fwd(i,j) = pval + nval
+01      continue
 !$OMP END PARALLEL DO
       end subroutine update

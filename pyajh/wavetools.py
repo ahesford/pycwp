@@ -430,21 +430,6 @@ class SplitStep(object):
 		self.setincident = f
 
 
-	def kxy(self):
-		'''
-		Cache and return the FFT-shifted values of kx and ky on the grid.
-		'''
-		try: return self._kxy
-		except AttributeError:
-			# Get the coordinate indices for each slab
-			nx, ny = self.grid
-			kx = 2. * math.pi * fft.fftfreq(nx, self.h)
-			ky = 2. * math.pi * fft.fftfreq(ny, self.h)
-
-			self._kxy = kx, ky
-			return self._kxy
-
-
 	def slicecoords(self):
 		'''
 		Return the meshgrid coordinate arrays for an x-y slab in the
@@ -491,10 +476,10 @@ class SplitStep(object):
 		'''
 		# Convert the contrast to a scaled wave number
 		eta, efrac = self.etaupdate(obj)
+		k0, h, dz, l = self.k0, self.h, self.dz, self.l
 
 		# Propagate the field
-		kx, ky = self.kxy()
-		self.fld = splitstep.advance(self.fld, eta, self.k0, kx, ky, self.dz, self.l)
+		self.fld = splitstep.advance(self.fld, eta, k0, h, dz, l)
 
 		if tau is None: return
 

@@ -37,9 +37,11 @@ cf2py intent(out) :: y
 c Compute terms away from the boundaries
 !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j,df)
       do 10 i = 2, nm1
-      do 10 j = 2, mm1
+      do 15 j = 2, mm1
         df = fld(i+1,j) + fld(i-1,j) + fld(i,j+1) + fld(i,j-1)
-10      y(i,j) = (dfd + b * obj(i,j)) * fld(i,j) + dxm * df
+        y(i,j) = (dfd + b * obj(i,j)) * fld(i,j) + dxm * df
+15      continue
+10      continue
 !$OMP END PARALLEL DO
 
 c Compute derivatives along the x boundaries
@@ -48,7 +50,8 @@ c Compute derivatives along the x boundaries
         df = fld(2,j) + fld(1,j-1) + fld(1,j+1)
         y(1,j) = (dfd + b * obj(1,j)) * fld(1,j) + dxm * df
         df = fld(nm1,j) + fld(n,j-1) + fld(n,j+1)
-20      y(n,j) = (dfd + b * obj(n,j)) * fld(n,j) + dxm * df
+        y(n,j) = (dfd + b * obj(n,j)) * fld(n,j) + dxm * df
+20      continue
 !$OMP END PARALLEL DO
 
 c Compute the derivatives along the y boundaries
@@ -57,7 +60,8 @@ c Compute the derivatives along the y boundaries
         df = fld(i+1,1) + fld(i-1,1) + fld(i,2)
         y(i,1) = (dfd + b * obj(i,1)) * fld(i,1) + dxm * df
         df = fld(i+1,m) + fld(i-1,m) + fld(i,mm1)
-30      y(i,m) = (dfd + b * obj(i,m)) * fld(i,m) + dxm * df
+        y(i,m) = (dfd + b * obj(i,m)) * fld(i,m) + dxm * df
+30      continue
 !$OMP END PARALLEL DO
 
 c Compute the terms at each of the four corners
