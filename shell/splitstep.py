@@ -79,7 +79,7 @@ if __name__ == '__main__':
 	# Grab the source location in wavelengths
 	src = tuple(float(s) * f / c for s in args[0].split(','))
 
-	util.printflush('Creating split-step engine... ')
+	print 'Creating split-step engine... '
 	if ctx is not None:
 		sse = wavecl.SplitStep(k0, p[0], p[1], h, src=src, d=d, l=a, context=ctx)
 	else:
@@ -92,9 +92,9 @@ if __name__ == '__main__':
 			else: return ptsrc * wavetools.directivity(obs, src, d[:-1], d[-1])
 		sse.setincgen(srcfld)
 		# Initialize the underlying FFTW library to use threads
-		print 'Using %d threads for calculation' % splitstep.initfft()
-
-	print 'finished'
+		splitstep.fftbuf.init()
+		print 'Using %d threads for calculation' % splitstep.fftbuf.nthread
+		splitstep.fftbuf.plan(p[0], p[1])
 
 	# Create a slice tuple to strip out the padding when writing
 	lpad = [(pv - gv) / 2 for pv, gv in zip(p, inmat.shape)]
