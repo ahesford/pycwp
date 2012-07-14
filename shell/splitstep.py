@@ -92,9 +92,9 @@ if __name__ == '__main__':
 			else: return ptsrc * wavetools.directivity(obs, src, d[:-1], d[-1])
 		sse.setincgen(srcfld)
 		# Initialize the underlying FFTW library to use threads
-		splitstep.fftbuf.init()
-		print 'Using %d threads for calculation' % splitstep.fftbuf.nthread
-		splitstep.fftbuf.plan(p[0], p[1])
+		splitstep.fft.init()
+		splitstep.fft.plan(p[0], p[1])
+		print 'Using %d threads for calculation' % splitstep.fft.nthread
 
 	# Create a slice tuple to strip out the padding when writing
 	lpad = [(pv - gv) / 2 for pv, gv in zip(p, inmat.shape)]

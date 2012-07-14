@@ -1,9 +1,8 @@
 c A module to encapsulate forward and inverse FFTW transforms
-      module fftbuf
+      module fft
         implicit none
 c The number of threads used for the FFT
         integer :: nthread
-        integer*8 :: fplan, bplan
 
         contains
 
@@ -29,15 +28,11 @@ c Attempt to initialize FFTW to use multiple threads if desired
               nthread = 1
             endif
           endif
-
-          fplan = 0
-          bplan = 0
         end subroutine init
 
 
 c Clean up the FFTW library before exit
         subroutine cleanup
-          call unplan
           if (nthread .GT. 1) then
             call sfftw_cleanup_threads
           else
@@ -47,29 +42,27 @@ c Clean up the FFTW library before exit
 
 
 c Plan forward and inverse in-place, (m,n)-point DFTs
+c The plans are discarded, but knowledge should remain available
+c for use in future plans that use FFTW_ESTIMATE
         subroutine plan(m, n)
           implicit none
           include 'fftw3.f'
           integer m, n
           complex arr(m, n)
 
-          call unplan
+          integer*8 fplan, bplan
 
-          call sfftw_plan_dft_2d(fplan, m, n, arr, arr, 
+          call sfftw_plan_dft_2d(fplan, m, n, arr, arr,
      +                           FFTW_FORWARD, FFTW_MEASURE)
-          call sfftw_plan_dft_2d(bplan, m, n, arr, arr, 
+          call sfftw_plan_dft_2d(bplan, m, n, arr, arr,
      +                           FFTW_BACKWARD, FFTW_MEASURE)
+          call sfftw_destroy_plan(fplan)
+          call sfftw_destroy_plan(bplan)
         end subroutine plan
 
 
-c Destroy existing DFT plans
-        subroutine unplan
-          if (fplan .NE. 0) call sfftw_destroy_plan(fplan)
-          if (bplan .NE. 0) call sfftw_destroy_plan(bplan)
-        end subroutine unplan
-
-
-c Perform an in-place FFT using FFTW and the preallocated buffers
+c Perform an in-place FFT using FFTW
+c Note that inverse transforms are unscaled
         subroutine fftexec(dir, arr, m, n)
 cf2py intent(in,out) :: arr
 cf2py intent(hide) :: m, n
@@ -78,24 +71,16 @@ cf2py intent(hide) :: m, n
           integer m, n, dir
           complex arr(m, n)
 
-          integer i, j, p
+          integer*8 plan
 
-          if (dir .EQ. FFTW_FORWARD) then
-            call sfftw_execute_dft(fplan, arr, arr)
-          else
-            call sfftw_execute_dft(bplan, arr, arr)
-            p = m * n
-c Normalize the output of an inverse FFT
-!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j)
-            do i = 1, m
-              do j = 1, n
-                arr(i,j) = arr(i,j) / p
-              enddo
-            enddo
-!$OMP END PARALLEL DO
-          endif
+c The estimate should reuse knowledge from prior calls to plan(m,n)
+c Estimation is necessary to avoid clobbering array contents
+          call sfftw_plan_dft_2d(plan, m, n, arr,
+     +                           arr, dir, FFTW_ESTIMATE)
+          call sfftw_execute_dft(plan, arr, arr)
+          call sfftw_destroy_plan(plan)
         end subroutine fftexec
-      end module fftbuf
+      end module fft
 
 
 c Compute the i-th (one-indexed) DFT frequency bin
@@ -129,7 +114,7 @@ c     dz:  The propagation distance in wavelengths
 c     m,n: The dimensions of the field
 cf2py intent(in,out) :: fld
 cf2py intent(hide) :: m, n
-      use fftbuf, only : fftexec
+      use fft, only : fftexec
       implicit none
       include 'fftw3.f'
       integer m,n
@@ -138,17 +123,20 @@ cf2py intent(hide) :: m, n
 
       integer i, j
       complex kz
-      real kx, ky, fftfreq
+      real kx, ky, fftfreq, p
+
+      p = real(m * n)
 
       call fftexec(FFTW_FORWARD, fld, m, n)
 
+c Scale the propagation by (m * n) to counter FFT scaling
 !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(kx,ky,kz,i,j)
-      do i = 1, m
-        kx = fftfreq(i, m, h)
-        do j = 1, n
-          ky = fftfreq(j, n, h)
+      do j = 1, n
+        ky = fftfreq(j, n, h)
+        do i = 1, m
+          kx = fftfreq(i, m, h)
           kz = -k0 + csqrt(cmplx(k0**2 - kx**2 - ky**2))
-          fld(i,j) = fld(i,j) * cexp(cmplx(0., 1.) * dz * kz)
+          fld(i,j) = fld(i,j) * cexp(cmplx(0., 1.) * dz * kz) / p
         enddo
       enddo
 !$OMP END PARALLEL DO
@@ -176,8 +164,8 @@ cf2py intent(hide) :: m, n
       complex scr
 
 !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j,scr)
-      do i = 1, m
-        do j = 1, n
+      do j = 1, n
+        do i = 1, m
           scr = cexp(cmplx(0., 1.) * k0 * dz * eta(i,j))
           fld(i,j) = scr * fld(i,j)
         enddo
@@ -198,7 +186,7 @@ cf2py intent(in,out) :: fld
 cf2py intent(hide) :: m, n
 cf2py real, optional :: tol = 1e-6
 cf2py integer, optional :: maxit = 10
-      use fftbuf, only : fftexec
+      use fft, only : fftexec
       implicit none
       include 'fftw3.f'
       integer m, n, maxit
@@ -207,14 +195,15 @@ cf2py integer, optional :: maxit = 10
 
       complex delta, kz, u(m,n), v(m,n)
       integer i, j, l
-      real nnum, nden, kx, ky, fftfreq
+      real nnum, nden, kx, ky, fftfreq, p
 
       delta = cmplx(0., -0.5) * k0 * dz
+      p = real(m * n)
 
 c Initialize the augmenting vector u
 !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j)
-      do i = 1, m
-        do j = 1, n
+      do j = 1, n
+        do i = 1, m
           u(i,j) = fld(i,j)
         enddo
       enddo
@@ -224,8 +213,8 @@ c Initialize the augmenting vector u
 c Copy the last field u to v to compute NLv
 c Also compute the first part of LNu
 !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j)
-        do i = 1, m
-          do j = 1, n
+        do j = 1, n
+          do i = 1, m
             v(i,j) = u(i,j)
             u(i,j) = (eta(i,j) - 1) * u(i,j)
           enddo
@@ -236,12 +225,13 @@ c Also compute the first part of LNu
         call fftexec(FFTW_FORWARD, v, m, n)
 
 c Spectrally evaluate Lv and LNu
+c Scale the result by (m * n) to counter FFT scaling
 !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j,kx,ky,kz)
-        do i = 1, m
-          kx = fftfreq(i, m, h) / k0
-          do j = 1, n
-            ky = fftfreq(j, n, h) / k0
-            kz = -1 + csqrt(cmplx(1 - kx**2 - ky**2))
+        do j = 1, n
+          ky = fftfreq(j, n, h) / k0
+          do i = 1, m
+            kx = fftfreq(i, m, h) / k0
+            kz = (-1 + csqrt(cmplx(1 - kx**2 - ky**2))) / p
             u(i,j) = kz * u(i,j)
             v(i,j) = kz * v(i,j)
           enddo
@@ -257,8 +247,8 @@ c Spectrally evaluate Lv and LNu
 c Now compute u = -(i k0 dz / 2) * (NLv + LNu) / 2m
 c Add the new u to the total field
 !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j) REDUCTION(+:nnum,nden)
-        do i = 1, m
-          do j = 1, n
+        do j = 1, n
+          do i = 1, m
             u(i,j) = delta * (u(i,j) + (eta(i,j) - 1) * v(i,j)) / l
             fld(i,j) = fld(i,j) + u(i,j)
             nnum = nnum + cabs(u(i,j))
@@ -289,8 +279,8 @@ cf2py intent(hide) :: m,n
       integer i, j
 
 !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j)
-      do i = 1, m
-        do j = 1, n
+      do j = 1, n
+        do i = 1, m
           eta(i,j) = csqrt(obj(i,j) + 1.)
         enddo
       enddo
@@ -314,8 +304,8 @@ cf2py intent(hide) :: m,n
       integer i, j
 
 !$OMP PARALLEL DO DEFAULT(SHARED) private(i,j)
-      do i = 1, m
-        do j = 1, n
+      do j = 1, n
+        do i = 1, m
           efrac(i,j) = cur(i,j) / next(i,j)
         enddo
       enddo
@@ -409,8 +399,8 @@ cf2py optional :: tau=2.
       complex pval, nval, ep1, em1
 
 !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j,pval,nval,ep1,em1)
-      do i = 1, m
-        do j = 1, n
+      do j = 1, n
+        do i = 1, m
           ep1 = 1. + efrac(i,j)
           em1 = 1. - efrac(i,j)
           pval = prev(i,j) * (1. - 2. / tau)
