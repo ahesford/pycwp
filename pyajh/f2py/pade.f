@@ -1,4 +1,3 @@
-cF77FLAGS(gnu95)=-fopenmp
 c Compute the action of the split-step Padé operator
 c 
 c     Q = a + b * obj + b * (d_{xx} + d_{yy}) / (k_0**2)
