@@ -66,6 +66,7 @@ c Note that inverse transforms are unscaled
         subroutine fftexec(dir, arr, m, n)
 cf2py intent(in,out) :: arr
 cf2py intent(hide) :: m, n
+cf2py threadsafe
           implicit none
           include 'fftw3.f'
           integer m, n, dir
@@ -114,6 +115,7 @@ c     dz:  The propagation distance in wavelengths
 c     m,n: The dimensions of the field
 cf2py intent(in,out) :: fld
 cf2py intent(hide) :: m, n
+cf2py threadsafe
       use fft, only : fftexec
       implicit none
       include 'fftw3.f'
@@ -155,6 +157,7 @@ c     dz:  The propagation distance in wavelengths
 c     m,n: The dimensions of the field and medium
 cf2py intent(in,out) :: fld
 cf2py intent(hide) :: m, n
+cf2py threadsafe
       implicit none
       integer m,n
       complex fld(m,n), eta(m,n)
@@ -186,6 +189,7 @@ cf2py intent(in,out) :: fld
 cf2py intent(hide) :: m, n
 cf2py real, optional :: tol = 1e-6
 cf2py integer, optional :: maxit = 10
+cf2py threadsafe
       use fft, only : fftexec
       implicit none
       include 'fftw3.f'
@@ -193,39 +197,26 @@ cf2py integer, optional :: maxit = 10
       complex fld(m,n), eta(m,n)
       real k0, h, dz, tol
 
-      complex delta, kz, u(m,n), v(m,n)
+      complex delta, kz, u(m,n)
       integer i, j, l
       real nnum, nden, kx, ky, fftfreq, p
 
-      delta = cmplx(0., -0.5) * k0 * dz
+      delta = cmplx(0., -1.) * k0 * dz
       p = real(m * n)
 
-c Initialize the augmenting vector u
+c Apply the spatial operator N = (n - 1) to the field and store in u
 !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j)
       do j = 1, n
         do i = 1, m
-          u(i,j) = fld(i,j)
+          u(i,j) = (eta(i,j) - 1) * fld(i,j)
         enddo
       enddo
 !$OMP END PARALLEL DO
 
       do l = 1, maxit
-c Copy the last field u to v to compute NLv
-c Also compute the first part of LNu
-!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j)
-        do j = 1, n
-          do i = 1, m
-            v(i,j) = u(i,j)
-            u(i,j) = (eta(i,j) - 1) * u(i,j)
-          enddo
-        enddo
-!$OMP END PARALLEL DO
-
-        call fftexec(FFTW_FORWARD, u, m, n)
-        call fftexec(FFTW_FORWARD, v, m, n)
-
-c Spectrally evaluate Lv and LNu
+c Spectrally evaluate the operation Lu
 c Scale the result by (m * n) to counter FFT scaling
+        call fftexec(FFTW_FORWARD, u, m, n)
 !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j,kx,ky,kz)
         do j = 1, n
           ky = fftfreq(j, n, h) / k0
@@ -233,33 +224,31 @@ c Scale the result by (m * n) to counter FFT scaling
             kx = fftfreq(i, m, h) / k0
             kz = (-1 + csqrt(cmplx(1 - kx**2 - ky**2))) / p
             u(i,j) = kz * u(i,j)
-            v(i,j) = kz * v(i,j)
           enddo
         enddo
 !$OMP END PARALLEL DO
-
         call fftexec(FFTW_BACKWARD, u, m, n)
-        call fftexec(FFTW_BACKWARD, v, m, n)
 
         nnum = 0.
         nden = 0.
 
-c Now compute u = -(i k0 dz / 2) * (NLv + LNu) / 2m
-c Add the new u to the total field
+c Now finish computing the update u = -i k0 dz * LNu / m
+c Add the new update to the total field
+c Also apply the spatial operator N to the update for the next round
 !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j) REDUCTION(+:nnum,nden)
         do j = 1, n
           do i = 1, m
-            u(i,j) = delta * (u(i,j) + (eta(i,j) - 1) * v(i,j)) / l
+            u(i,j) = delta * u(i,j) / l
             fld(i,j) = fld(i,j) + u(i,j)
             nnum = nnum + cabs(u(i,j))
+            u(i,j) = (eta(i,j) - 1) * u(i,j)
             nden = nden + cabs(fld(i,j))
           enddo
         enddo
 !$OMP END PARALLEL DO
 
-        if (nden .LT. tol .AND. nnum .LT. tol) exit
-        print *, 'Iter', l, 'Err', nnum / nden
-        if (nnum / nden .LT. tol) exit
+        if ((nden .LT. tol .AND. nnum .LT. tol)
+     +      .OR. nnum / nden .LT. TOL) exit
         enddo
       end subroutine wideangle
 
@@ -272,6 +261,7 @@ c     obj: The object contrast
 c     m,n: The dimensions of the array
 cf2py intent(out) :: eta
 cf2py intent(hide) :: m,n
+cf2py threadsafe
       implicit none
       integer m,n
       complex obj(m,n), eta(m,n)
@@ -297,6 +287,7 @@ c     next:  The refractive index in the next slab
 c     m,n:   The dimensions of the arrays
 cf2py intent(out) :: efrac
 cf2py intent(hide) :: m,n
+cf2py threadsafe
       implicit none
       integer m,n
       complex efrac(m,n), cur(m,n), next(m,n)
@@ -321,6 +312,7 @@ c     l:   The width of the Hann window along each border
 c     m,n: The dimensions of the field
 cf2py intent(in,out) :: fld
 cf2py intent(hide) :: m, n
+cf2py threadsafe
       implicit none
       integer m, n, l
       complex fld(m,n)
@@ -358,6 +350,7 @@ c     l:   The width of a Hann window to apply to each boundary
 c     m,n: The dimensions of the slice
 cf2py intent(in,out) :: fld
 cf2py intent(hide) :: m, n
+cf2py threadsafe
       implicit none
       include 'fftw3.f'
       integer m,n,l
@@ -370,11 +363,10 @@ c Window to attenuate the field near the boundaries
       endif
 
 c Tranform and propagate the field
-      call propagate(fld, k0, h, 0.5 * dz, m, n)
+      call propagate(fld, k0, h, dz, m, n)
 c Apply wide-angle corrections and the inhomogeneous phase screen
-      call wideangle(fld, eta, k0, h, dz, m, n, 10, 1e-6)
+      call wideangle(fld, eta, k0, h, dz, m, n, 1, 1e-6)
       call phasescreen(fld, eta, k0, dz, m, n)
-      call propagate(fld, k0, h, 0.5 * dz, m, n)
       end subroutine advance
 
 
@@ -390,6 +382,7 @@ c     m,n:   The dimensions of the field
 cf2py intent(in,out) :: fwd
 cf2py intent(hide) :: m,n
 cf2py optional :: tau=2.
+cf2py threadsafe
       implicit none
       integer m, n
       complex fwd(m,n), back(m,n), prev(m,n), efrac(m,n)
