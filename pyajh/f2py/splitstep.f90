@@ -105,154 +105,6 @@ c for an m-point FFT with sample spacing h
       end function fftfreq
 
 
-c Propagate, in place, a spectral field through a homogeneous medium
-      subroutine propagate(fld, k0, h, dz, m, n)
-c Arguments:
-c     fld: The field to propagte
-c     k0:  The reference wave number, unitless
-c     h:   The transverse spatial sampling interval in wavelengths
-c     dz:  The propagation distance in wavelengths
-c     m,n: The dimensions of the field
-cf2py intent(in,out) :: fld
-cf2py intent(hide) :: m, n
-cf2py threadsafe
-      use fft, only : fftexec
-      implicit none
-      include 'fftw3.f'
-      integer m,n
-      complex fld(m,n)
-      real k0, h, dz
-
-      integer i, j
-      complex kz
-      real kx, ky, fftfreq, p
-
-      p = real(m * n)
-
-      call fftexec(FFTW_FORWARD, fld, m, n)
-
-c Scale the propagation by (m * n) to counter FFT scaling
-!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(kx,ky,kz,i,j)
-      do j = 1, n
-        ky = fftfreq(j, n, h)
-        do i = 1, m
-          kx = fftfreq(i, m, h)
-          kz = -k0 + csqrt(cmplx(k0**2 - kx**2 - ky**2))
-          fld(i,j) = fld(i,j) * cexp(cmplx(0., 1.) * dz * kz) / p
-        enddo
-      enddo
-!$OMP END PARALLEL DO
-
-      call fftexec(FFTW_BACKWARD, fld, m, n)
-      end subroutine propagate
-
-
-c Apply, in place, a phase screen to a field
-      subroutine phasescreen(fld, eta, k0, dz, m, n)
-c Arguments:
-c     fld: The field requiring correction
-c     eta: The index of refraction through which the field is propagated
-c     k0:  The reference wave number, unitless
-c     dz:  The propagation distance in wavelengths
-c     m,n: The dimensions of the field and medium
-cf2py intent(in,out) :: fld
-cf2py intent(hide) :: m, n
-cf2py threadsafe
-      implicit none
-      integer m,n
-      complex fld(m,n), eta(m,n)
-      real k0, dz
-
-      integer i, j
-      complex scr
-
-!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j,scr)
-      do j = 1, n
-        do i = 1, m
-          scr = cexp(cmplx(0., 1.) * k0 * dz * eta(i,j))
-          fld(i,j) = scr * fld(i,j)
-        enddo
-      enddo
-!$OMP END PARALLEL DO
-      end subroutine phasescreen
-
-c Apply, in place, wide-angle corrections according to Lin and Duda 2012
-      subroutine wideangle(fld, eta, k0, h, dz, m, n, maxit, tol)
-c Arguments:
-c     fld: The field to be corrected
-c     eta: The index of refraction through which the field is propagated
-c     k0:  The reference wave number, unitless
-c     h:   The transverse spatial sampling interval in wavelengths
-c     dz:  The propagation distance in wavelengths
-c     m,n: The dimensions of the field and medium
-cf2py intent(in,out) :: fld
-cf2py intent(hide) :: m, n
-cf2py real, optional :: tol = 1e-6
-cf2py integer, optional :: maxit = 10
-cf2py threadsafe
-      use fft, only : fftexec
-      implicit none
-      include 'fftw3.f'
-      integer m, n, maxit
-      complex fld(m,n), eta(m,n)
-      real k0, h, dz, tol
-
-      complex delta, kz, u(m,n)
-      integer i, j, l
-      real nnum, nden, kx, ky, fftfreq, p
-
-      delta = cmplx(0., -1.) * k0 * dz
-      p = real(m * n)
-
-c Apply the spatial operator N = (n - 1) to the field and store in u
-!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j)
-      do j = 1, n
-        do i = 1, m
-          u(i,j) = (eta(i,j) - 1) * fld(i,j)
-        enddo
-      enddo
-!$OMP END PARALLEL DO
-
-      do l = 1, maxit
-c Spectrally evaluate the operation Lu
-c Scale the result by (m * n) to counter FFT scaling
-        call fftexec(FFTW_FORWARD, u, m, n)
-!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j,kx,ky,kz)
-        do j = 1, n
-          ky = fftfreq(j, n, h) / k0
-          do i = 1, m
-            kx = fftfreq(i, m, h) / k0
-            kz = (-1 + csqrt(cmplx(1 - kx**2 - ky**2))) / p
-            u(i,j) = kz * u(i,j)
-          enddo
-        enddo
-!$OMP END PARALLEL DO
-        call fftexec(FFTW_BACKWARD, u, m, n)
-
-        nnum = 0.
-        nden = 0.
-
-c Now finish computing the update u = -i k0 dz * LNu / m
-c Add the new update to the total field
-c Also apply the spatial operator N to the update for the next round
-!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j) REDUCTION(+:nnum,nden)
-        do j = 1, n
-          do i = 1, m
-            u(i,j) = delta * u(i,j) / l
-            fld(i,j) = fld(i,j) + u(i,j)
-            nnum = nnum + cabs(u(i,j))
-            u(i,j) = (eta(i,j) - 1) * u(i,j)
-            nden = nden + cabs(fld(i,j))
-          enddo
-        enddo
-!$OMP END PARALLEL DO
-
-        if ((nden .LT. tol .AND. nnum .LT. tol)
-     +      .OR. nnum / nden .LT. TOL) exit
-        enddo
-      end subroutine wideangle
-
-
 c Convert an object contrast into an index of refraction
       subroutine obj2eta(eta, obj, m, n)
 c Arguments:
@@ -339,34 +191,99 @@ cf2py threadsafe
 
 
 c Advance the field through a slice of medium
-      subroutine advance(fld, eta, k0, h, dz, l, m, n)
+      subroutine advance(fld, eta, k0, h, dz, m, n)
 c Arguments:
 c     fld: The field to be advanced
 c     eta: The index of refraction of the medium
 c     k0:  The reference wave number, unitless
 c     h:   The transverse sampling interval in wavelengths
 c     dz:  The propagation distance in wavelengths
-c     l:   The width of a Hann window to apply to each boundary
 c     m,n: The dimensions of the slice
 cf2py intent(in,out) :: fld
 cf2py intent(hide) :: m, n
 cf2py threadsafe
+      use fft, only : fftexec
       implicit none
       include 'fftw3.f'
-      integer m,n,l
+      integer m, n
       complex fld(m,n), eta(m,n)
       real k0, h, dz
 
-c Window to attenuate the field near the boundaries
-      if (l .GT. 0) then
-        call hann(fld, l, m, n)
-      endif
+      integer i, j
+      real kx, ky, kt, fftfreq, mn
+      complex kz, delta, u(m,n), v(m,n)
 
-c Tranform and propagate the field
-      call propagate(fld, k0, h, dz, m, n)
-c Apply wide-angle corrections and the inhomogeneous phase screen
-      call wideangle(fld, eta, k0, h, dz, m, n, 1, 1e-6)
-      call phasescreen(fld, eta, k0, dz, m, n)
+      mn = real(m * n)
+      delta = cmplx(0, k0 * dz)
+
+c Apply the spatial wide-angle operator to the field and store in u
+!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j)
+      do j = 1, n
+        do i = 1, m
+          u(i,j) = fld(i,j) / (eta(i,j) + 1) - 0.5 * fld(i,j)
+        enddo
+      enddo
+!$OMP END PARALLEL DO
+
+c Transform the field and the correction u
+      call fftexec(FFTW_FORWARD, u, m, n)
+      call fftexec(FFTW_FORWARD, fld, m, n)
+
+c Apply the spectral wide-angle operators to u and the field in v
+!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j,kx,ky,kt,kz)
+      do j = 1, n
+        ky = fftfreq(j, n, h) / k0
+        do i = 1, m
+          kx = fftfreq(i, m, h) / k0
+          kt = kx**2 + ky**2
+          kz = 1 - 0.5 * kt - csqrt(cmplx(1 - kt))
+c Divide the spatial operator by kt if it is nonzero
+c Otherwise, the numerator will vanish faster to avoid a singularity
+          if (.not. (i .eq. 1 .and. j .eq. 1)) kz = kz / kt
+          u(i,j) = u(i,j) * kz
+          v(i,j) = fld(i,j) * kz
+        enddo
+      enddo
+
+      call fftexec(FFTW_BACKWARD, v, m, n)
+c Apply the spatial wide-operator to v
+c Scale the result by 1 / (m * n) to counter FFT scaling
+!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j)
+      do j = 1, n
+        do i = 1, m
+          v(i,j) = (v(i,j) / (eta(i,j) + 1) - 0.5 * v(i,j)) / mn
+        enddo
+      enddo
+!$OMP END PARALLEL DO
+      call fftexec(FFTW_FORWARD, v, m, n)
+
+c Add the wide-angle corrections to the field
+c Also apply the spectral propagator to advance the field
+c Scale the result by 1 / (m * n) to counter FFT scaling
+!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j,kx,ky,kt,kz)
+      do j = 1, n
+        ky = fftfreq(j, n, h) / k0
+        do i = 1, m
+          kx = fftfreq(i, m, h) / k0
+          kt = kx**2 + ky**2
+          kz = csqrt(cmplx(1 - kt))
+          fld(i,j) = fld(i,j) - 8 * delta * (u(i,j) + v(i,j))
+          fld(i,j) = fld(i,j) * cexp(cmplx(0, k0 * dz) * kz) / mn
+        enddo
+      enddo
+!$OMP END PARALLEL DO
+
+c Transform the field back to the spatial domain
+      call fftexec(FFTW_BACKWARD, fld, m, n)
+
+c Apply the spatial phase screen to the field
+!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j)
+      do j = 1, n
+        do i = 1, m
+          fld(i,j) = fld(i,j) * cexp(delta * (eta(i,j) - 1.))
+        enddo
+      enddo
+!$OMP END PARALLEL DO
       end subroutine advance
 
 

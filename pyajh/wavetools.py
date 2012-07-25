@@ -406,6 +406,9 @@ class SplitStep(object):
 		self.setincident = None
 		self.reset()
 
+		# Pre-plan FFTs for efficiency
+		splitstep.fft.plan(nx, ny)
+
 
 	def reset(self):
 		'''
@@ -476,10 +479,13 @@ class SplitStep(object):
 		'''
 		# Convert the contrast to a scaled wave number
 		eta, efrac = self.etaupdate(obj)
-		k0, h, dz, l = self.k0, self.h, self.dz, self.l
 
-		# Propagate the field
-		self.fld = splitstep.advance(self.fld, eta, k0, h, dz, l)
+		# Apply a Hann window if desired
+		if self.l > 0: self.fld = splitstep.hann(self.fld, self.l)
+
+		# Wide-angle propagation of the field through the slab
+		delta = 1j * self.k0 * self.dz
+		self.fld = splitstep.advance(self.fld, eta, self.k0, self.h, self.dz)
 
 		if tau is None: return
 

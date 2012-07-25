@@ -83,6 +83,8 @@ if __name__ == '__main__':
 	if ctx is not None:
 		sse = wavecl.SplitStep(k0, p[0], p[1], h, src=src, d=d, l=a, context=ctx)
 	else:
+		# Initialize the underlying FFTW library to use threads
+		splitstep.fft.init()
 		sse = wavetools.SplitStep(k0, p[0], p[1], h, l=a)
 		# Set the incident field generator
 		def srcfld(obs):
@@ -91,9 +93,6 @@ if __name__ == '__main__':
 			if d is None: return ptsrc
 			else: return ptsrc * wavetools.directivity(obs, src, d[:-1], d[-1])
 		sse.setincgen(srcfld)
-		# Initialize the underlying FFTW library to use threads
-		splitstep.fft.init()
-		splitstep.fft.plan(p[0], p[1])
 		print 'Using %d threads for calculation' % splitstep.fft.nthread
 
 	# Create a slice tuple to strip out the padding when writing
