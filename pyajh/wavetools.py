@@ -66,7 +66,7 @@ def compress2spd(c, rho, k, f):
 	# Compute the second-order corrections
 	ks = np.sum((kv * t * w / (1. + (w * t)**2) for kv, t in zip(k, tau)), axis=0)
 	# Return the sound speed at the desired frequency
-	c = math.sqrt(2. / rho) / np.sqrt(kt + np.sqrt(kt**2 + ks**2))
+	c = np.sqrt(2. / rho) / np.sqrt(kt + np.sqrt(kt**2 + ks**2))
 	return c
 
 
