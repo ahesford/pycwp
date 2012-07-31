@@ -130,30 +130,30 @@ cf2py threadsafe
         end subroutine obj2eta
 
 
-c Compute the ratio of the current index of refraction to the next one
-        subroutine etafrac(efrac, cur, next, m, n)
+c Compute the reflection coefficient for a slab interface
+        subroutine rcoeff(rc, cur, next, m, n)
 c Arguments:
-c     efrac: The ratio of refractive indices
-c     cur:   The refractive index in the current slab
-c     next:  The refractive index in the next slab
-c     m,n:   The dimensions of the arrays
-cf2py intent(out) :: efrac
-cf2py intent(hide) :: m,n
+c     rc:   The ratio of refractive indices
+c     cur:  The refractive index in the current slab
+c     next: The refractive index in the next slab
+c     m,n:  The dimensions of the arrays
+cf2py intent(out) :: rc
+cf2py intent(hide) :: m, n
 cf2py threadsafe
       implicit none
-      integer m,n
-      complex efrac(m,n), cur(m,n), next(m,n)
+      integer m, n
+      complex rc(m,n), cur(m,n), next(m,n)
 
       integer i, j
 
 !$OMP PARALLEL DO DEFAULT(SHARED) private(i,j)
       do j = 1, n
         do i = 1, m
-          efrac(i,j) = cur(i,j) / next(i,j)
+          rc(i,j) = 0.5 * (1. - cur(i,j) / next(i,j))
         enddo
       enddo
 !$OMP END PARALLEL DO
-      end subroutine etafrac
+      end subroutine rcoeff
 
 
 c Apply a Hann window to the boundaries of a field.
@@ -287,36 +287,56 @@ c Apply the spatial phase screen to the field
       end subroutine advance
 
 
-c Apply a relaxation update to the field propagated through a slab
-      subroutine update(fwd, back, prev, efrac, tau, m, n)
+c Transmit a forward-propagating field through a slab
+c characterized by reflection coefficients rc
+      subroutine transmit(fwd, rc, m, n)
 c Arguments:
-c     fwd:   The forward-propagating field to be udpated
-c     back:  The field proapgting counter to the field
-c     prev:  The prior guess of the forward-traveling field
-c     efrac: The ratio of the current to the next refractive indices
-c     tau:   The relaxation paramter
-c     m,n:   The dimensions of the field
+c     fwd: The forward-propagating field to be udpated
+c     rc:  The reflection coefficients of the interface
+c     m,n: The dimensions of the field
 cf2py intent(in,out) :: fwd
-cf2py intent(hide) :: m,n
-cf2py optional :: tau=2.
+cf2py intent(hide) :: m, n
 cf2py threadsafe
       implicit none
       integer m, n
-      complex fwd(m,n), back(m,n), prev(m,n), efrac(m,n)
-      real tau
+      complex fwd(m,n), rc(m,n)
 
       integer i, j
-      complex pval, nval, ep1, em1
 
-!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j,pval,nval,ep1,em1)
+!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j)
       do j = 1, n
         do i = 1, m
-          ep1 = 1. + efrac(i,j)
-          em1 = 1. - efrac(i,j)
-          pval = prev(i,j) * (1. - 2. / tau)
-          nval = (ep1 * fwd(i,j) + em1 * back(i,j)) / tau
-          fwd(i,j) = pval + nval
+          fwd(i,j) = (1 - rc(i,j)) * fwd(i,j)
         enddo
       enddo
 !$OMP END PARALLEL DO
-      end subroutine update
+      end subroutine transmit
+
+
+c Compute the reflection of the field bck by an interface
+c characterized by reflection coefficients rc and add it
+c to the transmission of the field fwd across the interface
+      subroutine txreflect(fwd, bck, rc, m, n)
+c Arguments:
+c     fwd: The forward-traveling field to be transmitted
+c     bck: The backward-traveling field to be reflected
+c     rc:  The reflection coefficients of the interface
+c     tau: The relaxation paramter
+c     m,n: The dimensions of the field
+cf2py intent(in,out) :: fwd
+cf2py intent(hide) :: m, n
+cf2py threadsafe
+      implicit none
+      integer m, n
+      complex fwd(m,n), bck(m,n), rc(m,n)
+
+      integer i, j
+
+!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j)
+      do j = 1, n
+        do i = 1, m
+          fwd(i,j) = (1 - rc(i,j)) * fwd(i,j) + rc(i,j) * bck(i,j)
+        enddo
+      enddo
+!$OMP END PARALLEL DO
+      end subroutine txreflect

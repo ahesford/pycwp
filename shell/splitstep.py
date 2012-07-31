@@ -8,7 +8,7 @@ from pyajh.f2py import splitstep
 
 def usage(execname):
 	binfile = os.path.basename(execname)
-	print 'USAGE:', binfile, '[-h] [-a a] [-g g] [-f f] [-s s] [-c c] [-i i] [-t t] [-p nx,ny] [-d x,y,z,w]', '<src> <infile> <outfile>'
+	print 'USAGE:', binfile, '[-h] [-a a] [-g g] [-f f] [-s s] [-c c] [-p nx,ny] [-d x,y,z,w]', '<src> <infile> <outfile>'
 	print '''
   Using the split-step method, compute the field induced in a contrast
   medium specified in infile by a point source at location src = x,y,z.
@@ -28,8 +28,6 @@ def usage(execname):
   -f: Specify the incident frequency, f, in MHz (default: 3.0)
   -s: Specify the grid spacing, s, in mm (default: 0.05)
   -c: Specify the sound speed, c, in mm/us (default: 1.5)
-  -i: Specify the number of relaxation updates (default: 1)
-  -t: Specify the parameter for relaxation updates (default: 2)
   -p: Pad the domain to [nx,ny] pixels for attenuation (default: domain plus Hann window)
   -d: Specify a directivity axis x,y,z with width parameter w (default: none)
   -g: Use OpenCL computing device g on the first platform (default: system default device)
@@ -40,10 +38,10 @@ if __name__ == '__main__':
 	execname = sys.argv[0]
 
 	# Store the default parameters
-	a, c, s, f, k0, steps, tau = 50, 1.5, 0.05, 3.0, 2 * math.pi, 1, 2.
+	a, c, s, f, k0, = 50, 1.5, 0.05, 3.0, 2 * math.pi
 	d, p, ctx = [None]*3
 
-	optlist, args = getopt.getopt(sys.argv[1:], 'ha:f:s:c:d:p:g:i:t:')
+	optlist, args = getopt.getopt(sys.argv[1:], 'ha:f:s:c:d:p:g:')
 
 	for opt in optlist:
 		if opt[0] == '-a': a = int(opt[1])
@@ -53,8 +51,6 @@ if __name__ == '__main__':
 		elif opt[0] == '-s': s = float(opt[1])
 		elif opt[0] == '-c': c = float(opt[1])
 		elif opt[0] == '-g': ctx = int(opt[1])
-		elif opt[0] == '-i': steps = int(opt[1])
-		elif opt[0] == '-t': tau = float(opt[1])
 		else:
 			usage(execname)
 			sys.exit(128)
@@ -112,57 +108,49 @@ if __name__ == '__main__':
 	# Create a progress bar to display computation progress
 	bar = util.ProgressBar([0, p[-1]], width=50)
 
-	# Open temporary files to store the forward and backward fields 
+	# Open a temporary file to store the forward field
 	fmat = mio.Slicer(TemporaryFile(), p, inmat.dtype, True)
-	bmat = mio.Slicer(TemporaryFile(), p, inmat.dtype, True)
 
-	for step in range(1, steps + 1):
-		print 'Iteration %d of %d' % (step, steps)
+	# Compute the initial forward-traveling field
+	sse.setincident(zoff(inmat.shape[-1] + 0.5))
 
-		# Compute the initial forward-traveling field
-		sse.setincident(zoff(inmat.shape[-1] + 0.5))
+	# Reset and print the progress bar
+	bar.reset()
+	util.printflush(str(bar) + ' (forward) \r')
 
-		# Reset and print the progress bar
-		bar.reset()
+	# Propagate the forward field through each slice
+	for idx in reversed(range(p[-1])):
+		# Grab the contrast for the next slab
+		try: obj[sl] = inmat[idx - 1]
+		except IndexError: obj[:,:] = 0.
+		# Advance and write the forward-traveling field
+		sse.advance(obj)
+		fmat[idx - 1] = sse.copyfield()
+		# Increment and print the progress bar
+		bar.increment()
 		util.printflush(str(bar) + ' (forward) \r')
 
-		# Propagate the forward field through each slice
-		for idx in reversed(range(p[-1])):
-			# Grab the contrast for the next slab
-			try: obj[sl] = inmat[idx - 1]
-			except IndexError: obj[:,:] = 0.
-			# Read any existing forward and backward fields
-			ffld = fmat[idx - 1]
-			bfld = bmat[idx]
-			# Advance and write the forward-traveling field
-			sse.advance(obj, bfld, ffld, tau if step > 1 else 2.)
-			ffld = sse.copyfield()
-			fmat[idx - 1] = ffld
-			# Increment and print the progress bar
-			bar.increment()
-			util.printflush(str(bar) + ' (forward) \r')
+	# Reset progress bar and propagating field
+	sse.reset()
+	bar.reset()
+	util.printflush(str(bar) + ' (backward)\r')
 
-		# Reset progress bar and propagating field
-		sse.reset()
-		bar.reset()
+	# Open a temporary file to store the backward field
+	bmat = mio.Slicer(TemporaryFile(), p, inmat.dtype, True)
+
+	for idx in range(p[-1]):
+		# Grab the contrast for the next slab
+		try: obj[sl] = inmat[idx]
+		except IndexError: obj[:,:] = 0.
+		# Advance and write the backward-traveling field
+		# This requires knowledge of the forward-traveling field
+		sse.advance(obj, fmat[idx - 1])
+		bmat[idx] = sse.copyfield()
+		# Increment and print the progress bar
+		bar.increment()
 		util.printflush(str(bar) + ' (backward)\r')
 
-		for idx in range(p[-1]):
-			# Grab the contrast for the next slab
-			try: obj[sl] = inmat[idx]
-			except IndexError: obj[:,:] = 0.
-			# Read any existing forward and backward fields
-			ffld = fmat[idx - 1]
-			bfld = bmat[idx]
-			# Advance and write the backward-traveling field
-			sse.advance(obj, ffld, bfld, tau if step > 1 else 2.)
-			bfld = sse.copyfield()
-			bmat[idx] = bfld
-			# Increment and print the progress bar
-			bar.increment()
-			util.printflush(str(bar) + ' (backward)\r')
-
-		print
+	print
 
 	# Create a combined output file; errors will truncate the file
 	with mio.Slicer(args[2], inmat.shape, inmat.dtype, True) as outmat:
@@ -176,14 +164,13 @@ if __name__ == '__main__':
 		util.printflush(str(bar) + '\r')
 		for idx in reversed(range(inmat.shape[-1])):
 			# Combine the forward and reversed fields in one slice
-			ffld = fmat[idx]
-			bfld = bmat[idx]
-			sse.copyfield(ffld + bfld)
+			sse.copyfield(fmat[idx] + bmat[idx])
 			# Grab the next slab contrast
 			try: obj[sl] = inmat[idx - 1]
 			except IndexError: obj[:,:] = 0.
 			# Propagate the field to the midpoint
-			sse.advance(obj)
+			# No transmission operator is applied
+			sse.advance(obj, tx = False)
 			outmat[idx] = sse.copyfield()[sl]
 			bar.increment()
 			util.printflush(str(bar) + '\r')

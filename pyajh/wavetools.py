@@ -66,7 +66,7 @@ def compress2spd(c, rho, k, f):
 	# Compute the second-order corrections
 	ks = np.sum((kv * t * w / (1. + (w * t)**2) for kv, t in zip(k, tau)), axis=0)
 	# Return the sound speed at the desired frequency
-	c = np.sqrt(2. / rho) / np.sqrt(kt + np.sqrt(kt**2 + ks**2))
+	c = np.sqrt(2.) / np.sqrt(rho * (kt + np.sqrt(kt**2 + ks**2)))
 	return c
 
 
@@ -458,27 +458,25 @@ class SplitStep(object):
 		corresponding to the object contrast obj for the next slab.
 		'''
 		self.eta.append(splitstep.obj2eta(obj))
-		efrac = splitstep.etafrac(*self.eta)
+		rc = splitstep.rcoeff(*self.eta)
 		self.eta.pop(0)
 
-		return self.eta[0], efrac
+		return self.eta[0], rc
 
 
-	def advance(self, obj, bfld = None, prev = None, tau = None):
+	def advance(self, obj, bfld = None, tx = True):
 		'''
 		Propagate a field through a slab with object contrast obj and
 		use it to compute an estimate of the actual field in the slab.
 
-		The field bfld, if provided, is the current guess of a field
-		running counter to the field to be updated. The field prev, if
-		provided, is the current guess of the field to be updated. The
-		update is computed using a relaxation technique with parameter
-		tau >= 2.
+		The field bfld, if provided, is the field running counter to
+		the field to be updated.
 
-		If tau is None, forward-only propagation is assumed.
+		If tx is False, forward-only propagation is assumed and no
+		transmission operation is computed.
 		'''
 		# Convert the contrast to a scaled wave number
-		eta, efrac = self.etaupdate(obj)
+		eta, rc = self.etaupdate(obj)
 
 		# Apply a Hann window if desired
 		if self.l > 0: self.fld = splitstep.hann(self.fld, self.l)
@@ -487,15 +485,14 @@ class SplitStep(object):
 		delta = 1j * self.k0 * self.dz
 		self.fld = splitstep.advance(self.fld, eta, self.k0, self.h, self.dz)
 
-		if tau is None: return
+		if not tx: return
 
-		# If no backward-traveling or previous fields were provided,
-		# assume they are zero
-		if bfld is None: bfld = np.zeros(self.grid, dtype=obj.dtype, order='F')
-		if prev is None: prev = np.zeros(self.grid, dtype=obj.dtype, order='F')
-
-		# Apply a relaxation update to the traveling field
-		self.fld = splitstep.update(self.fld, bfld, prev, efrac, tau)
+		# Transmit the field across the interface
+		# If a backward field is provided, use the two-way function
+		if bfld is None:
+			self.fld = splitstep.transmit(self.fld, rc)
+		else:
+			self.fld = splitstep.txreflect(self.fld, bfld, rc)
 
 
 class SplitPade(object):
