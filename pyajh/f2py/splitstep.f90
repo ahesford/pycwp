@@ -190,6 +190,45 @@ cf2py threadsafe
       end subroutine hann
 
 
+c Apply JPA's wide-angle spectral operator to a spectral field
+      subroutine specop(ofld, ifld, k0, h, m, n)
+c Arguments:
+c     ofld: The output field (spectral)
+c     ifld: The input field (spectral)
+c     k0:   The reference wave number, unitless
+c     h:    The transverse sampling interval in wavelengths
+c     m,n:  The dimensions of the slice
+cf2py intent(out) :: ofld
+cf2py intent(hide) :: m, n
+cf2py threadsafe
+      use fft, only : fftexec
+      implicit none
+      include 'fftw3.f'
+      integer m, n
+      complex ifld(m,n), ofld(m,n)
+      real k0, h
+
+      integer i, j
+      real kx, ky, kt, fftfreq
+      complex kz
+
+!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j,kx,ky,kt,kz)
+      do j = 1, n
+        ky = fftfreq(j, n, h) / k0
+        do i = 1, m
+          kx = fftfreq(i, m, h) / k0
+          kt = kx**2 + ky**2
+          kz = 1 - 0.5 * kt - csqrt(cmplx(1 - kt))
+c Divide the spatial operator by kt if it is nonzero
+c Otherwise, the numerator will vanish faster to avoid a singularity
+          if (i. ne. 1 .or. j .ne. 1) kz = kz / kt
+          ofld(i,j) = ifld(i,j) * kz
+        enddo
+      enddo
+!$OMP END PARALLEL DO
+      end subroutine specop
+
+
 c Advance the field through a slice of medium
       subroutine advance(fld, eta, k0, h, dz, m, n)
 c Arguments:
@@ -213,52 +252,48 @@ cf2py threadsafe
       real kx, ky, kt, fftfreq, mn
       complex kz, delta, u(m,n), v(m,n)
 
+      real hsq
+      parameter (hsq = 0.1024)
+
       mn = real(m * n)
       delta = cmplx(0, k0 * dz)
 
-c Apply the spatial wide-angle operator to the field and store in u
-!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j)
-      do j = 1, n
-        do i = 1, m
-          u(i,j) = fld(i,j) / (eta(i,j) + 1) - 0.5 * fld(i,j)
-        enddo
-      enddo
-!$OMP END PARALLEL DO
-
-c Transform the field and the correction u
-      call fftexec(FFTW_FORWARD, u, m, n)
+c Transform the field
       call fftexec(FFTW_FORWARD, fld, m, n)
 
-c Apply the spectral wide-angle operators to u and the field in v
-!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j,kx,ky,kt,kz)
-      do j = 1, n
-        ky = fftfreq(j, n, h) / k0
-        do i = 1, m
-          kx = fftfreq(i, m, h) / k0
-          kt = kx**2 + ky**2
-          kz = 1 - 0.5 * kt - csqrt(cmplx(1 - kt))
-c Divide the spatial operator by kt if it is nonzero
-c Otherwise, the numerator will vanish faster to avoid a singularity
-          if (.not. (i .eq. 1 .and. j .eq. 1)) kz = kz / kt
-          u(i,j) = u(i,j) * kz
-          v(i,j) = fld(i,j) * kz
-        enddo
-      enddo
+c Apply a spectral wide-angle operators to the field and store in u
+      call specop(u, fld, k0, h, m, n)
 
-      call fftexec(FFTW_BACKWARD, v, m, n)
-c Apply the spatial wide-operator to v
-c Scale the result by 1 / (m * n) to counter FFT scaling
+c Add the wide-angle correction to the field itself and store in v
+c Scale u and v by 1 / (m * n) to counter FFT scaling
 !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j)
       do j = 1, n
         do i = 1, m
-          v(i,j) = (v(i,j) / (eta(i,j) + 1) - 0.5 * v(i,j)) / mn
+          v(i,j) = (fld(i,j) + u(i,j) / hsq) / mn
+          u(i,j) = u(i,j) / mn
         enddo
       enddo
 !$OMP END PARALLEL DO
+
+c Apply the spatial operator Q to v and u
+      call fftexec(FFTW_BACKWARD, u, m, n)
+      call fftexec(FFTW_BACKWARD, v, m, n)
+!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j,kz)
+      do j = 1, n
+        do i = 1, m
+          kz = eta(i,j)**2 - 1
+          v(i,j) = v(i,j) * kz
+          u(i,j) = u(i,j) * kz
+        enddo
+      enddo
+!$OMP END PARALLEL DO
+      call fftexec(FFTW_FORWARD, u, m, n)
       call fftexec(FFTW_FORWARD, v, m, n)
 
-c Add the wide-angle corrections to the field
-c Also apply the spectral propagator to advance the field
+c Apply the wide-angle spectral operator to v
+      call specop(v, v, k0, h, m, n)
+
+c Use the spectral propagator to advance the total field
 c Scale the result by 1 / (m * n) to counter FFT scaling
 !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j,kx,ky,kt,kz)
       do j = 1, n
@@ -267,7 +302,7 @@ c Scale the result by 1 / (m * n) to counter FFT scaling
           kx = fftfreq(i, m, h) / k0
           kt = kx**2 + ky**2
           kz = csqrt(cmplx(1 - kt))
-          fld(i,j) = fld(i,j) - 8 * delta * (u(i,j) + v(i,j))
+          fld(i,j) = fld(i,j) + delta * (u(i,j) + v(i,j))
           fld(i,j) = fld(i,j) * cexp(delta * kz) / mn
         enddo
       enddo
