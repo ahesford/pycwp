@@ -268,7 +268,7 @@ c Scale the result by 1 / (m * n) to counter FFT scaling
           kt = kx**2 + ky**2
           kz = csqrt(cmplx(1 - kt))
           fld(i,j) = fld(i,j) - 8 * delta * (u(i,j) + v(i,j))
-          fld(i,j) = fld(i,j) * cexp(cmplx(0, k0 * dz) * kz) / mn
+          fld(i,j) = fld(i,j) * cexp(delta * kz) / mn
         enddo
       enddo
 !$OMP END PARALLEL DO
