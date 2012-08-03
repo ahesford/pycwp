@@ -8,7 +8,7 @@ from pyajh.f2py import splitstep
 
 def usage(execname):
 	binfile = os.path.basename(execname)
-	print 'USAGE:', binfile, '[-h] [-a a] [-g g] [-f f] [-s s] [-c c] [-p nx,ny] [-d x,y,z,w]', '<src> <infile> <outfile>'
+	print 'USAGE:', binfile, '[-h] [-a a] [-g g] [-f f] [-s s] [-c c] [-p nx,ny] [-w w] [-d x,y,z,w]', '<src> <infile> <outfile>'
 	print '''
   Using the split-step method, compute the field induced in a contrast
   medium specified in infile by a point source at location src = x,y,z.
@@ -29,6 +29,7 @@ def usage(execname):
   -s: Specify the grid spacing, s, in mm (default: 0.05)
   -c: Specify the sound speed, c, in mm/us (default: 1.5)
   -p: Pad the domain to [nx,ny] pixels for attenuation (default: domain plus Hann window)
+  -w: Use a wide-angle correction weighting 1 / w**2 (default: 0.32)
   -d: Specify a directivity axis x,y,z with width parameter w (default: none)
   -g: Use OpenCL computing device g on the first platform (default: system default device)
 	'''
@@ -38,10 +39,10 @@ if __name__ == '__main__':
 	execname = sys.argv[0]
 
 	# Store the default parameters
-	a, c, s, f, k0, = 50, 1.5, 0.05, 3.0, 2 * math.pi
+	a, c, s, f, k0, w, = 50, 1.5, 0.05, 3.0, 2 * math.pi, 0.32
 	d, p, ctx = [None]*3
 
-	optlist, args = getopt.getopt(sys.argv[1:], 'ha:f:s:c:d:p:g:')
+	optlist, args = getopt.getopt(sys.argv[1:], 'ha:f:s:c:d:p:g:w:')
 
 	for opt in optlist:
 		if opt[0] == '-a': a = int(opt[1])
@@ -51,6 +52,7 @@ if __name__ == '__main__':
 		elif opt[0] == '-s': s = float(opt[1])
 		elif opt[0] == '-c': c = float(opt[1])
 		elif opt[0] == '-g': ctx = int(opt[1])
+		elif opt[0] == '-w': w = float(opt[1])
 		else:
 			usage(execname)
 			sys.exit(128)
@@ -81,7 +83,7 @@ if __name__ == '__main__':
 	else:
 		# Initialize the underlying FFTW library to use threads
 		splitstep.fft.init()
-		sse = wavetools.SplitStep(k0, p[0], p[1], h, l=a)
+		sse = wavetools.SplitStep(k0, p[0], p[1], h, l=a, w=w)
 		# Set the incident field generator
 		def srcfld(obs):
 			r = np.sqrt(reduce(np.add, ((s - o)**2 for s, o in zip(src, obs))))

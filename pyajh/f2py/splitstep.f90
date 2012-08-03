@@ -191,7 +191,7 @@ cf2py threadsafe
 
 
 c Apply JPA's wide-angle spectral operator to a spectral field
-      subroutine specop(ofld, ifld, k0, h, m, n)
+      subroutine wideangle(ofld, ifld, k0, h, m, n)
 c Arguments:
 c     ofld: The output field (spectral)
 c     ifld: The input field (spectral)
@@ -226,50 +226,52 @@ c Otherwise, the numerator will vanish faster to avoid a singularity
         enddo
       enddo
 !$OMP END PARALLEL DO
-      end subroutine specop
+      end subroutine wideangle
 
 
 c Advance the field through a slice of medium
-      subroutine advance(fld, eta, k0, h, dz, m, n)
+      subroutine advance(fld, eta, k0, h, dz, w, m, n)
 c Arguments:
 c     fld: The field to be advanced
 c     eta: The index of refraction of the medium
 c     k0:  The reference wave number, unitless
 c     h:   The transverse sampling interval in wavelengths
 c     dz:  The propagation distance in wavelengths
+c     w:   The weighting parameter for wide-angle corrections
 c     m,n: The dimensions of the slice
 cf2py intent(in,out) :: fld
 cf2py intent(hide) :: m, n
+cf2py real, optional :: w=0.32
 cf2py threadsafe
       use fft, only : fftexec
       implicit none
       include 'fftw3.f'
       integer m, n
       complex fld(m,n), eta(m,n)
-      real k0, h, dz
+      real k0, h, dz, w
 
       integer i, j
       real kx, ky, kt, fftfreq, mn
       complex kz, delta, u(m,n), v(m,n)
 
-      real hsq
-      parameter (hsq = 0.1024)
+      real wsq
 
       mn = real(m * n)
       delta = cmplx(0, k0 * dz)
+      wsq = w**2
 
 c Transform the field
       call fftexec(FFTW_FORWARD, fld, m, n)
 
 c Apply a spectral wide-angle operators to the field and store in u
-      call specop(u, fld, k0, h, m, n)
+      call wideangle(u, fld, k0, h, m, n)
 
 c Add the wide-angle correction to the field itself and store in v
 c Scale u and v by 1 / (m * n) to counter FFT scaling
 !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j)
       do j = 1, n
         do i = 1, m
-          v(i,j) = (fld(i,j) + u(i,j) / hsq) / mn
+          v(i,j) = (fld(i,j) + u(i,j) / wsq) / mn
           u(i,j) = u(i,j) / mn
         enddo
       enddo
@@ -291,7 +293,7 @@ c Apply the spatial operator Q to v and u
       call fftexec(FFTW_FORWARD, v, m, n)
 
 c Apply the wide-angle spectral operator to v
-      call specop(v, v, k0, h, m, n)
+      call wideangle(v, v, k0, h, m, n)
 
 c Use the spectral propagator to advance the total field
 c Scale the result by 1 / (m * n) to counter FFT scaling

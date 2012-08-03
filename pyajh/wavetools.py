@@ -384,7 +384,7 @@ class SplitStep(object):
 	the split-step method.
 	'''
 
-	def __init__(self, k0, nx, ny, h, l = 10, dz = None):
+	def __init__(self, k0, nx, ny, h, l = 10, dz = None, w = 0.32):
 		'''
 		Initialize a split-step engine over an nx-by-ny grid with
 		isotropic step size h. The unitless wave number is k0. The wave
@@ -392,11 +392,14 @@ class SplitStep(object):
 
 		A Hann window of thickness l is applied to each boundary of the
 		field to attenuate the field in that region.
+
+		The parameter w (as a multiplier 1 / w**2) governs a wide-angle
+		spatial-spectral correction term.
 		'''
 
 		# Copy the parameters
 		self.grid = nx, ny
-		self.h, self.k0, self.l = h, k0, l
+		self.h, self.k0, self.l, self.w = h, k0, l, w
 		# Set the step length
 		self.dz = dz if dz else h
 
@@ -482,8 +485,8 @@ class SplitStep(object):
 		if self.l > 0: self.fld = splitstep.hann(self.fld, self.l)
 
 		# Wide-angle propagation of the field through the slab
-		delta = 1j * self.k0 * self.dz
-		self.fld = splitstep.advance(self.fld, eta, self.k0, self.h, self.dz)
+		self.fld = splitstep.advance(self.fld, eta,
+				self.k0, self.h, self.dz, self.w)
 
 		if not tx: return
 
