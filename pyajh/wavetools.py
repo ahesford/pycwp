@@ -459,12 +459,14 @@ class SplitStep(object):
 		'''
 		Update the rolling buffer with the refractive index
 		corresponding to the object contrast obj for the next slab.
+		Return the current refrective indices and the reflection
+		coefficients for the slab.
 		'''
 		self.eta.append(splitstep.obj2eta(obj))
 		rc = splitstep.rcoeff(*self.eta)
-		self.eta.pop(0)
+		eta = self.eta.pop(0)
 
-		return self.eta[0], rc
+		return eta, rc
 
 
 	def advance(self, obj, bfld = None, tx = True):

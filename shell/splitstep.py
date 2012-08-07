@@ -79,7 +79,8 @@ if __name__ == '__main__':
 
 	print 'Creating split-step engine... '
 	if ctx is not None:
-		sse = wavecl.SplitStep(k0, p[0], p[1], h, src=src, d=d, l=a, context=ctx)
+		sse = wavecl.SplitStep(k0, p[0], p[1], h,
+				src=src, d=d, l=a, w=w, context=ctx)
 	else:
 		# Initialize the underlying FFTW library to use threads
 		splitstep.fft.init()

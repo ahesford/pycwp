@@ -260,37 +260,42 @@ cf2py threadsafe
       delta = cmplx(0, k0 * dz)
       wsq = w**2
 
-c Transform the field
+c Apply the spatial operator Q to the field and store in v
+!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j)
+      do j = 1, n
+        do i = 1, m
+          v(i,j) = fld(i,j) * (eta(i,j)**2 - 1)
+        enddo
+      enddo
+!$OMP END PARALLEL DO
+
+c Transform the field and v
       call fftexec(FFTW_FORWARD, fld, m, n)
+      call fftexec(FFTW_FORWARD, v, m, n)
 
 c Apply a spectral wide-angle operators to the field and store in u
       call wideangle(u, fld, k0, h, m, n)
 
-c Add the wide-angle correction to the field itself and store in v
-c Scale u and v by 1 / (m * n) to counter FFT scaling
+c Apply the spatial operator Q to the wide-angle field u
+c Scale by 1 / (m * n) to counter FFT scaling
+      call fftexec(FFTW_BACKWARD, u, m, n)
 !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j)
       do j = 1, n
         do i = 1, m
-          v(i,j) = (fld(i,j) + u(i,j) / wsq) / mn
-          u(i,j) = u(i,j) / mn
-        enddo
-      enddo
-!$OMP END PARALLEL DO
-
-c Apply the spatial operator Q to v and u
-      call fftexec(FFTW_BACKWARD, u, m, n)
-      call fftexec(FFTW_BACKWARD, v, m, n)
-!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j,kz)
-      do j = 1, n
-        do i = 1, m
-          kz = eta(i,j)**2 - 1
-          v(i,j) = v(i,j) * kz
-          u(i,j) = u(i,j) * kz
+          u(i,j) = u(i,j) * (eta(i,j)**2 - 1) / mn
         enddo
       enddo
 !$OMP END PARALLEL DO
       call fftexec(FFTW_FORWARD, u, m, n)
-      call fftexec(FFTW_FORWARD, v, m, n)
+
+c Add (1 / w**2) * u to v
+!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j)
+      do j = 1, n
+        do i = 1, m
+          v(i,j) = v(i,j) + u(i,j) / wsq
+        enddo
+      enddo
+!$OMP END PARALLEL DO
 
 c Apply the wide-angle spectral operator to v
       call wideangle(v, v, k0, h, m, n)

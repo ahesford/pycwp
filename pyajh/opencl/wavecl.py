@@ -367,7 +367,8 @@ class SplitStep(object):
 
 	_kernel = util.srcpath(__file__, 'mako', 'splitstep.mako')
 
-	def __init__(self, k0, nx, ny, h, src, d=None, l=0, dz=None, context=None):
+	def __init__(self, k0, nx, ny, h, src, d = None,
+			l = 10, dz = None, w = 0.32, context = None):
 		'''
 		Initialize a split-step engine over an nx-by-ny grid with
 		isotropic step size h. The unitless wave number is k0. The wave
@@ -382,11 +383,12 @@ class SplitStep(object):
 		If l is specified and greater than zero, it is the width of a
 		Hann window used to attenuate the field along each edge.
 
-
+		The parameter w (as a multiplier 1 / w**2) governs a wide-angle
+		spatial-spectral correction term.
 		'''
 		# Copy the parameters
 		self.grid = nx, ny
-		self.h, self.k0, self.l = h, k0, l
+		self.h, self.k0, self.l, self.w = h, k0, l, w
 		# Set the step length
 		self.dz = dz if dz else h
 
@@ -396,7 +398,7 @@ class SplitStep(object):
 		# Build the program for the context
 		t = Template(filename=SplitStep._kernel, output_encoding='ascii')
 		self.prog = cl.Program(self.context, t.render(grid = self.grid,
-			k0=k0, h=h, src=src, d=d, l=l)).build()
+			k0=k0, h=h, src=src, d=d, l=l, w=w)).build()
 
 		# Create a command queue for the context
 		self.queue = cl.CommandQueue(self.context)
@@ -406,15 +408,14 @@ class SplitStep(object):
 
 		queue, grid = self.queue, self.grid
 		empty = lambda : cla.empty(queue, grid, np.complex64, order='F')
-		# Buffers to store the propagating field and its Laplacian
-		self.fld, self.lap = empty(), empty()
-		# Buffers to store the existing backward and forward fields
-		self.bfld, self.ffld = empty(), empty()
+		# Buffers to store the propagating field and its components
+		self.fld, self.u, self.v = [empty() for i in range(3)]
+		# Buffers to store the backward-traveling field
+		self.bfld = empty()
 		# The index of refraction gets two buffers for averaging
 		self.eta = [empty() for i in range(2)]
-		self.slab = 0
-		# The ration of refractive indices is used for two-way propagation
-		self.efrac = empty()
+		# The reflection coefficients for a slab
+		self.rc = empty()
 		# Initialize refractive index and fields
 		self.reset()
 
@@ -442,7 +443,6 @@ class SplitStep(object):
 
 		z = np.zeros(grid, dtype=np.complex64)
 		self.bfld.set(z)
-		self.ffld.set(z)
 		self.fld.set(z)
 
 
@@ -471,37 +471,35 @@ class SplitStep(object):
 		corresponding to the object contrast obj for the next slab.
 		'''
 		prog, queue, grid = self.prog, self.queue, self.grid
-		aug, eta = [self.eta[i] for i in [self.slab - 1, self.slab]]
+		cur, nxt = self.eta
 		# Copy and convert the next slab index
-		aug.set(obj.astype(np.complex64).ravel('F'))
-		prog.obj2eta(queue, grid, None, aug.data)
+		nxt.set(obj.astype(np.complex64).ravel('F'))
+		prog.obj2eta(queue, grid, None, nxt.data)
 		# Compute the ratio for backscattering
-		prog.etafrac(queue, grid, None, self.efrac.data, eta.data, aug.data)
-		# Increment the rolling slab counter
-		self.slab = (self.slab + 1) % 2
+		prog.rcoeff(queue, grid, None, self.rc.data, cur.data, nxt.data)
+		# Roll the buffer for the next slab
+		self.eta = [nxt, cur]
 
-		# Return a pointer to the new average CL array
-		return eta
+		# Return a pointer to the current slab array
+		return cur
 
 
-	def advance(self, obj, bfld = None, prev = None, tau = None):
+	def advance(self, obj, bfld = None, tx = True):
 		'''
 		Propagate a field through a slab with object contrast obj and
 		use it to compute an estimate of the actual field in the slab.
 
-		The field bfld, if provided, is the current guess of a field
-		running counter to the field to be updated. The field prev, if
-		provided, is the current guess of the field to be updated. The
-		update is computed using a relaxation technique with parameter
-		tau >= 2.
+		The field bfld, if provided, is the field running counter to
+		the field to be updated.
 
-		If tau is None, forward-only propagation is assumed.
+		If tx is False, forward-only propagation is assumed and no
+		transmission operation is computed.
 		'''
 		prog, queue, grid = self.prog, self.queue, self.grid
 		# Update the average refractive index and grab the CL buffer
 		eta = self.etaupdate(obj).data
 		# Point to the field and Laplacian data
-		fld, lap = self.fld.data, self.lap.data
+		fld, u, v = self.fld.data, self.u.data, self.v.data
 
 		# The step size of the slab
 		dz = np.float32(self.dz)
@@ -511,32 +509,43 @@ class SplitStep(object):
 			prog.attenx(queue, (self.l, grid[1]), None, fld)
 			prog.atteny(queue, (grid[0], self.l), None, fld)
 
-		# Take the forward FFT of the field and apply the propagator
-		self.fftplan.execute(fld)
-		prog.propagate(queue, grid, None, fld, dz)
+		# Apply, in v, the high-order spatial operator to the field
+		prog.widespat(queue, grid, None, v, eta, fld)
 
-		# Compute the Laplacian in the spectral domain
-		prog.laplacian(queue, grid, None, lap, fld)
+		# Take the forward FFT of the field and v
+		self.fftplan.execute(fld)
+		self.fftplan.execute(v)
+
+		# Apply, in u, the high-order spectral operator to the field
+		prog.widespec(queue, grid, None, u, fld)
+
+		# Apply the high-order spatial operator to u
+		self.fftplan.execute(u, inverse=True)
+		prog.widespat(queue, grid, None, u, eta, u)
+		self.fftplan.execute(u)
+
+		# Augment the spatial term v with the cross term u
+		prog.xterm(queue, grid, None, v, u)
+		# Apply the high-order spectral operator to v
+		prog.widespec(queue, grid, None, v, v)
+
+		# Augment the propagating field with the high-order terms
+		prog.corrfld(queue, grid, None, fld, u, v, dz)
+
+		# Propagate the field through a homogeneous slab
+		prog.propagate(queue, grid, None, fld, dz)
 
 		# Take the inverse FFT of the field and the Laplacian
 		self.fftplan.execute(fld, inverse=True)
-		self.fftplan.execute(lap, inverse=True)
-
-		# Add the wide-angle correction term
-		prog.wideangle(queue, grid, None, fld, lap, eta, dz)
 
 		# Multiply by the phase screen
 		prog.screen(queue, grid, None, fld, eta, dz)
 
-		if tau is None: return
+		if not tx: return
 
-		# Copy the backward field if provided
-		if bfld is not None:
+		rc = self.rc.data
+		if bfld is None:
+			prog.transmit(queue, grid, None, fld, rc)
+		else:
 			self.bfld.set(bfld.astype(np.complex64).ravel('F'))
-		# Copy any provided prior guess if it will be used in the update
-		if prev is not None and tau > 2:
-			self.ffld.set(prev.astype(np.complex64).ravel('F'))
-
-		# Compute a relaxation update
-		prog.update(queue, grid, None, fld, self.bfld.data,
-				self.efrac.data, self.ffld.data, np.float32(tau))
+			prog.txreflect(queue, grid, None, fld, self.bfld.data, rc)
