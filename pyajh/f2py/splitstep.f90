@@ -91,15 +91,16 @@ c for an m-point FFT with sample spacing h
         real fftfreq, h
         integer i, m
 
-        integer half
+        integer half, im1
         real pi
         parameter (pi = 3.141592653589793)
 
+        im1 = i - 1
         half = (m - 1) / 2
-        if (i .LE. half) then
-          fftfreq = real(i - 1)
+        if (im1 .LE. half) then
+          fftfreq = real(im1)
         else
-          fftfreq = real(i - 1 - m)
+          fftfreq = real(im1 - m)
         endif
         fftfreq = fftfreq * 2. * pi / (real(m) * h)
       end function fftfreq
