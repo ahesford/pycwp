@@ -19,7 +19,7 @@
 
 ## Wrap the coordinate index in accordance with the FFT.
 <%def name="wrap(n,i)">
-	(float) ((${i} < ${n / 2}) ? (int) ${i} : (int) ${i} - ${n})
+	(float) ((${i} <= ${int(n - 1) / 2}) ? (int) ${i} : (int) ${i} - ${n})
 </%def>
 
 ## Print the tuple as a floating-point number
