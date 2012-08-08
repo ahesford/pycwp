@@ -400,13 +400,16 @@ class SplitStep(object):
 		self.prog = cl.Program(self.context, t.render(grid = self.grid,
 			k0=k0, h=h, src=src, d=d, l=l, w=w)).build()
 
-		# Create a command queue for the context
-		self.queue = cl.CommandQueue(self.context)
+		# Create a command queue for forward propagation calculations
+		self.fwdque = cl.CommandQueue(self.context)
+		# Create a command queue for transmissions
+		self.tranque = cl.CommandQueue(self.context)
 
-		# Create an FFT plan in the OpenCL queue
-		self.fftplan = Plan((nx, ny), queue=self.queue)
+		# Create an FFT plan in the OpenCL propagation queue
+		self.fftplan = Plan((nx, ny), queue=self.fwdque)
 
-		queue, grid = self.queue, self.grid
+		queue, grid = self.fwdque, self.grid
+		# By default, all buffers use the calculation queue
 		empty = lambda : cla.empty(queue, grid, np.complex64, order='F')
 		# Buffers to store the propagating field and its components
 		self.fld, self.u, self.v = [empty() for i in range(3)]
@@ -438,12 +441,12 @@ class SplitStep(object):
 		grid = self.grid
 
 		o = np.ones(grid, dtype=np.complex64)
-		self.eta[0].set(o)
-		self.eta[1].set(o)
+		self.eta[0].set(o, async=True)
+		self.eta[1].set(o, async=True)
 
 		z = np.zeros(grid, dtype=np.complex64)
-		self.bfld.set(z)
-		self.fld.set(z)
+		self.bfld.set(z, async=True)
+		self.fld.set(z, async=True)
 
 
 	def copyfield(self, fld = None):
@@ -451,9 +454,12 @@ class SplitStep(object):
 		If fld is provided, copy the provided field into the CL field
 		buffer. Otherwise, return a NumPy array containing a copy of
 		the already-populated CL field buffer.
+
+		Copies from the device are synchronous.
+		Copies to the device occur on the propagation queue asynchronously.
 		'''
 		if fld is None: return self.fld.get()
-		else: self.fld.set(fld.astype(np.complex64).ravel('F'))
+		else: self.fld.set(fld.astype(np.complex64).ravel('F'), async=True)
 
 
 	def setincident(self, zoff):
@@ -462,26 +468,37 @@ class SplitStep(object):
 		height zoff.
 		'''
 		inc = self.fld.data
-		self.prog.green3d(self.queue, self.grid, None, inc, np.float32(zoff))
+		self.prog.green3d(self.fwdque, self.grid, None, inc, np.float32(zoff))
 
 
-	def etaupdate(self, obj):
+	def etaupdate(self, obj, wait=True):
 		'''
-		Update the rolling buffer with the refractive index
-		corresponding to the object contrast obj for the next slab.
-		'''
-		prog, queue, grid = self.prog, self.queue, self.grid
+		Update the rolling buffer with the index of refraction,
+		corresponding to an object contrast obj, for the next slab.
+
+		If wait is True, execution pauses until the update is complete.
+		Setting wait to False (e.g., from self.advance) allows the
+		update to be performed simultaneously with other calculations.
+
+		The transmission queue is used for updates to facilitate
+		concurrency with forward propagation algorithms.  '''
+		# Transfers occur in the transmission queue for concurrency
+		prog, queue, grid = self.prog, self.tranque, self.grid
 		cur, nxt = self.eta
-		# Copy and convert the next slab index
-		nxt.set(obj.astype(np.complex64).ravel('F'))
+		# Copy the next slab index asynchronously
+		obj = obj.astype(np.complex64).ravel('F')
+		nxt.set(obj, queue=queue, async=True)
+		# Convert the next index of refraction to an object
 		prog.obj2eta(queue, grid, None, nxt.data)
-		# Compute the ratio for backscattering
-		prog.rcoeff(queue, grid, None, self.rc.data, cur.data, nxt.data)
+
 		# Roll the buffer for the next slab
 		self.eta = [nxt, cur]
 
-		# Return a pointer to the current slab array
-		return cur
+		# Wait for execution to finish, if desired
+		if wait: queue.finish()
+
+		# Return a pointer to the current and next slab arrays
+		return cur, nxt
 
 
 	def advance(self, obj, bfld = None, tx = True):
@@ -495,57 +512,71 @@ class SplitStep(object):
 		If tx is False, forward-only propagation is assumed and no
 		transmission operation is computed.
 		'''
-		prog, queue, grid = self.prog, self.queue, self.grid
-		# Update the average refractive index and grab the CL buffer
-		eta = self.etaupdate(obj).data
+		prog, grid = self.prog, self.grid
+		fwdque, tranque = self.fwdque, self.tranque
 		# Point to the field and Laplacian data
 		fld, u, v = self.fld.data, self.u.data, self.v.data
+
+		# Asynchronously push the next slab to its buffer
+		eta, enxt = [e.data for e in self.etaupdate(obj, False)]
+		# Copy the backward field, if necessary
+		if bfld is not None and tx:
+			bfld = bfld.astype(np.complex64).ravel('F')
+			self.bfld.set(bfld, queue=tranque, async=True)
 
 		# The step size of the slab
 		dz = np.float32(self.dz)
 
 		# Attenuate the boundaries using a Hann window, if desired
 		if self.l > 0:
-			prog.attenx(queue, (self.l, grid[1]), None, fld)
-			prog.atteny(queue, (grid[0], self.l), None, fld)
+			prog.attenx(fwdque, (self.l, grid[1]), None, fld)
+			prog.atteny(fwdque, (grid[0], self.l), None, fld)
 
 		# Apply, in v, the high-order spatial operator to the field
-		prog.widespat(queue, grid, None, v, eta, fld)
+		prog.widespat(fwdque, grid, None, v, eta, fld)
 
 		# Take the forward FFT of the field and v
 		self.fftplan.execute(fld)
 		self.fftplan.execute(v)
 
 		# Apply, in u, the high-order spectral operator to the field
-		prog.widespec(queue, grid, None, u, fld)
+		prog.widespec(fwdque, grid, None, u, fld)
 
 		# Apply the high-order spatial operator to u
 		self.fftplan.execute(u, inverse=True)
-		prog.widespat(queue, grid, None, u, eta, u)
+		prog.widespat(fwdque, grid, None, u, eta, u)
 		self.fftplan.execute(u)
 
 		# Augment the spatial term v with the cross term u
-		prog.xterm(queue, grid, None, v, u)
+		prog.xterm(fwdque, grid, None, v, u)
 		# Apply the high-order spectral operator to v
-		prog.widespec(queue, grid, None, v, v)
+		prog.widespec(fwdque, grid, None, v, v)
 
 		# Augment the propagating field with the high-order terms
-		prog.corrfld(queue, grid, None, fld, u, v, dz)
+		prog.corrfld(fwdque, grid, None, fld, u, v, dz)
 
 		# Propagate the field through a homogeneous slab
-		prog.propagate(queue, grid, None, fld, dz)
+		prog.propagate(fwdque, grid, None, fld, dz)
 
 		# Take the inverse FFT of the field and the Laplacian
 		self.fftplan.execute(fld, inverse=True)
 
 		# Multiply by the phase screen
-		prog.screen(queue, grid, None, fld, eta, dz)
+		prog.screen(fwdque, grid, None, fld, eta, dz)
 
 		if not tx: return
 
+		# Flush the forward queue for consistency with transmissions
+		fwdque.finish()
+
+		# Compute the reflection coefficients for the interface
+		prog.rcoeff(tranque, grid, None, self.rc.data, eta, enxt)
+
+		# Perform the transmission and (optionally) reflection
 		rc = self.rc.data
-		if bfld is None:
-			prog.transmit(queue, grid, None, fld, rc)
-		else:
-			self.bfld.set(bfld.astype(np.complex64).ravel('F'))
-			prog.txreflect(queue, grid, None, fld, self.bfld.data, rc)
+		if bfld is None: prog.transmit(tranque, grid, None, fld, rc)
+		else: prog.txreflect(tranque, grid, None, fld, self.bfld.data, rc)
+
+		# Flush the transmit queue for consistency with propagations
+		tranque.finish()
+

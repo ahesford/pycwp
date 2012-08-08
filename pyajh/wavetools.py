@@ -420,7 +420,7 @@ class SplitStep(object):
 		# The default field to propagate is None
 		self.fld = np.zeros(self.grid, dtype=np.complex64, order='F')
 		# Initialize the index of refraction
-		self.eta = [np.ones(self.grid, dtype=np.complex64, order='F')]
+		self.eta = np.ones(self.grid, dtype=np.complex64, order='F')
 
 
 	def setincgen(self, func):
@@ -462,11 +462,12 @@ class SplitStep(object):
 		Return the current refrective indices and the reflection
 		coefficients for the slab.
 		'''
-		self.eta.append(splitstep.obj2eta(obj))
-		rc = splitstep.rcoeff(*self.eta)
-		eta = self.eta.pop(0)
-
-		return eta, rc
+		# Grab the current index of refraction
+		cur = self.eta
+		# Store the next index of refraction
+		self.eta = splitstep.obj2eta(obj)
+		# Return the current and next slabs
+		return cur, self.eta
 
 
 	def advance(self, obj, bfld = None, tx = True):
@@ -480,8 +481,8 @@ class SplitStep(object):
 		If tx is False, forward-only propagation is assumed and no
 		transmission operation is computed.
 		'''
-		# Convert the contrast to a scaled wave number
-		eta, rc = self.etaupdate(obj)
+		# Grab the current and next indices of refraction
+		eta, enxt = self.etaupdate(obj)
 
 		# Apply a Hann window if desired
 		if self.l > 0: self.fld = splitstep.hann(self.fld, self.l)
@@ -491,6 +492,9 @@ class SplitStep(object):
 				self.k0, self.h, self.dz, self.w)
 
 		if not tx: return
+
+		# Compute the reflection coefficients for the slab
+		rc = splitstep.rcoeff(eta, enxt)
 
 		# Transmit the field across the interface
 		# If a backward field is provided, use the two-way function
