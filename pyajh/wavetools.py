@@ -70,25 +70,31 @@ def compress2spd(c, rho, k, f):
 	return c
 
 
-def spd2ct(c, cbg, atn = None):
+def spd2ct(c, cbg, atn = None, rho = None):
 	'''
-	Convert a wave speed profile c and an optional attenuation profile atn
-	into a unitless, complex contrast profile relative to the background
-	wave speed cbg.
+	Convert a wave speed profile c, an optional attenuation profile atn and
+	an optional density rho = (rho_r, L (rho_r)**(-1/2)), where rho_r is
+	the relative density and L is the three-dimensional Laplacian, into a
+	unitless, complex contrast profile relative to the background wave
+	speed cbg.
 
 	The speed units are mm / us; attenuation units are dB / cm / MHz.
 	'''
 
-	try:
+	if atn is not None:
 		# The factor 0.1 converts dB / cm / MHz to dB / mm / MHz
 		# The factor log(10) / 20 converts dB to Np
 		scale = 0.1 * math.log(10) / 20
 		# Multiplying atn by cbg converts it to dB per wavelength
 		k = 2. * math.pi * cbg / c + 1j * cbg * scale * atn
-	except TypeError: k = 2. * math.pi * cbg / c
+	else: k = 2. * math.pi * cbg / c
 
-	# Return the contrast profile
-	return (k / 2. / math.pi)**2 - 1.
+	# Compute the contrast profile
+	obj = (k / 2. / math.pi)**2 - 1.
+	# Add density variations if provided
+	if rho is not None: obj -= np.sqrt(rho[0]) * rho[1] / (2. * math.pi)**2
+
+	return obj
 
 
 def directivity(obs, src, d, a):
