@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 
 import numpy as np, math, sys, getopt, os
-from tempfile import TemporaryFile
 from pyajh import mio, wavetools, util, cutil
 from pyajh.opencl import wavecl
 from pyajh.f2py import splitstep
@@ -111,8 +110,8 @@ if __name__ == '__main__':
 	# Create a progress bar to display computation progress
 	bar = util.ProgressBar([0, p[-1]], width=50)
 
-	# Open a temporary file to store the forward field
-	fmat = mio.Slicer(TemporaryFile(), p, inmat.dtype, True)
+	# Open a file to store the forward field
+	fmat = mio.Slicer(args[2] + '.forward', p, inmat.dtype, True)
 
 	# Compute the initial forward-traveling field
 	sse.setincident(zoff(inmat.shape[-1] + 0.5))
@@ -138,8 +137,8 @@ if __name__ == '__main__':
 	bar.reset()
 	util.printflush(str(bar) + ' (backward)\r')
 
-	# Open a temporary file to store the backward field
-	bmat = mio.Slicer(TemporaryFile(), p, inmat.dtype, True)
+	# Open a file to store the backward field
+	bmat = mio.Slicer(args[2] + '.backward', p, inmat.dtype, True)
 
 	for idx in range(p[-1]):
 		# Grab the contrast for the next slab

@@ -6,6 +6,12 @@ import numpy, math, operator
 from scipy import special as spec
 from .geom import sph2cart
 
+def binomial(n, k):
+	'''
+	Compute the binomial coefficient n choose k.
+	'''
+	return numpy.prod([float(n - (k - i)) / i for i in range(1, k+1)])
+
 def ceilpow2(x):
 	'''
 	Find the smallest power of 2 not less than the specified integer x.
