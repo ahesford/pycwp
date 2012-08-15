@@ -28,7 +28,7 @@ def usage(execname):
   -s: Specify the grid spacing, s, in mm (default: 0.05)
   -c: Specify the sound speed, c, in mm/us (default: 1.5)
   -p: Pad the domain to [nx,ny] pixels for attenuation (default: domain plus Hann window)
-  -w: Use a wide-angle correction weighting 1 / w**2 (default: 0.32)
+  -w: Use a wide-angle correction weighting 1 / w**2 (default: 0.5)
   -d: Specify a directivity axis x,y,z with width parameter w (default: none)
   -g: Use OpenCL computing device g on the first platform (default: system default device)
 	'''
@@ -38,7 +38,7 @@ if __name__ == '__main__':
 	execname = sys.argv[0]
 
 	# Store the default parameters
-	a, c, s, f, k0, w, = 50, 1.5, 0.05, 3.0, 2 * math.pi, 0.32
+	a, c, s, f, k0, w, = 50, 1.5, 0.05, 3.0, 2 * math.pi, 0.5
 	d, p, ctx = [None]*3
 
 	optlist, args = getopt.getopt(sys.argv[1:], 'ha:f:s:c:d:p:g:w:')

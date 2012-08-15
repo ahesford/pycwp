@@ -412,7 +412,8 @@ class SplitStep(object):
 		# By default, all buffers use the calculation queue
 		empty = lambda : cla.empty(queue, grid, np.complex64, order='F')
 		# Buffers to store the propagating field and its components
-		self.fld, self.u, self.v = [empty() for i in range(3)]
+		self.fld = empty()
+		self.scratch = [empty() for i in range(4)]
 		# Buffers to store the backward-traveling field
 		self.bfld = empty()
 		# The index of refraction gets two buffers for averaging
@@ -514,8 +515,13 @@ class SplitStep(object):
 		'''
 		prog, grid = self.prog, self.grid
 		fwdque, tranque = self.fwdque, self.tranque
-		# Point to the field and Laplacian data
-		fld, u, v = self.fld.data, self.u.data, self.v.data
+		# Point to the field and component data
+		fld = self.fld.data
+		u, v, x, y = [s.data for s in self.scratch]
+		# These constants are used in field combinations
+		wsq = np.float32(1 / self.w**2)
+		one = np.float32(1)
+		eighth = np.float32(1. / 8)
 
 		# Asynchronously push the next slab to its buffer
 		eta, enxt = [e.data for e in self.etaupdate(obj, False)]
@@ -532,28 +538,49 @@ class SplitStep(object):
 			prog.attenx(fwdque, (self.l, grid[1]), None, fld)
 			prog.atteny(fwdque, (grid[0], self.l), None, fld)
 
-		# Apply, in v, the high-order spatial operator to the field
-		prog.widespat(fwdque, grid, None, v, eta, fld)
+		# Multiply, in v, the field by the contrast
+		prog.ctmul(fwdque, grid, None, v, eta, fld)
+		# Multiply, in y, the field by the high-order spatial operator
+		prog.hospat(fwdque, grid, None, y, eta, fld)
 
-		# Take the forward FFT of the field and v
+		# From here, the field, u and v should be spectral
 		self.fftplan.execute(fld)
 		self.fftplan.execute(v)
+		self.fftplan.execute(y)
+
+		# Compute the scaled, spatial Laplacians of the field (in u) and y
+		prog.laplacian(fwdque, grid, None, u, fld)
+		self.fftplan.execute(u, inverse=True)
+		prog.laplacian(fwdque, grid, None, y, y)
+		self.fftplan.execute(y, inverse=True)
+		# Apply the high-order spatial operator to x = u + y / w**2
+		prog.caxpy(fwdque, grid, None, x, wsq, y, u)
+		prog.hospat(fwdque, grid, None, x, eta, x)
+		# Now add to x the second-order term in y
+		prog.caxpy(fwdque, grid, None, x, one, y, x)
+		# Multiply u by the contrast and add to x
+		prog.ctmul(fwdque, grid, None, u, eta, u)
+		prog.caxpy(fwdque, grid, None, x, eighth, u, x)
+		# The correction should be in the spectral domain
+		self.fftplan.execute(x)
 
 		# Apply, in u, the high-order spectral operator to the field
-		prog.widespec(fwdque, grid, None, u, fld)
-
-		# Apply the high-order spatial operator to u
+		prog.hospec(fwdque, grid, None, u, fld)
+		# Multiply u by the contrast in the spatial domain
 		self.fftplan.execute(u, inverse=True)
-		prog.widespat(fwdque, grid, None, u, eta, u)
+		prog.ctmul(fwdque, grid, None, u, eta, u)
 		self.fftplan.execute(u)
+		# Apply the high-order spectral operator to y = v + u / w**2
+		prog.caxpy(fwdque, grid, None, y, wsq, u, v)
+		prog.hospec(fwdque, grid, None, y, y)
+		# Now add to y the second-order term in u
+		prog.caxpy(fwdque, grid, None, y, one, u, y)
+		# Compute the scaled, spectral Laplacian of v and add to y
+		prog.laplacian(fwdque, grid, None, v, v)
+		prog.caxpy(fwdque, grid, None, y, eighth, v, y)
 
-		# Augment the spatial term v with the cross term u
-		prog.xterm(fwdque, grid, None, v, u)
-		# Apply the high-order spectral operator to v
-		prog.widespec(fwdque, grid, None, v, v)
-
-		# Augment the propagating field with the high-order terms
-		prog.corrfld(fwdque, grid, None, fld, u, v, dz)
+		# Add the high-order corrections to the field
+		prog.corrfld(fwdque, grid, None, fld, x, y, dz)
 
 		# Propagate the field through a homogeneous slab
 		prog.propagate(fwdque, grid, None, fld, dz)

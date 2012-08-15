@@ -13,7 +13,7 @@
 %>
 
 #define cmul(a, b) (float2)(mad(-(a).y, (b).y, (a).x * (b).x), mad((a).y, (b).x, (a).x * (b).y))
-#define cdiv(a, b) (float2)(mad((a).x, (b).x, (a).y * (b).y), mad((a).y, (b).x, -(a).x * (b).y)) / (float2)((b).x * (b).x + (b).y * (b).y)
+#define cdiv(a, b) (float2)(mad((a).x, (b).x, (a).y * (b).y), mad((a).y, (b).x, -(a).x * (b).y)) / (float2)(mad((b).x, (b).x, (b).y * (b).y))
 #define eikr(a) (float2) (cos((float) (a)), sin((float) (a)))
 #define imul(a) (float2) (-(a).y, (a).x)
 
@@ -165,9 +165,9 @@ __kernel void propagate(${gfc} fld, const float dz) {
 	fld[idx] = cmul(fld[idx], prop);
 }
 
-/* In u, apply JPA's wide-angle spectral operator P to the input field f. */
-__kernel void widespec(${gfc} u, ${gfc} f) {
-	/* Grab the spatial sample for the current work item. */
+/* In u, apply JPA's high-order spectral operator PP to the input field f. */
+__kernel void hospec(${gfc} u, ${gfc} f) {
+	/* Grab the spectral sample for the current work item. */
 	${getindices('i', 'j', 'idx')}
 	/* Compute the transverse wave numbers. */
 	${getkxy('i', 'j')}
@@ -183,9 +183,30 @@ __kernel void widespec(${gfc} u, ${gfc} f) {
 	u[idx] = cmul(kzn / (float2) kzd, f[idx]);
 }
 
-/* Store in u the product of the spatial operator Q (the object contrast) and
- * the input f. */
-__kernel void widespat(${gfc} u, ${gfc} eta, ${gfc} f) {
+/* In u, apply the spectral Laplacian operator P to the input field f. */
+__kernel void laplacian(${gfc} u, ${gfc} f) {
+	/* Grab the spectral sample for the current work item. */
+	${getindices('i', 'j', 'idx')}
+	/* Compute the transverse wave numbers. */
+	${getkxy('i', 'j')}
+
+	u[idx] = (float2) (-kxy / ${k0**2}f) * f[idx];
+}
+
+/* In u, apply the high-order spatial operator QQ to the input field f. */
+__kernel void hospat(${gfc} u, ${gfc} eta, ${gfc} f) {
+	/* Grab the spatial sample  for the current work item. */
+	${getindices('i', 'j', 'idx')}
+
+	const float2 eval = eta[idx];
+	const float2 one = (float2) (1.0f, 0.0f);
+	const float2 qval = cdiv(one, eval + one) - (float2) (0.5f, 0.0f);
+
+	u[idx] = cmul(qval, f[idx]);
+}
+
+/* In u, store the product of the object contrast with the field f. */
+__kernel void ctmul(${gfc} u, ${gfc} eta, ${gfc} f) {
 	/* Grab the spatial sample for the current work item. */
 	${getindices('i', 'j', 'idx')}
 
@@ -207,17 +228,14 @@ __kernel void screen(${gfc} fld, ${gfc} eta, const float dz) {
 	fld[idx] = cmul(cexp(arg), fld[idx]);
 }
 
-/* Given fields v = Qf and u = QPf, where Q and P are the spatial and spectral
- * high-order operators, respectively, compute v += (1 / w**2) * u. */
-__kernel void xterm(${gfc} v, ${gfc} u) {
+/* Compute z = a * x + y for vectors x, y, z and real scalar a. */
+__kernel void caxpy(${gfc} z, const float a, ${gfc} x, ${gfc} y) {
 	${getindices('i', 'j', 'idx')}
-
-	v[idx] += u[idx] / (float2) (${w**2}f);
+	z[idx] = y[idx] + (float2) (a) * x[idx];
 }
 
-/* Given fields u = QPf and v = P[Qf + u / w**2], where Q and P are the spatial
- * and spectral high-order operators, respectively, compute
- * f = f + delta * (u + v), where delta = 1j * k0 * dz. */
+/* Given field corrections u and v, compute
+ * f = f + delta * (u + v) for delta = 1j * k0 * dz. */
 __kernel void corrfld(${gfc} f, ${gfc} u, ${gfc} v, const float dz) {
 	${getindices('i', 'j', 'idx')}
 
