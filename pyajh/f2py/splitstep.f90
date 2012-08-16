@@ -284,9 +284,6 @@ c Otherwise, the numerator will vanish faster to avoid a singularity
       end subroutine hospec
 
 
-
-
-
 c Apply the scaled spectral Laplacian operator to a field
       subroutine laplacian(ofld, ifld, k0, h, m, n)
 c Arguments:
@@ -356,28 +353,29 @@ c     eta: The index of refraction of the medium
 c     k0:  The reference wave number, unitless
 c     h:   The transverse sampling interval in wavelengths
 c     dz:  The propagation distance in wavelengths
-c     w:   The weighting parameter for wide-angle corrections
+c     w:   The weighting parameters for high-order corrections
 c     m,n: The dimensions of the slice
 cf2py intent(in,out) :: fld
 cf2py intent(hide) :: m, n
-cf2py real, optional :: w=0.32
 cf2py threadsafe
       use fft, only : fftexec
       implicit none
       include 'fftw3.f'
       integer m, n
       complex fld(m,n), eta(m,n)
-      real k0, h, dz, w
+      real k0, h, dz
+      real w(2)
 
       integer i, j
       real kx, ky, kt, fftfreq, mn
       complex kz, delta, u(m,n), v(m,n), x(m,n), y(m,n)
 
-      real wsq
+      real wsq(2)
 
       mn = real(m * n)
       delta = cmplx(0, k0 * dz)
-      wsq = w**2
+      wsq(1) = w(1)**2
+      wsq(2) = w(2)**2
 
 c Multiply the field by the contrast and store in v
       call ctmul(v, fld, eta, m, n)
@@ -395,7 +393,7 @@ c Compute the scaled, spatial Laplacians of the field (in u) and y
       call fftexec(FFTW_BACKWARD, y, m, n)
 c Apply the high-order spatial operator to x = u + y / w**2
 c Scale u and y by 1 / (m * n) to counter FFT scaling
-      call caxpby(x, 1. / mn, u, 1. / (mn * wsq), y, m, n)
+      call caxpby(x, 1. / mn, u, 1. / (mn * wsq(2)), y, m, n)
       call hospat(x, x, eta, m, n)
 c Now add to x the second-order term in y
 c Scale y by 1 / (m * n) to counter FFT scaling
@@ -415,7 +413,7 @@ c Multiply u by the contrast in the spatial domain
       call fftexec(FFTW_FORWARD, u, m, n)
 c Apply the high-order spectral operator to y = v + u / w**2
 c Scale u by 1 / (m * n) to counter FFT scaling
-      call caxpby(y, 1., v, 1. / (mn * wsq), u, m, n)
+      call caxpby(y, 1., v, 1. / (mn * wsq(1)), u, m, n)
       call hospec(y, y, k0, h, m, n)
 c Now add to y the second-order term in u
 c Scale u by 1 / (m * n) to counter FFT scaling

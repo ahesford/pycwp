@@ -368,7 +368,7 @@ class SplitStep(object):
 	_kernel = util.srcpath(__file__, 'mako', 'splitstep.mako')
 
 	def __init__(self, k0, nx, ny, h, src, d = None,
-			l = 10, dz = None, w = 0.32, context = None):
+			l = 10, dz = None, w = (0.32, 0.5), context = None):
 		'''
 		Initialize a split-step engine over an nx-by-ny grid with
 		isotropic step size h. The unitless wave number is k0. The wave
@@ -383,12 +383,13 @@ class SplitStep(object):
 		If l is specified and greater than zero, it is the width of a
 		Hann window used to attenuate the field along each edge.
 
-		The parameter w (as a multiplier 1 / w**2) governs a wide-angle
-		spatial-spectral correction term.
+		The parameters w (as multipliers of the form 1 / w**2) govern
+		high-order spectral and spatial terms, in that order.
 		'''
 		# Copy the parameters
 		self.grid = nx, ny
-		self.h, self.k0, self.l, self.w = h, k0, l, w
+		self.h, self.k0, self.l = h, k0, l
+		self.w = np.array([1 / v**2 for v in w], dtype=np.float32)
 		# Set the step length
 		self.dz = dz if dz else h
 
@@ -519,9 +520,9 @@ class SplitStep(object):
 		fld = self.fld.data
 		u, v, x, y = [s.data for s in self.scratch]
 		# These constants are used in field combinations
-		wsq = np.float32(1 / self.w**2)
 		one = np.float32(1)
 		eighth = np.float32(1. / 8)
+		dz = np.float32(self.dz)
 
 		# Asynchronously push the next slab to its buffer
 		eta, enxt = [e.data for e in self.etaupdate(obj, False)]
@@ -529,9 +530,6 @@ class SplitStep(object):
 		if bfld is not None and tx:
 			bfld = bfld.astype(np.complex64).ravel('F')
 			self.bfld.set(bfld, queue=tranque, async=True)
-
-		# The step size of the slab
-		dz = np.float32(self.dz)
 
 		# Attenuate the boundaries using a Hann window, if desired
 		if self.l > 0:
@@ -554,7 +552,7 @@ class SplitStep(object):
 		prog.laplacian(fwdque, grid, None, y, y)
 		self.fftplan.execute(y, inverse=True)
 		# Apply the high-order spatial operator to x = u + y / w**2
-		prog.caxpy(fwdque, grid, None, x, wsq, y, u)
+		prog.caxpy(fwdque, grid, None, x, self.w[1], y, u)
 		prog.hospat(fwdque, grid, None, x, eta, x)
 		# Now add to x the second-order term in y
 		prog.caxpy(fwdque, grid, None, x, one, y, x)
@@ -571,7 +569,7 @@ class SplitStep(object):
 		prog.ctmul(fwdque, grid, None, u, eta, u)
 		self.fftplan.execute(u)
 		# Apply the high-order spectral operator to y = v + u / w**2
-		prog.caxpy(fwdque, grid, None, y, wsq, u, v)
+		prog.caxpy(fwdque, grid, None, y, self.w[0], u, v)
 		prog.hospec(fwdque, grid, None, y, y)
 		# Now add to y the second-order term in u
 		prog.caxpy(fwdque, grid, None, y, one, u, y)
