@@ -191,8 +191,64 @@ cf2py threadsafe
       end subroutine hann
 
 
-c Apply JPA's wide-angle spectral operator to a spectral field
-      subroutine wideangle(ofld, ifld, k0, h, m, n)
+c Apply the high-order spatial operator to a field
+      subroutine hospat(ofld, ifld, eta, m, n)
+c Arguments:
+c     ofld: The output field
+c     ifld: The input field
+c     eta:  The index of refraction for the slab
+c     m,n:  The dimensions of the slice
+cf2py intent(out) :: ofld
+cf2py intent(hide) :: m, n
+cf2py threadsafe
+      implicit none
+      integer m, n
+      complex ofld(m,n), ifld(m,n), eta(m,n)
+
+      integer i, j
+      complex qval
+
+!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j,qval)
+      do j = 1, n
+        do i = 1, m
+          qval = 1. / (eta(i,j) + 1.) - 0.5
+          ofld(i,j) = ifld(i,j) * qval
+        enddo
+      enddo
+!$OMP END PARALLEL DO
+      end subroutine hospat
+
+
+c Multiply the input field by the object contrast
+      subroutine ctmul(ofld, ifld, eta, m, n)
+c Arguments:
+c     ofld: The output field
+c     ifld: The input field
+c     eta:  The index of refraction for the slab
+c     m,n:  The dimensions of the slice
+cf2py intent(out) :: ofld
+cf2py intent(hide) :: m, n
+cf2py threadsafe
+      implicit none
+      integer m, n
+      complex ofld(m,n), ifld(m,n), eta(m,n)
+
+      integer i, j
+      complex qval
+
+!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j,qval)
+      do j = 1, n
+        do i = 1, m
+          qval = eta(i,j)**2 - 1.
+          ofld(i,j) = ifld(i,j) * qval
+        enddo
+      enddo
+!$OMP END PARALLEL DO
+      end subroutine ctmul
+
+
+c Apply JPA's high-order spectral operator to a spectral field
+      subroutine hospec(ofld, ifld, k0, h, m, n)
 c Arguments:
 c     ofld: The output field (spectral)
 c     ifld: The input field (spectral)
@@ -202,9 +258,7 @@ c     m,n:  The dimensions of the slice
 cf2py intent(out) :: ofld
 cf2py intent(hide) :: m, n
 cf2py threadsafe
-      use fft, only : fftexec
       implicit none
-      include 'fftw3.f'
       integer m, n
       complex ifld(m,n), ofld(m,n)
       real k0, h
@@ -227,7 +281,71 @@ c Otherwise, the numerator will vanish faster to avoid a singularity
         enddo
       enddo
 !$OMP END PARALLEL DO
-      end subroutine wideangle
+      end subroutine hospec
+
+
+
+
+
+c Apply the scaled spectral Laplacian operator to a field
+      subroutine laplacian(ofld, ifld, k0, h, m, n)
+c Arguments:
+c     ofld: The output field (spectral)
+c     ifld: The input field (spectral)
+c     k0:   The reference wave number, unitless
+c     h:    The transverse sampling interval in wavelengths
+c     m,n:  The dimensions of the slice
+cf2py intent(out) :: ofld
+cf2py intent(hide) :: m, n
+cf2py threadsafe
+      implicit none
+      integer m, n
+      complex ifld(m,n), ofld(m,n)
+      real k0, h
+
+      integer i, j
+      real kx, ky, kt, fftfreq
+
+!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j,kx,ky,kt)
+      do j = 1, n
+        ky = fftfreq(j, n, h) / k0
+        do i = 1, m
+          kx = fftfreq(i, m, h) / k0
+          kt = kx**2 + ky**2
+          ofld(i,j) = -kt * ifld(i,j)
+        enddo
+      enddo
+!$OMP END PARALLEL DO
+      end subroutine laplacian
+
+
+c Compute z = a * x + b * y 
+      subroutine caxpby(z, a, x, b, y, m, n)
+c Arguments:
+c     z:   The output vector
+c     a:   A real scalar to multiply x
+c     x:   The first input vector
+c     b:   A real scalar to multiply y
+c     y:   The second input vector
+c     m,n: The dimensions of the vectors
+cf2py intent(out) :: z
+cf2py intent(hide) :: m, n
+cf2py threadsafe
+      implicit none
+      integer m, n
+      complex z(m,n), x(m,n), y(m,n)
+      real a, b
+
+      integer i, j
+
+!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j)
+      do j = 1, n
+        do i = 1, m
+          z(i,j) = a * x(i,j) + b * y(i,j)
+        enddo
+      enddo
+!$OMP END PARALLEL DO
+      end subroutine caxpby
 
 
 c Advance the field through a slice of medium
@@ -253,7 +371,7 @@ cf2py threadsafe
 
       integer i, j
       real kx, ky, kt, fftfreq, mn
-      complex kz, delta, u(m,n), v(m,n)
+      complex kz, delta, u(m,n), v(m,n), x(m,n), y(m,n)
 
       real wsq
 
@@ -261,45 +379,50 @@ cf2py threadsafe
       delta = cmplx(0, k0 * dz)
       wsq = w**2
 
-c Apply the spatial operator Q to the field and store in v
-!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j)
-      do j = 1, n
-        do i = 1, m
-          v(i,j) = fld(i,j) * (eta(i,j)**2 - 1)
-        enddo
-      enddo
-!$OMP END PARALLEL DO
-
-c Transform the field and v
+c Multiply the field by the contrast and store in v
+      call ctmul(v, fld, eta, m, n)
+c Apply the high-order spatial operator to the field and store in y
+      call hospat(y, fld, eta, m, n)
+c Transform the field, v and y to the spectral domain
       call fftexec(FFTW_FORWARD, fld, m, n)
       call fftexec(FFTW_FORWARD, v, m, n)
+      call fftexec(FFTW_FORWARD, y, m, n)
 
-c Apply a spectral wide-angle operators to the field and store in u
-      call wideangle(u, fld, k0, h, m, n)
-
-c Apply the spatial operator Q to the wide-angle field u
-c Scale by 1 / (m * n) to counter FFT scaling
+c Compute the scaled, spatial Laplacians of the field (in u) and y
+      call laplacian(u, fld, k0, h, m, n)
+      call laplacian(y, y, k0, h, m, n)
       call fftexec(FFTW_BACKWARD, u, m, n)
-!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j)
-      do j = 1, n
-        do i = 1, m
-          u(i,j) = u(i,j) * (eta(i,j)**2 - 1) / mn
-        enddo
-      enddo
-!$OMP END PARALLEL DO
+      call fftexec(FFTW_BACKWARD, y, m, n)
+c Apply the high-order spatial operator to x = u + y / w**2
+c Scale u and y by 1 / (m * n) to counter FFT scaling
+      call caxpby(x, 1. / mn, u, 1. / (mn * wsq), y, m, n)
+      call hospat(x, x, eta, m, n)
+c Now add to x the second-order term in y
+c Scale y by 1 / (m * n) to counter FFT scaling
+      call caxpby(x, 1., x, 1. / mn, y, m, n)
+c Multiply u by the contrast and add to x
+c Scale u by 1 / (m * n) to counter FFT scaling
+      call ctmul(u, u, eta, m, n)
+      call caxpby(x, 1., x, 1. / (8. * mn), u, m, n)
+c The correction term x should be in the spectral domain
+      call fftexec(FFTW_FORWARD, x, m, n)
+
+c In u, apply the high-order spectral operator to the field
+      call hospec(u, fld, k0, h, m, n)
+c Multiply u by the contrast in the spatial domain
+      call fftexec(FFTW_BACKWARD, u, m, n)
+      call ctmul(u, u, eta, m, n)
       call fftexec(FFTW_FORWARD, u, m, n)
-
-c Add (1 / w**2) * u to v
-!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j)
-      do j = 1, n
-        do i = 1, m
-          v(i,j) = v(i,j) + u(i,j) / wsq
-        enddo
-      enddo
-!$OMP END PARALLEL DO
-
-c Apply the wide-angle spectral operator to v
-      call wideangle(v, v, k0, h, m, n)
+c Apply the high-order spectral operator to y = v + u / w**2
+c Scale u by 1 / (m * n) to counter FFT scaling
+      call caxpby(y, 1., v, 1. / (mn * wsq), u, m, n)
+      call hospec(y, y, k0, h, m, n)
+c Now add to y the second-order term in u
+c Scale u by 1 / (m * n) to counter FFT scaling
+      call caxpby(y, 1., y, 1. / mn, u, m, n)
+c Compute the scaled, spectral Laplacian of of v and add to y
+      call laplacian(v, v, k0, h, m, n)
+      call caxpby(y, 1., y, 1. / 8., v, m, n)
 
 c Use the spectral propagator to advance the total field
 c Scale the result by 1 / (m * n) to counter FFT scaling
@@ -310,7 +433,7 @@ c Scale the result by 1 / (m * n) to counter FFT scaling
           kx = fftfreq(i, m, h) / k0
           kt = kx**2 + ky**2
           kz = csqrt(cmplx(1 - kt))
-          fld(i,j) = fld(i,j) + delta * (u(i,j) + v(i,j))
+          fld(i,j) = fld(i,j) + delta * (x(i,j) + y(i,j))
           fld(i,j) = fld(i,j) * cexp(delta * kz) / mn
         enddo
       enddo
