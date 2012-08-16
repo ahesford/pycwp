@@ -200,7 +200,8 @@ __kernel void hospat(${gfc} u, ${gfc} eta, ${gfc} f) {
 
 	const float2 eval = eta[idx];
 	const float2 one = (float2) (1.0f, 0.0f);
-	const float2 qval = cdiv(one, eval + one) - (float2) (0.5f, 0.0f);
+	const float2 qval = cdiv(one, eval + one) - (float2) (0.5f, 0.0f) + 
+				(float2) (0.125f) * (cmul(eval, eval) - one);
 
 	u[idx] = cmul(qval, f[idx]);
 }

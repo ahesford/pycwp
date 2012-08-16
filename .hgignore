@@ -4,3 +4,4 @@ syntax: glob
 build
 dist
 pyajh.egg-info
+setup.cfg
