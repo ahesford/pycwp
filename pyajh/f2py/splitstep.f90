@@ -206,13 +206,11 @@ cf2py threadsafe
       complex ofld(m,n), ifld(m,n), eta(m,n)
 
       integer i, j
-      complex qval
 
-!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j,qval)
+!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j)
       do j = 1, n
         do i = 1, m
-          qval = 1. / (eta(i,j) + 1.) - 0.5
-          ofld(i,j) = ifld(i,j) * qval
+          ofld(i,j) = ifld(i,j) / (eta(i,j) + 1.) - 0.5 * ifld(i,j)
         enddo
       enddo
 !$OMP END PARALLEL DO
@@ -234,13 +232,11 @@ cf2py threadsafe
       complex ofld(m,n), ifld(m,n), eta(m,n)
 
       integer i, j
-      complex qval
 
-!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j,qval)
+!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j)
       do j = 1, n
         do i = 1, m
-          qval = eta(i,j)**2 - 1.
-          ofld(i,j) = ifld(i,j) * qval
+          ofld(i,j) = eta(i,j)**2 * ifld(i,j) - ifld(i,j)
         enddo
       enddo
 !$OMP END PARALLEL DO
