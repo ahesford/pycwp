@@ -15,7 +15,6 @@
 #define cmul(a, b) (float2)(mad(-(a).y, (b).y, (a).x * (b).x), mad((a).y, (b).x, (a).x * (b).y))
 #define cdiv(a, b) (float2)(mad((a).x, (b).x, (a).y * (b).y), mad((a).y, (b).x, -(a).x * (b).y)) / (float2)(mad((b).x, (b).x, (b).y * (b).y))
 #define eikr(a) (float2) (cos((float) (a)), sin((float) (a)))
-#define imul(a) (float2) (-(a).y, (a).x)
 
 ## Wrap the coordinate index in accordance with the FFT.
 <%def name="wrap(n,i)">
@@ -63,6 +62,11 @@ float hann(const uint);
 float hann(const uint t) {
 	float sv = sin(${math.pi}f * (float) t / ${2. * l - 1.}f);
 	return sv * sv;
+}
+
+/* Compute i * r * c for real r and complex c. */
+float2 imulr(const float2 r, const float2 c) {
+	return (float2) (r) * (float2) (-c.y, c.x);
 }
 
 /* Compute the square root of a complex value v. */
@@ -160,7 +164,7 @@ __kernel void propagate(${gfc} fld, const float dz) {
 	${getkxy('i', 'j')}
 	const float2 kz = csqrtr(${k0**2}f - kxy);
 	/* Compute the propagator, exp(i * kz * dz). */
-	const float2 prop = cexp(imul(kz) * (float2) (dz));
+	const float2 prop = cexp(imulr(dz, kz));
 
 	fld[idx] = cmul(fld[idx], prop);
 }
@@ -224,7 +228,7 @@ __kernel void screen(${gfc} fld, ${gfc} eta, const float dz) {
 	const float2 eval = eta[idx] - (float2) (1.0f, 0.0f);
 
 	/* Compute i * k0 * dz * (eta - 1). */
-	const float2 arg = (float2) (${k0}f * dz) * imul(eval);
+	const float2 arg = imulr(${k0}f * dz, eval);
 	/* Multiply the phase shift by the field. */
 	fld[idx] = cmul(cexp(arg), fld[idx]);
 }
@@ -241,7 +245,7 @@ __kernel void corrfld(${gfc} f, ${gfc} u, ${gfc} v, const float dz) {
 	${getindices('i', 'j', 'idx')}
 
 	const float2 upv = u[idx] + v[idx];
-	f[idx] += imul(upv) * (float2)(${k0}f * dz);
+	f[idx] += imulr(${k0}f * dz, upv);
 }
 
 /* Compute the value of the Green's function at a slab with height zoff. */
