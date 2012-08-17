@@ -521,7 +521,6 @@ class SplitStep(object):
 		u, v, x = [s.data for s in self.scratch]
 		# These constants are used in field combinations
 		one = np.float32(1)
-		eighth = np.float32(1. / 8)
 		dz = np.float32(self.dz)
 
 		# Asynchronously push the next slab to its buffer

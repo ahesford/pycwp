@@ -192,7 +192,7 @@ cf2py threadsafe
 
 
 c Apply the high-order spatial operator to a field
-      subroutine hospat(ofld, ifld, eta, m, n)
+      subroutine hospat(ofld, eta, ifld, m, n)
 c Arguments:
 c     ofld: The output field
 c     ifld: The input field
@@ -206,11 +206,13 @@ cf2py threadsafe
       complex ofld(m,n), ifld(m,n), eta(m,n)
 
       integer i, j
+      complex qval
 
-!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j)
+!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j,qval)
       do j = 1, n
         do i = 1, m
-          ofld(i,j) = ifld(i,j) / (eta(i,j) + 1.) - 0.5 * ifld(i,j)
+          qval = 1. / (eta(i,j) + 1.) - 0.5 + 0.125 * (eta(i,j)**2 - 1.)
+          ofld(i,j) = qval * ifld(i,j)
         enddo
       enddo
 !$OMP END PARALLEL DO
@@ -218,7 +220,7 @@ cf2py threadsafe
 
 
 c Multiply the input field by the object contrast
-      subroutine ctmul(ofld, ifld, eta, m, n)
+      subroutine ctmul(ofld, eta, ifld, m, n)
 c Arguments:
 c     ofld: The output field
 c     ifld: The input field
@@ -349,7 +351,7 @@ c     eta: The index of refraction of the medium
 c     k0:  The reference wave number, unitless
 c     h:   The transverse sampling interval in wavelengths
 c     dz:  The propagation distance in wavelengths
-c     w:   The weighting parameters for high-order corrections
+c     w:   The weighting parameter for high-order spectral corrections
 c     m,n: The dimensions of the slice
 cf2py intent(in,out) :: fld
 cf2py intent(hide) :: m, n
@@ -359,64 +361,51 @@ cf2py threadsafe
       include 'fftw3.f'
       integer m, n
       complex fld(m,n), eta(m,n)
-      real k0, h, dz
-      real w(2)
+      real k0, h, dz, w
 
       integer i, j
       real kx, ky, kt, fftfreq, mn
-      complex kz, delta, u(m,n), v(m,n), x(m,n), y(m,n)
+      complex kz, delta, u(m,n), v(m,n), x(m,n)
 
-      real wsq(2)
+      real wsq
 
       mn = real(m * n)
       delta = cmplx(0, k0 * dz)
-      wsq(1) = w(1)**2
-      wsq(2) = w(2)**2
+      wsq = w**2
 
 c Multiply the field by the contrast and store in v
-      call ctmul(v, fld, eta, m, n)
-c Apply the high-order spatial operator to the field and store in y
-      call hospat(y, fld, eta, m, n)
+      call ctmul(v, eta, fld, m, n)
+c Apply the high-order spatial operator to the field and store in u
+      call hospat(u, eta, fld, m, n)
 c Transform the field, v and y to the spectral domain
       call fftexec(FFTW_FORWARD, fld, m, n)
       call fftexec(FFTW_FORWARD, v, m, n)
-      call fftexec(FFTW_FORWARD, y, m, n)
+      call fftexec(FFTW_FORWARD, u, m, n)
 
-c Compute the scaled, spatial Laplacians of the field (in u) and y
-      call laplacian(u, fld, k0, h, m, n)
-      call laplacian(y, y, k0, h, m, n)
-      call fftexec(FFTW_BACKWARD, u, m, n)
-      call fftexec(FFTW_BACKWARD, y, m, n)
-c Apply the high-order spatial operator to x = u + y / w**2
-c Scale u and y by 1 / (m * n) to counter FFT scaling
-      call caxpby(x, 1. / mn, u, 1. / (mn * wsq(2)), y, m, n)
-      call hospat(x, x, eta, m, n)
-c Now add to x the second-order term in y
-c Scale y by 1 / (m * n) to counter FFT scaling
-      call caxpby(x, 1., x, 1. / mn, y, m, n)
-c Multiply u by the contrast and add to x
-c Scale u by 1 / (m * n) to counter FFT scaling
-      call ctmul(u, u, eta, m, n)
-      call caxpby(x, 1., x, 1. / (8. * mn), u, m, n)
-c The correction term x should be in the spectral domain
+c Compute the scaled, spatial Laplacians of the field (in x) and u
+      call laplacian(u, u, k0, h, m, n)
+      call laplacian(x, fld, k0, h, m, n)
+c Apply the high-order spatial operator to x
+      call fftexec(FFTW_BACKWARD, x, m, n)
+      call hospat(x, eta, x, m, n)
       call fftexec(FFTW_FORWARD, x, m, n)
+c Add x to u to get the high-order spatial corrections
+c Scale x by 1 / (m * n) to counter previous FFT scaling
+      call caxpby(x, 1. / mn, x, 1., u, m, n)
 
 c In u, apply the high-order spectral operator to the field
       call hospec(u, fld, k0, h, m, n)
 c Multiply u by the contrast in the spatial domain
       call fftexec(FFTW_BACKWARD, u, m, n)
-      call ctmul(u, u, eta, m, n)
+      call ctmul(u, eta, u, m, n)
       call fftexec(FFTW_FORWARD, u, m, n)
-c Apply the high-order spectral operator to y = v + u / w**2
+c Apply the high-order spectral operator to v = v + u / w**2
 c Scale u by 1 / (m * n) to counter FFT scaling
-      call caxpby(y, 1., v, 1. / (mn * wsq(1)), u, m, n)
-      call hospec(y, y, k0, h, m, n)
-c Now add to y the second-order term in u
+      call caxpby(v, 1., v, 1. / (mn * wsq), u, m, n)
+      call hospec(v, v, k0, h, m, n)
+c Now add to v the second-order term in u
 c Scale u by 1 / (m * n) to counter FFT scaling
-      call caxpby(y, 1., y, 1. / mn, u, m, n)
-c Compute the scaled, spectral Laplacian of of v and add to y
-      call laplacian(v, v, k0, h, m, n)
-      call caxpby(y, 1., y, 1. / 8., v, m, n)
+      call caxpby(v, 1., v, 1. / mn, u, m, n)
 
 c Use the spectral propagator to advance the total field
 c Scale the result by 1 / (m * n) to counter FFT scaling
@@ -427,7 +416,7 @@ c Scale the result by 1 / (m * n) to counter FFT scaling
           kx = fftfreq(i, m, h) / k0
           kt = kx**2 + ky**2
           kz = csqrt(cmplx(1 - kt))
-          fld(i,j) = fld(i,j) + delta * (x(i,j) + y(i,j))
+          fld(i,j) = fld(i,j) + delta * (x(i,j) + v(i,j))
           fld(i,j) = fld(i,j) * cexp(delta * kz) / mn
         enddo
       enddo
