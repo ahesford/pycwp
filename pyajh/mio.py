@@ -105,10 +105,29 @@ def readbmat (infile, dim = None, dtype = None):
 		matsize, dtype = getmattype(infile, dim, dtype)
 
 		# Create the read-only memory map and close the source file
-		datamap = np.memmap(infile, offset=infile.tell(), dtype=dtype, mode='c')
+		datamap = np.memmap(infile, offset=infile.tell(), mode='c',
+				dtype=dtype, shape=tuple(matsize), order='F')
+	return datamap
 
-	# Reshape the map in FORTRAN order
-	return datamap.reshape(matsize, order='F')
+
+def createbmat(outfile, shape, dtype):
+	'''
+	Create a file-backed array using numpy.memmap for a matrix with the
+	specified shape and data type.
+	'''
+	# Open the output file if it isn't already open
+	if isinstance(outfile, (str, unicode)): outfile = open(outfile, mode='w+b')
+
+	# This will close the file object when creation is done
+	with outfile:
+		# Truncate the file and write the header
+		outfile.truncate(0)
+		np.array(shape, dtype=np.int32).tofile(outfile)
+		# Create the memmap
+		datamap = np.memmap(outfile, offset=outfile.tell(), mode='w+',
+				dtype=dtype, shape=tuple(shape), order='F')
+
+	return datamap
 
 
 class Slicer(object):
