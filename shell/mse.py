@@ -3,46 +3,82 @@
 import sys, os
 import getopt
 import numpy as np
+import operator
 from itertools import izip
+from multiprocessing import Pool
 
 from pyajh import mio, cutil
 
-def usage (progname = 'mse.py'):
+def usage(progname = 'mse.py'):
 	binfile = os.path.basename(progname)
-	print "Usage:", binfile, "[-h] [-n] <cmpfile> [...] <reffile>"
+	print "Usage:", binfile, "[-h] [-n] [-p nproc] <cmpfile> [...] <reffile>"
 
-
-def filemax (mat):
+def pool_apply(f, args, p, start, end):
 	'''
-	Perform a slice-by-slice scan of mat and identify the maximum value.
+	For a thread pool p, asynchronously apply the function f to the
+	arguments args for each pair (s, e) in zip(start, end). The pair (s, e)
+	will be appended to args.
 	'''
-	return cutil.complexmax(np.array([cutil.complexmax(s) for i, s in mat]))
+	res = []
+	for s, e in zip(start, end):
+		exargs = tuple(list(args) + [s, e])
+		res.append(p.apply_async(f, exargs))
+	return [r.get() for r in res]
 
 
-def errslice (mats, nfacts):
+def pool_reduce(a, op):
 	'''
-	Perform a slice-by-slice comparison of the matices mats. If nfacts is
-	provided for each file and is not None, the data is normalized by the
-	corresponding factor. The last file is the reference.
+	Reduce per-process lists of results to a global list of results by
+	repeatedly applying the reduction operator op to corresponding entries
+	of each process list.
 	'''
+	return reduce(lambda x, y: map(op, x, y), a)
 
-	err = np.array([0.] * (len(mats) - 1))
-	den = 0.
 
-	# Perform no normalization if nfacts was omitted
-	if nfacts is None: nfacts = [1.] * len(mats)
+def complexmax(fname, start, end):
+	'''
+	For a binary matrix stored in the file fname, find the complex value
+	with the largest magnitude in the slices start:end (with end excluded).
+	'''
+	# Open all of the matrices
+	m = mio.Slicer(fname)
+	# This stores the complex max of all slices in the file
+	cmx = [cutil.complexmax(m[i]) for i in range(start, end)]
+	return cutil.complexmax(np.array(cmx))
 
-	# Loop through each slice as it is read
-	for slices in izip(*mats):
-		# Strip out the slice index and normalize if appropriate
-		data = [s[1] / nf for s, nf in izip(slices, nfacts)]
 
-		# Update the numerator and denominator
-		err += np.array([np.sum(np.abs(d - data[-1])**2) for d in data[:-1]])
-		den += np.sum(np.abs(data[-1])**2)
+def sqerr(fnames, nfacts, start, end):
+	'''
+	For binary matrices stored in files with names fnames, compute the 
+	sum of the squares of the magnitudes of the differences between the
+	chunk start:end (with end excluded) of each matrix with the reference
+	stored in the final entry of fnames. The "difference" between the last
+	entry of fnames and the reference (which is the same matrix) is really
+	the sum of the squares of the magnitudes of the elements of the
+	reference in the chunk.
 
-	# Return the error
-	return np.sqrt(err / den)
+	Elements of the list nfacts that are not None are assumed to be
+	normalizing factors for the corresponding matrices in fnames.
+	'''
+	# Open all of the matrices
+	mats = [mio.Slicer(f) for f in fnames]
+	# The initial sums are all zero
+	df = [0.] * len(mats)
+	for i in range(start, end):
+		# Grab the reference slice
+		rs = mats[-1][i]
+		# Normalize the reference if appropriate
+		if nfacts[-1] is not None: rs /= nfacts[-1]
+		# Add the square sum of the reference
+		df[-1] += np.sum(np.abs(rs)**2)
+		for idx, (m, nf) in enumerate(zip(mats[:-1], nfacts)):
+			# Read the matrix slice
+			ms = m[i]
+			# Normalize if appropriate
+			if nf is not None: ms /= nf
+			# Add the square sum of the difference
+			df[idx] += np.sum(np.abs(ms - rs)**2)
+	return df
 
 
 def main (argv = None):
@@ -50,14 +86,16 @@ def main (argv = None):
 		argv = sys.argv[1:]
 		progname = sys.argv[0]
 
-	normalize = False
+	normalize, nproc = False, 1
 
-	optlist, args = getopt.getopt (argv, 'nh')
+	optlist, args = getopt.getopt (argv, 'p:nh')
 
 	# Parse the options list
 	for opt in optlist:
 		if opt[0] == '-n':
 			normalize = True
+		elif opt[0] == '-p':
+			nproc = int(opt[1])
 		else:
 			usage (progname)
 			return 128
@@ -67,24 +105,40 @@ def main (argv = None):
 		usage (progname)
 		return 128
 
-	# Attempt to open all files
-	mats = [mio.Slicer(name) for name in args]
-
+	# Grab the shape of the reference file and the number of slices
+	rshape = list(mio.Slicer(args[-1]).shape)
+	nslice = rshape[-1]
 	# Check that the matrix shapes match
-	for mf, ms in zip(args, mats):
-		if list(ms.shape) != list(mats[-1].shape):
+	for mf in args[:-1]:
+		if list(mio.Slicer(mf).shape) != rshape:
 			raise IndexError('File %s has wrong shape' % mf)
 
+	# Create the worker pool
+	p = Pool(processes=nproc)
+	# Determine the work share, starting and ending indices
+	share = lambda i: (nslice / nproc) + (1 if i < nslice % nproc else 0)
+	# Compute the starting and ending slice counts
+	starts = [0]
+	ends = [share(0)]
+	for i in range(1, nproc):
+		starts.append(ends[i - 1])
+		ends.append(starts[i] + share(i))
+
 	# Find the normalizing factors, if desired
-	if normalize: nfacts = [filemax(m) for m in mats]
-	else: nfacts = None
+	if normalize:
+		maxvals = []
+		for a in args:
+			mv = pool_apply(complexmax, (a,), p, starts, ends)
+			maxvals.append(cutil.complexmax(np.array(mv)))
+	else: maxvals = [None] * len(args)
 
-	# Compute the MSE for each file relative to the reference
-	err = errslice (mats, nfacts)
+	# Compute the numerators and denominators for the RMS errors
+	df = pool_apply(sqerr, (args, maxvals), p, starts, ends)
+	df = reduce(lambda x, y: map(operator.add, x, y), df)
 
-	# Report the MSE for each pair
-	for idx, e in enumerate (err):
-		print idx, e
+	for idx, dfn in enumerate(df[:-1]):
+		# Compute the numerator
+		print idx, np.sqrt(dfn / df[-1])
 
 	return 0
 
