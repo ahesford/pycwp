@@ -150,7 +150,7 @@ cf2py threadsafe
 !$OMP PARALLEL DO DEFAULT(SHARED) private(i,j)
       do j = 1, n
         do i = 1, m
-          rc(i,j) = 0.5 * (1. - cur(i,j) / next(i,j))
+          rc(i,j) = (cur(i,j) - next(i,j)) / (cur(i,j) + next(i,j))
         enddo
       enddo
 !$OMP END PARALLEL DO
@@ -438,41 +438,14 @@ c Apply the spatial phase screen to the field
 
 c Transmit a forward-propagating field through a slab
 c characterized by reflection coefficients rc
-      subroutine transmit(fwd, rc, m, n)
+      subroutine transmit(fwd, bck, rc, m, n)
 c Arguments:
-c     fwd: The forward-propagating field to be udpated
+c     fwd: The propagating field to be transmitted
+c     bck: The reflection of the propagating field
 c     rc:  The reflection coefficients of the interface
 c     m,n: The dimensions of the field
 cf2py intent(in,out) :: fwd
-cf2py intent(hide) :: m, n
-cf2py threadsafe
-      implicit none
-      integer m, n
-      complex fwd(m,n), rc(m,n)
-
-      integer i, j
-
-!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j)
-      do j = 1, n
-        do i = 1, m
-          fwd(i,j) = (1 - rc(i,j)) * fwd(i,j)
-        enddo
-      enddo
-!$OMP END PARALLEL DO
-      end subroutine transmit
-
-
-c Compute the reflection of the field bck by an interface
-c characterized by reflection coefficients rc and add it
-c to the transmission of the field fwd across the interface
-      subroutine txreflect(fwd, bck, rc, m, n)
-c Arguments:
-c     fwd: The forward-traveling field to be transmitted
-c     bck: The backward-traveling field to be reflected
-c     rc:  The reflection coefficients of the interface
-c     tau: The relaxation paramter
-c     m,n: The dimensions of the field
-cf2py intent(in,out) :: fwd
+cf2py intent(out) :: bck
 cf2py intent(hide) :: m, n
 cf2py threadsafe
       implicit none
@@ -484,8 +457,9 @@ cf2py threadsafe
 !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j)
       do j = 1, n
         do i = 1, m
-          fwd(i,j) = (1 - rc(i,j)) * fwd(i,j) + rc(i,j) * bck(i,j)
+          bck(i,j) = rc(i,j) * fwd(i,j)
+          fwd(i,j) = fwd(i,j) + bck(i,j)
         enddo
       enddo
 !$OMP END PARALLEL DO
-      end subroutine txreflect
+      end subroutine transmit

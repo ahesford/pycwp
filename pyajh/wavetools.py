@@ -498,17 +498,19 @@ class SplitStep(object):
 		self.fld = splitstep.advance(self.fld, eta,
 				self.k0, self.h, self.dz, self.w)
 
-		if not tx: return
+		if tx:
+			# Compute the reflection coefficients for the slab
+			rc = splitstep.rcoeff(eta, enxt)
 
-		# Compute the reflection coefficients for the slab
-		rc = splitstep.rcoeff(eta, enxt)
+			# Compute the transmission and reflection from the interface
+			self.fld, rfl = splitstep.transmit(self.fld, rc)
+			if bfld is not None: self.fld += bfld
 
-		# Transmit the field across the interface
-		# If a backward field is provided, use the two-way function
-		if bfld is None:
-			self.fld = splitstep.transmit(self.fld, rc)
-		else:
-			self.fld = splitstep.txreflect(self.fld, bfld, rc)
+		fld = self.fld
+		# If transmissions were computed and an existing backward field
+		# was not provided, also return the reflected field
+		if bfld is None and tx: fld = (fld, rfl)
+		return fld
 
 
 class SplitPade(object):

@@ -152,7 +152,7 @@ __kernel void rcoeff(${gfc} rc, ${gfc} cur, ${gfc} next) {
 	const float2 nval = next[idx];
 	const float2 cval = cur[idx];
 
-	rc[idx] = (float2) (0.5f, 0.0f) - (float2) (0.5f) * cdiv(cval, nval);
+	rc[idx] = cdiv(cval - nval, nval + cval);
 }
 
 /* Apply the homogeneous propagator to the field in the spectral domain. */
@@ -271,22 +271,15 @@ __kernel void green3d(${gfc} fld, const float zoff) {
 	fld[idx] = ${'' if d is None else '(float2) mag *'} grf;
 }
 
-/* Transmit a field through an interface with reflection coefficients rc. */
-__kernel void transmit(${gfc} f, ${gfc} rc) {
+/* Transmit a field fwd through an interface with reflection coefficients rc.
+ * In bck, store the reflection of the field. */
+__kernel void transmit(${gfc} fwd, ${gfc} bck, ${gfc} rc) {
 	${getindices('i', 'j', 'idx')}
 
-	const float2 tc = (float2) (1.0f, 0.0f) - rc[idx];
+	const float2 fval = fwd[idx];
+	const float2 rval = rc[idx];
+	const float2 bval = cmul(rval, fval);
 
-	f[idx] = cmul(tc, f[idx]);
-}
-
-/* Transmit a field through an interface with reflection coefficients rc and
- * include the reflection of a backward-travling field. */
-__kernel void txreflect(${gfc} f, ${gfc} b, ${gfc} rc) {
-	${getindices('i', 'j', 'idx')}
-
-	const float2 rv = rc[idx];
-	const float2 tv = (float2) (1.0f, 0.0f) - rv;
-
-	f[idx] = cmul(tv, f[idx]) + cmul(rv, b[idx]);
+	bck[idx] = bval;
+	fwd[idx] = fval + bval;
 }

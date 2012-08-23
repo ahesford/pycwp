@@ -117,8 +117,9 @@ if __name__ == '__main__':
 	bar.reset()
 	util.printflush(str(bar) + ' (forward) \r')
 
-	# Open a file to store the forward field
+	# Open files to store the forward and backward fields
 	fmat = mio.Slicer(args[2] + '.forward', p, inmat.dtype, True)
+	bmat = mio.Slicer(args[2] + '.backward', p, inmat.dtype, True)
 
 	# Propagate the forward field through each slice
 	for idx in reversed(range(p[-1])):
@@ -126,8 +127,9 @@ if __name__ == '__main__':
 		try: obj[sl] = inmat[idx - 1]
 		except IndexError: obj[:,:] = 0.
 		# Advance and write the forward-traveling field
-		sse.advance(obj)
-		fmat[idx - 1] = sse.copyfield()
+		f, b = sse.advance(obj)
+		fmat[idx - 1] = f
+		bmat[idx] = b
 		# Increment and print the progress bar
 		bar.increment()
 		util.printflush(str(bar) + ' (forward) \r')
@@ -137,17 +139,14 @@ if __name__ == '__main__':
 	bar.reset()
 	util.printflush(str(bar) + ' (backward)\r')
 
-	# Open a file to store the backward field
-	bmat = mio.Slicer(args[2] + '.backward', p, inmat.dtype, True)
-
 	for idx in range(p[-1]):
 		# Grab the contrast for the next slab
 		try: obj[sl] = inmat[idx]
 		except IndexError: obj[:,:] = 0.
 		# Advance and write the backward-traveling field
-		# This requires knowledge of the forward-traveling field
-		sse.advance(obj, fmat[idx - 1])
-		bmat[idx] = sse.copyfield()
+		# This requires knowledge of the previously reflected field
+		b = sse.advance(obj, bmat[idx])
+		bmat[idx] = b
 		# Increment and print the progress bar
 		bar.increment()
 		util.printflush(str(bar) + ' (backward)\r')
@@ -172,8 +171,8 @@ if __name__ == '__main__':
 			except IndexError: obj[:,:] = 0.
 			# Propagate the field to the midpoint
 			# No transmission operator is applied
-			sse.advance(obj, tx = False)
-			outmat[idx] = sse.copyfield()[sl]
+			f = sse.advance(obj, tx = False)
+			outmat[idx] = f[sl]
 			bar.increment()
 			util.printflush(str(bar) + '\r')
 
