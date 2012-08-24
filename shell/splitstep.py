@@ -64,7 +64,7 @@ if __name__ == '__main__':
 	h = s * f / c
 
 	print 'Split-step simulation, frequency %g MHz, background %g mm/us' % (f, c)
-	print 'Step size in wavelengths is %g, maximum attenuation is %g' % (h, a)
+	print 'Step size in wavelengths is %g, Hann window thickness is %d' % (h, a)
 
 	# Set up a slice-wise input reader
 	inmat = mio.Slicer(args[1])
