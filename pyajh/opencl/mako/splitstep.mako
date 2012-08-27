@@ -12,10 +12,6 @@
 		dirmag = d[-1]
 %>
 
-#define cmul(a, b) (float2)(mad(-(a).y, (b).y, (a).x * (b).x), mad((a).y, (b).x, (a).x * (b).y))
-#define cdiv(a, b) (float2)(mad((a).x, (b).x, (a).y * (b).y), mad((a).y, (b).x, -(a).x * (b).y)) / (float2)(mad((b).x, (b).x, (b).y * (b).y))
-#define eikr(a) (float2) (cos((float) (a)), sin((float) (a)))
-
 ## Wrap the coordinate index in accordance with the FFT.
 <%def name="wrap(n,i)">
 	(float) ((${i} <= ${int(n - 1) / 2}) ? (int) ${i} : (int) ${i} - ${n})
@@ -82,6 +78,19 @@ float2 csqrt(const float2 v) {
 float2 csqrtr(const float);
 float2 csqrtr(const float v) {
 	return (v < 0) ? (float2) (0.0f, sqrt(-v)) : (float2) (sqrt(v), 0.0f);
+}
+
+/* Compute the complex division a / b. */
+float2 cdiv(const float2, const float2);
+float2 cdiv(const float2 a, const float2 b) {
+	float bn = mad(b.x, b.x, b.y * b.y);
+	return (float2) (mad(a.x, b.x, a.y * b.y) / bn, mad(a.y, b.x, -a.x * b.y) / bn);
+}
+
+/* Compute the complex multiplication a * b. */
+float2 cmul(const float2, const float2);
+float2 cmul(const float2 a, const float2 b) {
+	return (float2) (mad(a.x, b.x, -a.y * b.y), mad(a.y, b.x, a.x * b.y));
 }
 
 /* Compute the exponential of a complex value v. */
@@ -258,9 +267,10 @@ __kernel void green3d(${gfc} fld, const float zoff) {
 	const float3 rv = obs - (float3) ${prtuple(src)};
 	/* Compute the scalar distance between source and observer. */
 	const float r = length(rv);
+	const float kr = ${k0}f * r;
 
 	/* Compute the value of the Green's function. */
-	const float2 grf = eikr(${k0}f * r) / (float2) (${4. * math.pi}f * r);
+	const float2 grf = (float2) (cos(kr), sin(kr)) / (float2) (${4. * math.pi}f * r);
 
 	% if d:
 		const float ctheta = dot(rv / (float3) r, (float3) ${prtuple(dirax)});

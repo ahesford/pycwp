@@ -597,7 +597,6 @@ class SplitStep(object):
 
 		if tx:
 			# Compute the transmission and reflection from the interface
-			# Note that u points to self.scratch[0].data
 			prog.transmit(tranque, grid, None, fld, u, rc)
 			# Add an existing field to the transmission
 			if bfld is not None:
@@ -606,7 +605,7 @@ class SplitStep(object):
 
 		# Start copying the transmitted field
 		fld = self.fld.get(queue=tranque, async=True)
-		# Copy the reflected field if needed
+		# Copy the reflected field, stored in u = self.scratch[0].data
 		if bfld is None and tx:
 			fld = (fld, self.scratch[0].get(queue=tranque, async=True))
 		# Flush the transmission queue for consistency
