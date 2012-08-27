@@ -508,26 +508,18 @@ class SplitStep(object):
 		Propagate a field through a slab with object contrast obj and
 		use it to compute an estimate of the actual field in the slab.
 
-		The field bfld, if provided, is an existing running field that
-		will be added to the propagated wave when transmitted across a
-		slab interface.
+		The field bfld, if provided, is a field running in the opposite
+		direction of propagation that will be reflected and added to
+		the propagated field when transmitted across a slab interface.
 
 		If tx is False, forward-only propagation is assumed and no
-		transmission operation is computed. Only the propagated field
-		is returned.
-
-		When tx is True, transmissions across slab interfaces are
-		computed. The transmitted and reflected fields will both be
-		returned unless bfld is not None, in which case only the sum of
-		bfld and the transmitted field is returned.
+		transmission operation is computed.
 		'''
 		prog, grid = self.prog, self.grid
 		fwdque, tranque = self.fwdque, self.tranque
 		# Point to the field and component data
 		fld = self.fld.data
 		u, v, x = [s.data for s in self.scratch]
-		# Point to the reflection coefficients
-		rc = self.rc.data
 		# These constants are used in field combinations
 		one = np.float32(1)
 		dz = np.float32(self.dz)
@@ -535,14 +527,10 @@ class SplitStep(object):
 		# Asynchronously push the next slab to its buffer
 		eta, enxt = [e.data for e in self.etaupdate(obj, False)]
 
-		# Preparations for transmissions occur on an independent queue
-		if tx:
-			# Compute the reflection coefficients for the interface
-			prog.rcoeff(tranque, grid, None, rc, eta, enxt)
-			# Start copying an existing field
-			if bfld is not None:
-				bfld = bfld.astype(np.complex64).ravel('F')
-				self.bfld.set(bfld, queue=tranque, async=True)
+		# Copy any backward-traveling field
+		if tx and bfld is not None:
+			bfld = bfld.astype(np.complex64).ravel('F')
+			self.bfld.set(bfld, queue=tranque, async=True)
 
 		# Attenuate the boundaries using a Hann window, if desired
 		if self.l > 0:
@@ -596,20 +584,13 @@ class SplitStep(object):
 		fwdque.finish()
 
 		if tx:
-			# Compute the transmission and reflection from the interface
-			prog.transmit(tranque, grid, None, fld, u, rc)
-			# Add an existing field to the transmission
-			if bfld is not None:
-				prog.caxpy(tranque, grid, None, fld, 
-						one, self.bfld.data, fld)
+			# Compute the reflection coefficients for the interface
+			rc = self.rc.data
+			prog.rcoeff(tranque, grid, None, rc, eta, enxt)
+			# Compute the transmission through the interface
+			# Include the reflection of a backward field if appropriate
+			if bfld is None: prog.transmit(tranque, grid, None, fld, rc)
+			else: prog.txreflect(tranque, grid, None, fld, self.bfld.data, rc)
 
-		# Start copying the transmitted field
-		fld = self.fld.get(queue=tranque, async=True)
-		# Copy the reflected field, stored in u = self.scratch[0].data
-		if bfld is None and tx:
-			fld = (fld, self.scratch[0].get(queue=tranque, async=True))
-		# Flush the transmission queue for consistency
-		tranque.finish()
-
-		# Return transmitted and (optionally) reflected fields 
-		return fld
+		# Return transmitted field, flushing transmission queue
+		return self.fld.get(queue=tranque, async=False)

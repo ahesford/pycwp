@@ -213,7 +213,7 @@ __kernel void hospat(${gfc} u, ${gfc} eta, ${gfc} f) {
 
 	const float2 eval = eta[idx];
 	const float2 one = (float2) (1.0f, 0.0f);
-	const float2 qval = cdiv(one, eval + one) - (float2) (0.5f, 0.0f) + 
+	const float2 qval = cdiv(one, eval + one) - (float2) (0.5f, 0.0f) +
 				(float2) (0.125f) * (cmul(eval, eval) - one);
 
 	u[idx] = cmul(qval, f[idx]);
@@ -281,15 +281,23 @@ __kernel void green3d(${gfc} fld, const float zoff) {
 	fld[idx] = ${'' if d is None else '(float2) mag *'} grf;
 }
 
-/* Transmit a field fwd through an interface with reflection coefficients rc.
- * In bck, store the reflection of the field. */
-__kernel void transmit(${gfc} fwd, ${gfc} bck, ${gfc} rc) {
+/* Transmit a field through an interface with reflection coefficients rc. */
+__kernel void transmit(${gfc} fwd, ${gfc} rc) {
 	${getindices('i', 'j', 'idx')}
 
 	const float2 fval = fwd[idx];
 	const float2 rval = rc[idx];
-	const float2 bval = cmul(rval, fval);
+	fwd[idx] = fval + cmul(rval, fval);
+}
 
-	bck[idx] = bval;
-	fwd[idx] = fval + bval;
+/* Transmit a field through an interface with reflection coefficients rc.
+ * Also reflect the backward-traveling wave bck and add to the field. */
+__kernel void txreflect(${gfc} fwd, ${gfc} bck, ${gfc} rc) {
+	${getindices('i', 'j', 'idx')}
+
+	const float2 fval = fwd[idx];
+	const float2 bval = bck[idx];
+	const float2 rval = rc[idx];
+	const float2 cor = cmul(cdiv(rval, (float2) (1.0f, 0.0f) - rval), bval);
+	fwd[idx] = fval + cmul(rval, fval) - cor;
 }

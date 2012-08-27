@@ -438,14 +438,40 @@ c Apply the spatial phase screen to the field
 
 c Transmit a forward-propagating field through a slab
 c characterized by reflection coefficients rc
-      subroutine transmit(fwd, bck, rc, m, n)
+      subroutine transmit(fwd, rc, m, n)
 c Arguments:
 c     fwd: The propagating field to be transmitted
-c     bck: The reflection of the propagating field
 c     rc:  The reflection coefficients of the interface
 c     m,n: The dimensions of the field
 cf2py intent(in,out) :: fwd
-cf2py intent(out) :: bck
+cf2py intent(hide) :: m, n
+cf2py threadsafe
+      implicit none
+      integer m, n
+      complex fwd(m,n), rc(m,n)
+
+      integer i, j
+
+!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j)
+      do j = 1, n
+        do i = 1, m
+          fwd(i,j) = (1. + rc(i,j)) * fwd(i,j)
+        enddo
+      enddo
+!$OMP END PARALLEL DO
+      end subroutine transmit
+
+
+c Transmit a forward-propagating field through a slab
+c characterized by reflection coefficients rc
+c Also reflect backward-traveling wave bck and add to field
+      subroutine txreflect(fwd, bck, rc, m, n)
+c Arguments:
+c     fwd: The propagating field to be transmitted
+c     bck: The field to be reflected
+c     rc:  The reflection coefficients of the interface
+c     m,n: The dimensions of the field
+cf2py intent(in,out) :: fwd
 cf2py intent(hide) :: m, n
 cf2py threadsafe
       implicit none
@@ -453,13 +479,15 @@ cf2py threadsafe
       complex fwd(m,n), bck(m,n), rc(m,n)
 
       integer i, j
+      complex rval, cor
 
-!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j)
+!$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i,j,rval,cor)
       do j = 1, n
         do i = 1, m
-          bck(i,j) = rc(i,j) * fwd(i,j)
-          fwd(i,j) = fwd(i,j) + bck(i,j)
+          rval = rc(i,j)
+          cor = rval * bck(i,j) / (1. - rval)
+          fwd(i,j) = (1. + rval) * fwd(i,j) - cor
         enddo
       enddo
 !$OMP END PARALLEL DO
-      end subroutine transmit
+      end subroutine txreflect
