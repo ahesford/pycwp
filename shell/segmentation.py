@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 import sys, os, numpy as np, getopt
-from multiprocessing import Pool
+from multiprocessing import Process
 from pyajh import mio, segmentation
 
 def usage(progname = 'segmentation.py'):
@@ -16,14 +16,12 @@ def main (argv = None):
 	# Default values
 	random, nproc = True, 1
 
-	optlist, args = getopt.getopt (argv, 'p:n:h')
+	optlist, args = getopt.getopt (argv, 'p:nh')
 
 	# Parse the options list
 	for opt in optlist:
-		if opt[0] == '-n':
-			random = False
-		elif opt[0] == '-p':
-			nproc = int(opt[1])
+		if opt[0] == '-n': random = False
+		elif opt[0] == '-p': nproc = int(opt[1])
 		else:
 			usage (progname)
 			return 128
@@ -47,30 +45,29 @@ def main (argv = None):
 	outfiles = [mio.Slicer(o, segfile.shape, segfile.dtype, True) for o in outputs]
 
 	try:
-		# Perform the segmentation
-		if nproc < 2:
-			segmentation.maptissue(args[0], outputs, params)
-		else:
-			# Open the worker pool and determine work shares
-			p = Pool(processes=nproc)
-			nslice = segfile.shape[-1]
-			share = lambda i: (nslice / nproc) + int(i < nslice % nproc)
-			# Compute the starting and ending slices
-			starts = [0]
-			ends = [share(0)]
-			for i in range(1, nproc):
-				starts.append(ends[i - 1])
-				ends.append(starts[i] + share(i))
+		# Open the worker pool and determine work shares
+		nslice = segfile.shape[-1]
+		share = lambda i: (nslice / nproc) + int(i < nslice % nproc)
+		# Compute the starting and ending slices
+		starts = [0]
+		ends = [share(0)]
+		for i in range(1, nproc):
+			starts.append(ends[i - 1])
+			ends.append(starts[i] + share(i))
 
-			for s, e in zip(starts, ends):
-				p.apply_async(segmentation.maptissue,
-						(args[0], outputs, params),
-						{'slices': [s, e]})
-
-			p.close()
-			p.join()
+		procs = []
+		for s, e in zip(starts, ends):
+			p = Process(target=segmentation.maptissue,
+					args = (args[0], outputs, params),
+					kwargs = {'slices': [s, e]})
+			p.start()
+			procs.append(p)
+		for p in procs: p.join()
 	except:
 		for f in outfiles: f._backer.truncate(0)
+		for p in procs:
+			p.terminate()
+			p.join()
 		raise
 
 	return 0

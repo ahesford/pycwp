@@ -5,7 +5,7 @@ import getopt
 import numpy as np
 import operator
 from itertools import izip
-from multiprocessing import Pool
+from multiprocessing import Process, Queue
 
 from pyajh import mio, cutil
 
@@ -13,41 +13,40 @@ def usage(progname = 'mse.py'):
 	binfile = os.path.basename(progname)
 	print "Usage:", binfile, "[-h] [-n] [-p nproc] <cmpfile> [...] <reffile>"
 
-def pool_apply(f, args, p, start, end):
+def pool_apply(f, args, start, end):
 	'''
-	For a thread pool p, asynchronously apply the function f to the
-	arguments args for each pair (s, e) in zip(start, end). The pair (s, e)
-	will be appended to args.
+	Asynchronously apply the function f to the arguments args for each pair
+	(s, e) in zip(start, end). The triplet (s, e, q) will be appended to
+	args, where q is a multiprocess queue designed to receive results.
 	'''
-	res = []
+	q = Queue()
+	procs = []
 	for s, e in zip(start, end):
-		exargs = tuple(list(args) + [s, e])
-		res.append(p.apply_async(f, exargs))
-	return [r.get() for r in res]
+		p = Process(target=f, args=tuple(list(args) + [s, e, q]))
+		p.start()
+		procs.append(p)
+	result = []
+	for p in procs:
+		p.join()
+		result.append(q.get())
+	return result
 
 
-def pool_reduce(a, op):
-	'''
-	Reduce per-process lists of results to a global list of results by
-	repeatedly applying the reduction operator op to corresponding entries
-	of each process list.
-	'''
-	return reduce(lambda x, y: map(op, x, y), a)
-
-
-def complexmax(fname, start, end):
+def complexmax(fname, start, end, q):
 	'''
 	For a binary matrix stored in the file fname, find the complex value
 	with the largest magnitude in the slices start:end (with end excluded).
+
+	The value is placed on the multiprocess queue q.
 	'''
 	# Open all of the matrices
 	m = mio.Slicer(fname)
 	# This stores the complex max of all slices in the file
 	cmx = [cutil.complexmax(m[i]) for i in range(start, end)]
-	return cutil.complexmax(np.array(cmx))
+	q.put(cutil.complexmax(np.array(cmx)))
 
 
-def sqerr(fnames, nfacts, start, end):
+def sqerr(fnames, nfacts, start, end, q):
 	'''
 	For binary matrices stored in files with names fnames, compute the 
 	sum of the squares of the magnitudes of the differences between the
@@ -78,7 +77,8 @@ def sqerr(fnames, nfacts, start, end):
 			if nf is not None: ms /= nf
 			# Add the square sum of the difference
 			df[idx] += np.sum(np.abs(ms - rs)**2)
-	return df
+
+	q.put(df)
 
 
 def main (argv = None):
@@ -113,8 +113,6 @@ def main (argv = None):
 		if list(mio.Slicer(mf).shape) != rshape:
 			raise IndexError('File %s has wrong shape' % mf)
 
-	# Create the worker pool
-	p = Pool(processes=nproc)
 	# Determine the work share, starting and ending indices
 	share = lambda i: (nslice / nproc) + (1 if i < nslice % nproc else 0)
 	# Compute the starting and ending slice counts
@@ -128,12 +126,12 @@ def main (argv = None):
 	if normalize:
 		maxvals = []
 		for a in args:
-			mv = pool_apply(complexmax, (a,), p, starts, ends)
+			mv = pool_apply(complexmax, (a,), starts, ends)
 			maxvals.append(cutil.complexmax(np.array(mv)))
 	else: maxvals = [None] * len(args)
 
 	# Compute the numerators and denominators for the RMS errors
-	df = pool_apply(sqerr, (args, maxvals), p, starts, ends)
+	df = pool_apply(sqerr, (args, maxvals), starts, ends)
 	df = reduce(lambda x, y: map(operator.add, x, y), df)
 
 	for idx, dfn in enumerate(df[:-1]):
