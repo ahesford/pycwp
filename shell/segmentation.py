@@ -1,11 +1,12 @@
 #!/usr/bin/env python
 
 import sys, os, numpy as np, getopt
+from multiprocessing import Pool
 from pyajh import mio, segmentation
 
 def usage(progname = 'segmentation.py'):
 	binfile = os.path.basename(progname)
-	print "Usage:", binfile, "[-h] [-n <nproc>] <segfile> <paramfile>"
+	print "Usage:", binfile, "[-h] [-n] [-p <nproc>] <segfile> <paramfile> <sndfile> <atnfile> <denfile>"
 
 def main (argv = None):
 	if argv is None:
@@ -15,7 +16,7 @@ def main (argv = None):
 	# Default values
 	random, nproc = True, 1
 
-	optlist, args = getopt.getopt (argv, 'p:nh')
+	optlist, args = getopt.getopt (argv, 'p:n:h')
 
 	# Parse the options list
 	for opt in optlist:
@@ -28,12 +29,12 @@ def main (argv = None):
 			return 128
 
 	# The segmentation file and the parameter file must be specified
-	if len(args) < 2:
+	if len(args) < 5:
 		usage (progname)
 		return 128
 
 	# Read the tissue parameters
-	pmat = np.loadtxt(args[-1])
+	pmat = np.loadtxt(args[1])
 	# Split the parameters into sound speed, attenuation and density
 	params = [p.tolist() for p in [pmat[:,:2], pmat[:,2:4], pmat[:,4:6]]]
 	# Eliminate the standard deviation if random scatterers are not desired
@@ -42,11 +43,35 @@ def main (argv = None):
 	# Grab the shape of the segmentation file and the number of slices
 	segfile = mio.Slicer(args[0])
 	# The output files need to be created and truncated
-	outputs = ['SoundSpeed.dat', 'Attenuation.dat', 'Density.dat']
+	outputs = args[2:]
 	outfiles = [mio.Slicer(o, segfile.shape, segfile.dtype, True) for o in outputs]
 
-	# Perform the segmentation
-	segmentation.maptissue(args[0], outputs, params)
+	try:
+		# Perform the segmentation
+		if nproc < 2:
+			segmentation.maptissue(args[0], outputs, params)
+		else:
+			# Open the worker pool and determine work shares
+			p = Pool(processes=nproc)
+			nslice = segfile.shape[-1]
+			share = lambda i: (nslice / nproc) + int(i < nslice % nproc)
+			# Compute the starting and ending slices
+			starts = [0]
+			ends = [share(0)]
+			for i in range(1, nproc):
+				starts.append(ends[i - 1])
+				ends.append(starts[i] + share(i))
+
+			for s, e in zip(starts, ends):
+				p.apply_async(segmentation.maptissue,
+						(args[0], outputs, params),
+						{'slices': [s, e]})
+
+			p.close()
+			p.join()
+	except:
+		for f in outfiles: f._backer.truncate(0)
+		raise
 
 	return 0
 

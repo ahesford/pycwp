@@ -3,8 +3,30 @@ General-purpose numerical routines used in other parts of the module.
 '''
 
 import numpy, math, operator
-from scipy import special as spec
+from scipy import special as spec, ndimage
 from .geom import sph2cart
+
+def smoothkern(w, s, n = 3):
+	'''
+	Compute an n-dimensional Gaussian kernel with width w (must be odd) and
+	standard deviation s, both measured in pixels. When
+	
+		w = 2 * int(4 * s) + 1,
+
+	then convolution with the kernel is equivalent to calling
+	
+		scipy.ndimage.gaussian_filter
+
+	with sigma = s.
+	'''
+	if w % 2 != 1: raise ValueError('Kernel width must be odd.')
+	lw = (w - 1) / 2
+	# Compute the restricted Gaussian kernel
+	k = numpy.zeros([w]*n)
+	sl = [slice(lw, lw+1)]*n
+	k[sl] = 1.
+	k = ndimage.gaussian_filter(k, s, mode='constant')
+	return k / numpy.sum(k)
 
 def binomial(n, k):
 	'''

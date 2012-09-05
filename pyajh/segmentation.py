@@ -6,7 +6,7 @@ wave propagation.
 
 import numpy as np, math
 from scipy import ndimage
-from . import mio
+from . import mio, cutil
 
 
 def randparam(scat, mean, stdfrac):
@@ -46,26 +46,6 @@ def bumpmap(ptden, sigma, shape):
 	scat -= np.mean(scat)
 	scat /= np.std(scat)
 	return scat
-
-
-def smooth3(a, w, s):
-	'''
-	Mimic the behavior of the MATLAB function smooth3, which convolves the
-	matrix a with a Gaussian kernel of width w and standard deviation s (in
-	voxels). This is useful if the width is less than four standard
-	deviations, in each direction, which is the enforced width with
-	ndimage.gaussian_filter.
-	'''
-	if w % 2 != 1: raise ValueError('Kernel width must be odd.')
-	lw = (w - 1) / 2
-	# Compute the restricted Gaussian kernel
-	k = np.zeros([w]*3)
-	k[lw,lw,lw] = 1.
-	k = ndimage.gaussian_filter(k, s, mode='constant')
-	k /= np.sum(k)
-	# Now perform the convolution
-	# Note that correlation is the same because the kernel is symmetric
-	return ndimage.correlate(a, k, mode='nearest')
 
 
 def maptissue(segfile, outfiles, params, scatden=0.2, scatsd=0.6, chunk=8, slices=None):
@@ -117,9 +97,12 @@ def maptissue(segfile, outfiles, params, scatden=0.2, scatsd=0.6, chunk=8, slice
 				'do not match those of the segmentation file')
 	# Process the whole file by default
 	if slices is None: slices = [0, seg.shape[-1]]
-	# Parameters for Gaussian smoothing of the tissue map
+	# Build the Gaussian kernel for smoothing the tissue map
 	smoothp = [5, 3]
-	# The blocks have to be padded for valid convolutional smoothing
+	kern = cutil.smoothkern(*smoothp)
+	# This convenience function smooths the tissue masks
+	def smooth3(a): return ndimage.correlate(a, kern, mode='nearest')
+	# Pad the blocks with the kernel width for valid convolutions
 	pad = (smoothp[0] - 1) / 2
 
 	# Process each chunk
@@ -142,7 +125,7 @@ def maptissue(segfile, outfiles, params, scatden=0.2, scatsd=0.6, chunk=8, slice
 		# Loop through each of the tissue types
 		for k, (sp, ap, dp) in enumerate(zip(*params)):
 			# Smooth the mask
-			mask = smooth3((block == k).astype(float), *smoothp)
+			mask = smooth3((block == k).astype(float))
 			# Add the parameters for this tissue
 			SoundSpeed += mask * randparam(bumps, *sp)
 			Attenuation += mask * randparam(bumps, *ap)
