@@ -71,11 +71,19 @@ def errchunk(fnames, start, stride, qsol, qnorm = None):
 	# Open all of the files
 	mats = [mio.Slicer(f) for f in fnames]
 
+	# Check that the file sizes agree
+	for m, f in zip(mats[:-1], fnames[:-1]):
+		if list(m.shape) != list(mats[-1].shape):
+			# Put a None on the solution queue
+			qsol.put(None)
+			# Raise an exception
+			raise IndexError('Shape of file %s differs from reference' % f)
+
 	# Find the complex value with the largest magnitude in each file
 	if qnorm is not None:
 		fmax = [complexmax(m, start, stride) for m in mats]
-		qnorm.put(fmax)
-		fmax = qsol.get()
+		qsol.put(fmax)
+		fmax = qnorm.get()
 	else: fmax = [None] * len(mats)
 
 	df = sqerr(mats, fmax, start, stride)
@@ -100,18 +108,22 @@ def erreduce(fnames, normalize = False, nproc = 1):
 		args=(fnames, s, nproc, qsol, qnorm,)) for s in range(nproc)]
 	for p in procs: p.start()
 
-	# If normalization was desired, wait to reduce the results
-	if normalize:
-		# A result is required from each process
-		fmax = [qnorm.get() for s in range(nproc)]
-		# Reduce the results to global file maxima
-		fmax = reduce(lambda x, y: [xv if abs(xv) > abs(yv) else yv
-			for xv, yv in zip(x, y)], fmax)
-		# Put the result on the solution queue once for each process
-		for s in range(nproc): qsol.put(fmax)
+	# Read the qsol for normalization factors or differences
+	df = []
+	for s in range(nproc):
+		df.append(qsol.get())
+		# Check for failures from the children
+		if df[-1] is None: raise ValueError('Unable to compute RMS errors')
 
-	# Now grab the results from each process
-	df = [qsol.get() for s in range(nproc)]
+	if normalize:
+		# Reduce the normalization factors
+		fmax = reduce(lambda x, y: [xv if abs(xv) > abs(yv) else yv
+			for xv, yv in zip(x, y)], df)
+		# Put the result on the normalization queue for each process
+		for s in range(nproc): qnorm.put(fmax)
+		# Read the normalized differences
+		df = [qsol.get() for s in range(nproc)]
+
 	# Reduce the process-local file errors
 	df = reduce(lambda x, y: map(operator.add, x, y), df)
 	# Now compute the per-file errors
@@ -145,12 +157,6 @@ def main (argv = None):
 	if len(args) < 2:
 		usage (progname)
 		return 128
-
-	# Check that the file sizes agree
-	rsize = list(mio.Slicer(args[-1]).shape)
-	for a in args[:-1]:
-		if list(mio.Slicer(a).shape) != rsize:
-			raise IndexError('Shape of file %s differs from reference' % a)
 
 	# Start computation
 	errs = erreduce(args, normalize, nproc)
