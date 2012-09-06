@@ -1,9 +1,6 @@
 #!/usr/bin/env python
 
-import sys, os
-import getopt
-import numpy as np
-import operator
+import sys, os, math, getopt, numpy as np, operator
 from itertools import izip
 from multiprocessing import Process, Queue
 
@@ -13,57 +10,34 @@ def usage(progname = 'mse.py'):
 	binfile = os.path.basename(progname)
 	print "Usage:", binfile, "[-h] [-n] [-p nproc] <cmpfile> [...] <reffile>"
 
-def pool_apply(f, args, start, end):
+
+def complexmax(mat, start, stride):
 	'''
-	Asynchronously apply the function f to the arguments args for each pair
-	(s, e) in zip(start, end). The triplet (s, e, q) will be appended to
-	args, where q is a multiprocess queue designed to receive results.
+	For a binary matrix stored Slicer mat with N slices, find the complex
+	value of largest magnitude in the slices in range(start, N, stride).
 	'''
-	q = Queue()
-	procs = []
-	for s, e in zip(start, end):
-		p = Process(target=f, args=tuple(list(args) + [s, e, q]))
-		p.start()
-		procs.append(p)
-	result = []
-	for p in procs:
-		p.join()
-		result.append(q.get())
-	return result
+	N = mat.shape[-1]
+	cmx = [cutil.complexmax(mat[i]) for i in range(start, N, stride)]
+	return cutil.complexmax(np.array(cmx))
 
 
-def complexmax(fname, start, end, q):
+def sqerr(mats, nfacts, start, stride):
 	'''
-	For a binary matrix stored in the file fname, find the complex value
-	with the largest magnitude in the slices start:end (with end excluded).
-
-	The value is placed on the multiprocess queue q.
-	'''
-	# Open all of the matrices
-	m = mio.Slicer(fname)
-	# This stores the complex max of all slices in the file
-	cmx = [cutil.complexmax(m[i]) for i in range(start, end)]
-	q.put(cutil.complexmax(np.array(cmx)))
-
-
-def sqerr(fnames, nfacts, start, end, q):
-	'''
-	For binary matrices stored in files with names fnames, compute the 
-	sum of the squares of the magnitudes of the differences between the
-	chunk start:end (with end excluded) of each matrix with the reference
-	stored in the final entry of fnames. The "difference" between the last
-	entry of fnames and the reference (which is the same matrix) is really
-	the sum of the squares of the magnitudes of the elements of the
-	reference in the chunk.
+	For binary matrix Slicers mats with N slices each, compute the sum of
+	the squares of the magnitudes of the differences between the slice
+	given by range(start, N, stride) of each matrix with the reference
+	stored in the final entry.  The "difference" between the last entry and
+	the reference (which is the same matrix) is really the sum of the
+	squares of the magnitudes of the elements of the reference in the
+	chunk.
 
 	Elements of the list nfacts that are not None are assumed to be
-	normalizing factors for the corresponding matrices in fnames.
+	normalizing factors for the corresponding matrices.
 	'''
-	# Open all of the matrices
-	mats = [mio.Slicer(f) for f in fnames]
+	N = mats[-1].shape[-1]
 	# The initial sums are all zero
 	df = [0.] * len(mats)
-	for i in range(start, end):
+	for i in range(start, N, stride):
 		# Grab the reference slice
 		rs = mats[-1][i]
 		# Normalize the reference if appropriate
@@ -78,7 +52,74 @@ def sqerr(fnames, nfacts, start, end, q):
 			# Add the square sum of the difference
 			df[idx] += np.sum(np.abs(ms - rs)**2)
 
-	q.put(df)
+	return df
+
+
+def errchunk(fnames, start, stride, qsol, qnorm = None):
+	'''
+	Compute the squared error contribution from one process for each of the
+	matrices stored in the files fnames.
+
+	Each process handles the slice in range(start, N, stride), where N is
+	the number of Slices. The multiprocessing queue qsol is used to store
+	the output for aggregation by the master process. If the queue qnorm is
+	not None, each matrix is normalized by its largest (in the sense of
+	magnitude) complex value. The queue qnorm is used to hold the
+	process-local maximum value, which is reduced by the master process and
+	placed on the qsol queue before computing the error.
+	'''
+	# Open all of the files
+	mats = [mio.Slicer(f) for f in fnames]
+
+	# Find the complex value with the largest magnitude in each file
+	if qnorm is not None:
+		fmax = [complexmax(m, start, stride) for m in mats]
+		qnorm.put(fmax)
+		fmax = qsol.get()
+	else: fmax = [None] * len(mats)
+
+	df = sqerr(mats, fmax, start, stride)
+	qsol.put(df)
+
+
+def erreduce(fnames, normalize = False, nproc = 1):
+	'''
+	Fork nproc processes to handle local portions of the RMS error
+	calculation, normalizing the files if desired. This requires reduction
+	of the process-local file maxima through a two-queue exchange.
+
+	The final error contribution of each process is collected in a queue
+	and reduced to a single solution.
+	'''
+	# Create the appropriate queues
+	if normalize: qnorm = Queue()
+	else: qnorm = None
+	qsol = Queue()
+	# Create and start the processes
+	procs = [Process(target=errchunk,
+		args=(fnames, s, nproc, qsol, qnorm,)) for s in range(nproc)]
+	for p in procs: p.start()
+
+	# If normalization was desired, wait to reduce the results
+	if normalize:
+		# A result is required from each process
+		fmax = [qnorm.get() for s in range(nproc)]
+		# Reduce the results to global file maxima
+		fmax = reduce(lambda x, y: [xv if abs(xv) > abs(yv) else yv
+			for xv, yv in zip(x, y)], fmax)
+		# Put the result on the solution queue once for each process
+		for s in range(nproc): qsol.put(fmax)
+
+	# Now grab the results from each process
+	df = [qsol.get() for s in range(nproc)]
+	# Reduce the process-local file errors
+	df = reduce(lambda x, y: map(operator.add, x, y), df)
+	# Now compute the per-file errors
+	errs = [math.sqrt(dfn / df[-1]) for dfn in df[:-1]]
+
+	# Join the processes to make sure that they've quit
+	for p in procs: p.join()
+	return errs
 
 
 def main (argv = None):
@@ -105,38 +146,15 @@ def main (argv = None):
 		usage (progname)
 		return 128
 
-	# Grab the shape of the reference file and the number of slices
-	rshape = list(mio.Slicer(args[-1]).shape)
-	nslice = rshape[-1]
-	# Check that the matrix shapes match
-	for mf in args[:-1]:
-		if list(mio.Slicer(mf).shape) != rshape:
-			raise IndexError('File %s has wrong shape' % mf)
+	# Check that the file sizes agree
+	rsize = list(mio.Slicer(args[-1]).shape)
+	for a in args[:-1]:
+		if list(mio.Slicer(a).shape) != rsize:
+			raise IndexError('Shape of file %s differs from reference' % a)
 
-	# Determine the work share, starting and ending indices
-	share = lambda i: (nslice / nproc) + (1 if i < nslice % nproc else 0)
-	# Compute the starting and ending slice counts
-	starts = [0]
-	ends = [share(0)]
-	for i in range(1, nproc):
-		starts.append(ends[i - 1])
-		ends.append(starts[i] + share(i))
-
-	# Find the normalizing factors, if desired
-	if normalize:
-		maxvals = []
-		for a in args:
-			mv = pool_apply(complexmax, (a,), starts, ends)
-			maxvals.append(cutil.complexmax(np.array(mv)))
-	else: maxvals = [None] * len(args)
-
-	# Compute the numerators and denominators for the RMS errors
-	df = pool_apply(sqerr, (args, maxvals), starts, ends)
-	df = reduce(lambda x, y: map(operator.add, x, y), df)
-
-	for idx, dfn in enumerate(df[:-1]):
-		# Compute the numerator
-		print idx, np.sqrt(dfn / df[-1])
+	# Start computation
+	errs = erreduce(args, normalize, nproc)
+	for idx, err in enumerate(errs): print idx, err
 
 	return 0
 
