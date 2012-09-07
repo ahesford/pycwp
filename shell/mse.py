@@ -1,8 +1,7 @@
 #!/usr/bin/env python
 
-import sys, os, math, getopt, numpy as np, operator
+import sys, os, math, getopt, numpy as np, operator, multiprocessing
 from itertools import izip
-from multiprocessing import Process, Queue
 
 from pyajh import mio, cutil
 
@@ -100,11 +99,11 @@ def erreduce(fnames, normalize = False, nproc = 1):
 	and reduced to a single solution.
 	'''
 	# Create the appropriate queues
-	if normalize: qnorm = Queue()
+	if normalize: qnorm = multiprocessing.Queue()
 	else: qnorm = None
-	qsol = Queue()
+	qsol = multiprocessing.Queue()
 	# Create and start the processes
-	procs = [Process(target=errchunk,
+	procs = [multiprocessing.Process(target=errchunk,
 		args=(fnames, s, nproc, qsol, qnorm,)) for s in range(nproc)]
 	for p in procs: p.start()
 
@@ -139,16 +138,16 @@ def main (argv = None):
 		argv = sys.argv[1:]
 		progname = sys.argv[0]
 
-	normalize, nproc = False, 1
+	normalize = False
+	try: nproc = multiprocessing.cpu_count()
+	except NotImplementedError: nproc = 1
 
 	optlist, args = getopt.getopt (argv, 'p:nh')
 
 	# Parse the options list
 	for opt in optlist:
-		if opt[0] == '-n':
-			normalize = True
-		elif opt[0] == '-p':
-			nproc = int(opt[1])
+		if opt[0] == '-n': normalize = True
+		elif opt[0] == '-p': nproc = int(opt[1])
 		else:
 			usage (progname)
 			return 128

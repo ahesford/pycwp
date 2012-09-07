@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 
-import sys, os, numpy as np, getopt
-from multiprocessing import Process
+import sys, os, numpy as np, getopt, multiprocessing
 from pyajh import mio, segmentation
 
 def usage(progname = 'segmentation.py'):
@@ -14,7 +13,9 @@ def main (argv = None):
 		progname = sys.argv[0]
 
 	# Default values
-	random, nproc = True, 1
+	random = True
+	try: nproc = multiprocessing.cpu_count()
+	except NotImplementedError: nproc = 1
 
 	optlist, args = getopt.getopt (argv, 'p:nh')
 
@@ -57,7 +58,7 @@ def main (argv = None):
 
 		procs = []
 		for s, e in zip(starts, ends):
-			p = Process(target=segmentation.maptissue,
+			p = multiprocessing.Process(target=segmentation.maptissue,
 					args = (args[0], outputs, params),
 					kwargs = {'slices': [s, e]})
 			p.start()
