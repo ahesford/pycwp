@@ -1,11 +1,48 @@
 #!/usr/bin/env python
 
-import sys, os, numpy as np, getopt, multiprocessing
+import sys, os, numpy as np, getopt
+from multiprocessing import Process, cpu_count
 from pyajh import mio, segmentation
 
 def usage(progname = 'segmentation.py'):
 	binfile = os.path.basename(progname)
-	print "Usage:", binfile, "[-h] [-n] [-p <nproc>] <segfile> <paramfile> <sndfile> <atnfile> <denfile>"
+	print "Usage:", binfile, "[-h] [-n] [-p p] [-d scatden] [-s scatsd] [-g w,s]"
+	print "\t[-c chunk] <segfile> <paramfile> <sndfile> <atnfile> <denfile>"
+	print
+	print "\t-n: Disable random variations"
+	print "\t-p: Use p processors (default: CPU count)"
+	print "\t-d: Assume a random scatterer fractional density scatden"
+	print "\t-s: Smooth random scatterers with Gaussian of standard deviation scatsd"
+	print "\t-g: Smooth tissue with Gaussian of width w and standard deviation s"
+	print "\t-c: Process output chunk slices at a time (default: 8)"
+
+def mapblks(segfile, outputs, params, start, stride, chunk, **kwargs):
+	'''
+	Open the segmentation file segfile, output files in the list outputs,
+	and loop through the segmentation in strides to produce output
+	parameter maps. kwargs are optional arguments to be passed to the
+	segmentation routine.
+
+	The arguments start and stride refer to chunks rather than slices.
+	'''
+	# Open the files
+	seg = mio.Slicer(segfile)
+	sndfile, atnfile, denfile = [mio.Slicer(o) for o in outputs]
+
+	# Add the chunk size to the kwargs for convenience
+	kwargs['chunk'] = chunk
+
+	# Loop through the chunks to process output
+	for n in range(start * chunk, seg.shape[-1], stride * chunk):
+		print 'Processing chunk', n
+		snd, atn, den = segmentation.maptissueblk(seg, params, n, **kwargs)
+		# Figure out how many slices need to be written
+		oend = min(seg.shape[-1], n + snd.shape[-1])
+		# Write the outputs
+		sndfile[n:oend] = snd
+		atnfile[n:oend] = atn
+		denfile[n:oend] = den
+
 
 def main (argv = None):
 	if argv is None:
@@ -14,15 +51,24 @@ def main (argv = None):
 
 	# Default values
 	random = True
-	try: nproc = multiprocessing.cpu_count()
+	try: nproc = cpu_count()
 	except NotImplementedError: nproc = 1
+	chunk = 8
 
-	optlist, args = getopt.getopt (argv, 'p:nh')
+	optlist, args = getopt.getopt (argv, 'p:nd:s:c:g:h')
+
+	# Extra arguments are added as kwargs
+	kwargs = {}
 
 	# Parse the options list
 	for opt in optlist:
 		if opt[0] == '-n': random = False
 		elif opt[0] == '-p': nproc = int(opt[1])
+		elif opt[0] == '-d': kwargs['scatden'] = float(opt[1])
+		elif opt[0] == '-s': kwargs['scatsd'] = float(opt[1])
+		elif opt[0] == '-c': chunk = int(opt[1])
+		elif opt[0] == '-g':
+			kwargs['smoothp'] = [float(o) for o in opt[1].split(',')]
 		else:
 			usage (progname)
 			return 128
@@ -46,21 +92,10 @@ def main (argv = None):
 	outfiles = [mio.Slicer(o, segfile.shape, segfile.dtype, True) for o in outputs]
 
 	try:
-		# Open the worker pool and determine work shares
-		nslice = segfile.shape[-1]
-		share = lambda i: (nslice / nproc) + int(i < nslice % nproc)
-		# Compute the starting and ending slices
-		starts = [0]
-		ends = [share(0)]
-		for i in range(1, nproc):
-			starts.append(ends[i - 1])
-			ends.append(starts[i] + share(i))
-
 		procs = []
-		for s, e in zip(starts, ends):
-			p = multiprocessing.Process(target=segmentation.maptissue,
-					args = (args[0], outputs, params),
-					kwargs = {'slices': [s, e]})
+		for n in range(nproc):
+			args = (args[0], outputs, params, n, nproc, chunk)
+			p = Process(target=mapblks, args=args, kwargs=kwargs)
 			p.start()
 			procs.append(p)
 		for p in procs: p.join()

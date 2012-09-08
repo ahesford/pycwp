@@ -48,13 +48,11 @@ def bumpmap(ptden, sigma, shape):
 	return scat
 
 
-def maptissue(segfile, outfiles, params, scatden=0.2, scatsd=0.6, chunk=8, slices=None):
+def maptissueblk(seg, params, n, scatden=0.2, scatsd=0.6, chunk=8, smoothp=[5,3]):
 	'''
-	Given a segmentation description in segfile, compute the sound speed,
-	attenuation and density (with random variations), writing the results
-	to the sound speed, attenuation and density files
-
-		outfiles = [ soundfile, attenfile, denfile ].
+	Given a segmentation description in the Slicer seg, compute the sound
+	speed, attenuation and density (with random variations) of the block
+	with chunk slices starting at slice n.
 
 	The material parameters are specified in
 
@@ -75,69 +73,42 @@ def maptissue(segfile, outfiles, params, scatden=0.2, scatsd=0.6, chunk=8, slice
 	scatden and are characterized by Gaussian variations with a standard
 	deviation of scatsd voxels.
 
-	If slices is not None, it takes the form [start, end] and indicates that
-	the Python slice range start:end of the segmentation file and outputs
-	should be processed. Otherwise, the entire file is processed.
-
-	The output is processed in chunk slices at a time.
+	The list smoothp specifies the width and standard deviation in pixels,
+	respectively, of the Gaussian pulse used to smooth tissue boundaries.
 	'''
-	# Open the segmentation file
-	seg = mio.Slicer(segfile)
-	# Open the output files, which should already have been created
-	snd, atn, den = [mio.Slicer(f) for f in outfiles]
-	# Check that the sizes all agree
-	if list(snd.shape) != list(seg.shape):
-		raise ValueError('The dimensions of the sound file '
-				'do not match those of the segmentation file')
-	if list(atn.shape) != list(seg.shape):
-		raise ValueError('The dimensions of the attenuation file '
-				'do not match those of the segmentation file')
-	if list(den.shape) != list(seg.shape):
-		raise ValueError('The dimensions of the density file '
-				'do not match those of the segmentation file')
-	# Process the whole file by default
-	if slices is None: slices = [0, seg.shape[-1]]
 	# Build the Gaussian kernel for smoothing the tissue map
-	smoothp = [5, 3]
 	kern = cutil.smoothkern(*smoothp)
 	# This convenience function smooths the tissue masks
 	def smooth3(a): return ndimage.correlate(a, kern, mode='nearest')
 	# Pad the blocks with the kernel width for valid convolutions
 	pad = (smoothp[0] - 1) / 2
 
-	# Process each chunk
-	for n in range(slices[0], slices[1], chunk):
-		print 'Processing chunk', n
-		# Try to start two slices early for correct convolution
-		start = max(0, n - pad)
-		# Try to read two extra slices for correct convolution
-		finish = min(n + chunk + pad, seg.shape[-1])
-		# Read the correctly sized data block
-		block = seg[start:finish].astype(int)
-		# Create the sound speed, attenuation and density blocks
-		SoundSpeed = np.zeros(block.shape, dtype=snd.dtype, order='F')
-		Attenuation = np.zeros(block.shape, dtype=atn.dtype, order='F')
-		Density = np.zeros(block.shape, dtype=den.dtype, order='F')
+	# Try to start two slices early for correct convolution
+	start = max(0, n - pad)
+	# Try to read two extra slices for correct convolution
+	finish = min(n + chunk + pad, seg.shape[-1])
+	# Read the correctly sized data block
+	block = seg[start:finish].astype(int)
+	# Create the sound speed, attenuation and density blocks
+	snd = np.zeros(block.shape, dtype=np.float32, order='F')
+	atn = np.zeros(block.shape, dtype=np.float32, order='F')
+	den = np.zeros(block.shape, dtype=np.float32, order='F')
 
-		# Create the random bump map
-		bumps = bumpmap(scatden, scatsd, block.shape)
+	# Create the random bump map
+	bumps = bumpmap(scatden, scatsd, block.shape)
 
-		# Loop through each of the tissue types
-		for k, (sp, ap, dp) in enumerate(zip(*params)):
-			# Smooth the mask
-			mask = smooth3((block == k).astype(float))
-			# Add the parameters for this tissue
-			SoundSpeed += mask * randparam(bumps, *sp)
-			Attenuation += mask * randparam(bumps, *ap)
-			Density += mask * randparam(bumps, *dp)
+	# Loop through each of the tissue types
+	for k, (sp, ap, dp) in enumerate(zip(*params)):
+		# Smooth the mask
+		mask = smooth3((block == k).astype(float))
+		# Add the parameters for this tissue
+		snd += mask * randparam(bumps, *sp)
+		atn += mask * randparam(bumps, *ap)
+		den += mask * randparam(bumps, *dp)
 
-		# Compute the start and end slices of the parameters
-		istart = pad if n != 0 else 0
-		iend = min(chunk + istart, SoundSpeed.shape[-1])
-		# Compute the start and end slices of the files
-		oend = min(seg.shape[-1], n + iend - istart)
+	# Compute the start and end slices of the parameters
+	istart = n - start
+	iend = min(chunk + istart, snd.shape[-1])
 
-		# Write the blocks to the outputs
-		snd[n:oend] = SoundSpeed[:,:,istart:iend]
-		atn[n:oend] = Attenuation[:,:,istart:iend]
-		den[n:oend] = Density[:,:,istart:iend]
+	# Return the appropriately sized chunk
+	return snd[:,:,istart:iend], atn[:,:,istart:iend], den[:,:,istart:iend]
