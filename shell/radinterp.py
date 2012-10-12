@@ -64,7 +64,8 @@ if __name__ == '__main__':
 	else: a = wavecl.SplineInterpolator(ntc, 2 * (ntc - 2), tol)
 
 	# Interpolate each column of the matrix and write it to a file
-	output = mio.Slicer(args[2], [nsamp, inmat.shape[-1]], dtype=inmat.dtype)
+	# Truncate any existing output file
+	output = mio.Slicer(args[2], [nsamp, inmat.shape[-1]], inmat.dtype, True)
 	
 	if not gpu:
 		for row in inmat:

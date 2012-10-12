@@ -57,7 +57,7 @@ if __name__ == '__main__':
 	print "Building %d-by-%d far-field matrix" % (f.nsamp, n**3)
 
 	# Create the output file
-	output = mio.Slicer(args[1], [f.nsamp, n**3], np.complex64)
+	output = mio.Slicer(args[1], [f.nsamp, n**3], np.complex64, True)
 
 	# Build the matrix row-by-row and write it to output
 	for c in coords: output.writeslice(f.fillrow(c))
