@@ -137,45 +137,21 @@ if __name__ == '__main__':
 	bar.reset()
 	util.printflush(str(bar) + ' (backward)\r')
 
-	# Open a file to store the backward field
-	bmat = mio.Slicer(args[2] + '.backward', p, inmat.dtype, True)
-
-	# Propagate the reverse field through each slice
-	for idx in range(p[-1]):
-		# Grab the contrast for the next slab
-		try: obj[sl] = inmat[idx]
-		except IndexError: obj[:,:] = 0.
-		# Advance and write the backward-traveling field
-		# This requires knowledge of the previously reflected field
-		b = sse.advance(obj, fmat[idx - 1])
-		bmat[idx] = b
-		# Increment and print the progress bar
-		bar.increment()
-		util.printflush(str(bar) + ' (backward)\r')
-
-	print
-
 	# Create a combined output file; errors will truncate the file
 	with mio.Slicer(args[2], inmat.shape, inmat.dtype, True) as outmat:
-		bar = util.ProgressBar([0, inmat.shape[-1]], width=50)
-		sse.reset()
-		# Cut the step size in half and initialize the slab contrast
-		sse.dz *= 0.5
-		obj[sl] = inmat[-1]
-		sse.etaupdate(obj)
-		print 'Combining forward and backward fields'
-		util.printflush(str(bar) + '\r')
-		for idx in reversed(range(inmat.shape[-1])):
-			# Combine the forward and reversed fields in one slice
-			sse.copyfield(fmat[idx] + bmat[idx])
-			# Grab the next slab contrast
-			try: obj[sl] = inmat[idx - 1]
+		# Propagate the reverse field through each slice
+		for idx in range(p[-1]):
+			# Grab the contrast for the next slab
+			try: obj[sl] = inmat[idx]
 			except IndexError: obj[:,:] = 0.
-			# Propagate the field to the midpoint
-			# No transmission operator is applied
-			f = sse.advance(obj, tx = False)
-			outmat[idx] = f[sl]
+			# Advance the backward traveling field
+			# This requires the forward field in the slab
+			# Also compute a half-shift of the combined field
+			b = sse.advance(obj, fmat[idx - 1], True)
+			try: outmat[idx - 1] = b[sl]
+			except IndexError: pass
+			# Increment and print the progress bar
 			bar.increment()
-			util.printflush(str(bar) + '\r')
+			util.printflush(str(bar) + ' (backward)\r')
 
 		print

@@ -412,15 +412,13 @@ class SplitStep(object):
 		queue, grid = self.fwdque, self.grid
 		# By default, all buffers use the calculation queue
 		empty = lambda : cla.empty(queue, grid, np.complex64, order='F')
-		# Buffers to store the propagating field and its components
-		self.fld = empty()
+		# Buffers to store the propagating and backward fields
+		self.fld = [empty() for i in range(3)]
+		# Scratch space used during computations
 		self.scratch = [empty() for i in range(3)]
 		# Buffers to store the backward-traveling field
-		self.bfld = empty()
-		# The index of refraction gets two buffers for averaging
+		# The index of refraction gets two buffers for transmission
 		self.eta = [empty() for i in range(2)]
-		# The reflection coefficients for a slab
-		self.rc = empty()
 		# Initialize refractive index and fields
 		self.reset()
 
@@ -443,94 +441,77 @@ class SplitStep(object):
 		grid = self.grid
 
 		o = np.ones(grid, dtype=np.complex64)
-		self.eta[0].set(o, async=True)
-		self.eta[1].set(o, async=True)
+		for eta in self.eta: eta.set(o, async=True)
 
 		z = np.zeros(grid, dtype=np.complex64)
-		self.bfld.set(z, async=True)
-		self.fld.set(z, async=True)
+		for fld in self.fld: fld.set(z, async=True)
 
 
-	def copyfield(self, fld = None):
+	def copyfield(self, fld = None, idx = 0):
 		'''
 		If fld is provided, copy the provided field into the CL field
-		buffer. Otherwise, return a NumPy array containing a copy of
-		the already-populated CL field buffer.
+		buffer at index idx. Otherwise, return a NumPy array containing
+		a copy of the already-populated CL field buffer at idx.
 
 		Copies from the device are synchronous.
-		Copies to the device occur on the propagation queue asynchronously.
+		Copies to the device are asynchronous on the propagation queue.
 		'''
-		if fld is None: return self.fld.get()
-		else: self.fld.set(fld.astype(np.complex64).ravel('F'), async=True)
+		if fld is None: return self.fld[idx].get()
+		else:
+			fld = fld.astype(np.complex64).ravel('F')
+			self.fld[idx].set(fld, async=True)
 
 
-	def setincident(self, zoff):
+	def setincident(self, zoff, idx = 0):
 		'''
-		Set the value of the CL field buffer to the incident field at a
-		height zoff.
+		Set the value of the CL field buffer at index idx to the
+		incident field at a height zoff.
 		'''
-		inc = self.fld.data
-		self.prog.green3d(self.fwdque, self.grid, None, inc, np.float32(zoff))
+		inc = self.fld[idx].data
+		zoff = np.float32(zoff)
+		self.prog.green3d(self.fwdque, self.grid, None, inc, zoff)
 
 
-	def etaupdate(self, obj, wait=True):
+	def etaupdate(self, obj):
 		'''
 		Update the rolling buffer with the index of refraction,
 		corresponding to an object contrast obj, for the next slab.
-
-		If wait is True, execution pauses until the update is complete.
-		Setting wait to False (e.g., from self.advance) allows the
-		update to be performed simultaneously with other calculations.
 
 		The transmission queue is used for updates to facilitate
 		concurrency with forward propagation algorithms.  '''
 		# Transfers occur in the transmission queue for concurrency
 		prog, queue, grid = self.prog, self.tranque, self.grid
-		cur, nxt = self.eta
+		# Roll the buffer so the next slab is second
+		nxt, cur = self.eta
+		self.eta = [cur, nxt]
 		# Copy the next slab index asynchronously
 		obj = obj.astype(np.complex64).ravel('F')
 		nxt.set(obj, queue=queue, async=True)
 		# Convert the next index of refraction to an object
 		prog.obj2eta(queue, grid, None, nxt.data)
 
-		# Roll the buffer for the next slab
-		self.eta = [nxt, cur]
-
-		# Wait for execution to finish, if desired
-		if wait: queue.finish()
-
-		# Return a pointer to the current and next slab arrays
+		# Return pointers to the current and next slabs
 		return cur, nxt
 
 
-	def advance(self, obj, bfld = None, tx = True):
+	def propagate(self, fld = None, dz = None, idx = 0):
 		'''
-		Propagate a field through a slab with object contrast obj and
-		use it to compute an estimate of the actual field in the slab.
-
-		The field bfld, if provided, is a field running in the opposite
-		direction of propagation that will be reflected and added to
-		the propagated field when transmitted across a slab interface.
-
-		If tx is False, forward-only propagation is assumed and no
-		transmission operation is computed.
+		Propagate the field stored in the PyOpenCL array fld (or, if
+		fld is None, the current in-device field at index idx) a step
+		dz (or, if dz is None, the default step size) through the
+		currently represented medium.
 		'''
 		prog, grid = self.prog, self.grid
-		fwdque, tranque = self.fwdque, self.tranque
-		# Point to the field and component data
-		fld = self.fld.data
+		fwdque = self.fwdque
+
+		# Point to the field, scratch buffers, and refractive index
+		fld = fld.data if fld is not None else self.fld[idx].data
 		u, v, x = [s.data for s in self.scratch]
-		# These constants are used in field combinations
-		one = np.float32(1)
-		dz = np.float32(self.dz)
+		eta = self.eta[0].data
 
-		# Asynchronously push the next slab to its buffer
-		eta, enxt = [e.data for e in self.etaupdate(obj, False)]
-
-		# Copy any backward-traveling field
-		if tx and bfld is not None:
-			bfld = bfld.astype(np.complex64).ravel('F')
-			self.bfld.set(bfld, queue=tranque, async=True)
+		# These constants will be used in field computations
+		one = np.float32(1.)
+		dz = np.float32(dz if dz is not None else self.dz)
 
 		# Attenuate the boundaries using a Hann window, if desired
 		if self.l > 0:
@@ -580,17 +561,63 @@ class SplitStep(object):
 
 		# Multiply by the phase screen
 		prog.screen(fwdque, grid, None, fld, eta, dz)
+
+
+	def advance(self, obj, bfld = None, shift = False):
+		'''
+		Propagate a field through the current slab and transmit it
+		through an interface with the next slab characterized by object
+		contrast obj. The transmission overwrites the refractive index
+		of the current slab with the interface reflection coefficients.
+
+		The field bfld, if provided, runs opposite the direction of
+		propagation that will be reflected and added to the propagated
+		field after transmission across the interface.
+
+		If shift is True, the forward and backward field are also
+		shifted by half a slab to agree with full-wave solutions.
+		'''
+		prog, grid = self.prog, self.grid
+		fwdque, tranque = self.fwdque, self.tranque
+
+		# Point to the field components
+		fwd, bck, buf = self.fld
+
+		# Push the next slab to its buffer
+		eta, enxt = [e.data for e in self.etaupdate(obj)]
+
+		# Copy the backward-traveling field
+		if bfld is not None:
+			bfld = bfld.astype(np.complex64).ravel('F')
+			bck.set(bfld, queue=tranque, async=True)
+
+		# Copy the forward field for shifting if necessary
+		if shift: cl.enqueue_copy(fwdque, buf.data, fwd.data)
+
+		# Propagate the forward field a whole step
+		self.propagate(fwd)
+
+		if shift:
+			if bfld is not None:
+				# Ensure the backward field has been transferred
+				tranque.finish()
+				# Add the forward and backward fields
+				prog.caxpy(fwdque, grid, None, buf.data,
+					np.float32(1.), buf.data, bck.data)
+			# Propagate the combined field a half step
+			self.propagate(buf, 0.5 * self.dz)
+
 		# Flush the forward queue for consistency with transmissions
 		fwdque.finish()
 
-		if tx:
-			# Compute the reflection coefficients for the interface
-			rc = self.rc.data
-			prog.rcoeff(tranque, grid, None, rc, eta, enxt)
-			# Compute the transmission through the interface
-			# Include the reflection of a backward field if appropriate
-			if bfld is None: prog.transmit(tranque, grid, None, fld, rc)
-			else: prog.txreflect(tranque, grid, None, fld, self.bfld.data, rc)
+		# Compute the reflection coefficients for the interface
+		# Reuse the current slab refractive index
+		prog.rcoeff(tranque, grid, None, eta, eta, enxt)
+		# Compute transmission through the interface
+		if bfld is None: prog.transmit(tranque, grid, None, fwd.data, eta)
+		# Include reflection of backward field if appropriate
+		else: prog.txreflect(tranque, grid, None, fwd.data, bck.data, eta)
 
-		# Return transmitted field, flushing transmission queue
-		return self.fld.get(queue=tranque, async=False)
+		# Return the shifted field if it was calculated
+		if shift: return buf.get(queue=tranque, async=False)
+		else: return fwd.get(queue=tranque, async=False)
