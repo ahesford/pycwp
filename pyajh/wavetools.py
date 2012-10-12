@@ -477,35 +477,48 @@ class SplitStep(object):
 		return cur, self.eta
 
 
-	def advance(self, obj, bfld = None, tx = True):
+	def advance(self, obj, bfld = None, shift = False):
 		'''
-		Propagate a field through a slab with object contrast obj and
-		use it to compute an estimate of the actual field in the slab.
+		Propagate a field through the current slab and transmit it
+		through an interface with the next slab characterized by object
+		contrast obj.
 
-		The field bfld, if provided, is the field running counter to
-		the field to be updated.
+		The field bfld, if provided, runs opposite the direction of
+		propagation and will be reflected and added to the propagated
+		field after transmission across the interface.
 
-		If tx is False, forward-only propagation is assumed and no
-		transmission operation is computed.
+		If shift is True, the forward and backward fields are also
+		shifted by half a slab to agree with full-wave solutions.
 		'''
 		# Grab the current and next indices of refraction
 		eta, enxt = self.etaupdate(obj)
 
-		# Apply a Hann window if desired
+		# For half-plane shifts, compute the field to be shifted
+		if shift:
+			if bfld is None: midplane = self.fld.copy()
+			else: midplane = self.fld + bfld
+
+		# Apply a Hann window to the field if desired
 		if self.l > 0: self.fld = splitstep.hann(self.fld, self.l)
 
 		# Wide-angle propagation of the field through the slab
 		self.fld = splitstep.advance(self.fld, eta,
 				self.k0, self.h, self.dz, self.w)
 
-		if tx:
-			# Compute the reflection coefficients for the slab
-			rc = splitstep.rcoeff(eta, enxt)
-			# Compute the transmission and reflection from the interface
-			if bfld is None: self.fld = splitstep.transmit(self.fld, rc)
-			else: self.fld = splitstep.txreflect(self.fld, bfld, rc)
+		# Compute the reflection coefficients for the slab
+		rc = splitstep.rcoeff(eta, enxt)
+		# Compute the transmission and reflection from the interface
+		if bfld is None: self.fld = splitstep.transmit(self.fld, rc)
+		else: self.fld = splitstep.txreflect(self.fld, bfld, rc)
 
-		return self.fld
+		# If no shifting is desired, return the transmitted field
+		if not shift: return self.fld
+
+		# Otherwise, apply the Hann window and propagate a half step
+		if self.l > 0: midplane = splitstep.hann(midplane, self.l)
+		midplane = splitstep.advance(midplane, eta,
+				self.k0, self.h, 0.5 * self.dz, self.w)
+		return midplane
 
 
 class SplitPade(object):
