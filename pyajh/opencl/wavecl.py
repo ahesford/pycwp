@@ -412,11 +412,10 @@ class SplitStep(object):
 		queue, grid = self.fwdque, self.grid
 		# By default, all buffers use the calculation queue
 		empty = lambda : cla.empty(queue, grid, np.complex64, order='F')
-		# Buffers to store the propagating and backward fields
+		# Buffers to store the propagating (twice) and backward fields
 		self.fld = [empty() for i in range(3)]
 		# Scratch space used during computations
 		self.scratch = [empty() for i in range(3)]
-		# Buffers to store the backward-traveling field
 		# The index of refraction gets two buffers for transmission
 		self.eta = [empty() for i in range(2)]
 		# Initialize refractive index and fields
@@ -583,6 +582,9 @@ class SplitStep(object):
 		# Point to the field components
 		fwd, bck, buf = self.fld
 
+		# Copy the forward field for shifting if necessary
+		if shift: cl.enqueue_copy(fwdque, buf.data, fwd.data)
+
 		# Push the next slab to its buffer
 		eta, enxt = [e.data for e in self.etaupdate(obj)]
 
@@ -591,33 +593,31 @@ class SplitStep(object):
 			bfld = bfld.astype(np.complex64).ravel('F')
 			bck.set(bfld, queue=tranque, async=True)
 
-		# Copy the forward field for shifting if necessary
-		if shift: cl.enqueue_copy(fwdque, buf.data, fwd.data)
-
 		# Propagate the forward field a whole step
 		self.propagate(fwd)
 
+		# Ensure that transfers to the device are finished
+		tranque.finish()
+
 		if shift:
+			# Add the forward and backward fields
 			if bfld is not None:
-				# Ensure the backward field has been transferred
-				tranque.finish()
-				# Add the forward and backward fields
 				prog.caxpy(fwdque, grid, None, buf.data,
 					np.float32(1.), buf.data, bck.data)
 			# Propagate the combined field a half step
 			self.propagate(buf, 0.5 * self.dz)
+			fwdque.finish()
+			result = buf.get(queue=tranque, async=True)
 
-		# Flush the forward queue for consistency with transmissions
-		fwdque.finish()
-
-		# Compute the reflection coefficients for the interface
-		# Reuse the current slab refractive index
-		prog.rcoeff(tranque, grid, None, eta, eta, enxt)
+		# Reflection coefficients replace current refractive index
+		prog.rcoeff(fwdque, grid, None, eta, eta, enxt)
 		# Compute transmission through the interface
-		if bfld is None: prog.transmit(tranque, grid, None, fwd.data, eta)
+		if bfld is None: prog.transmit(fwdque, grid, None, fwd.data, eta)
 		# Include reflection of backward field if appropriate
-		else: prog.txreflect(tranque, grid, None, fwd.data, bck.data, eta)
+		else: prog.txreflect(fwdque, grid, None, fwd.data, bck.data, eta)
 
-		# Return the shifted field if it was calculated
-		if shift: return buf.get(queue=tranque, async=False)
-		else: return fwd.get(queue=tranque, async=False)
+		if shift:
+			# Ensure copy of shifted field has finished
+			tranque.finish()
+			return result
+		else: return fwd.get(queue=fwdque, async=False)
