@@ -4,7 +4,7 @@ General-purpose numerical routines used in other parts of the module.
 
 import numpy, math, operator
 from scipy import special as spec, ndimage
-from .geom import sph2cart
+from itertools import izip
 
 def smoothkern(w, s, n = 3):
 	'''
@@ -130,16 +130,21 @@ def translator (r, s, phi, theta, l):
 
 	# Compute the radial component
 	hl = spec.sph_jn(l, kr)[0] + 1j * spec.sph_yn(l, kr)[0]
+	# Multiply the radial component by scale factors in the translator
+	m = numpy.arange(l + 1)
+	hl *= (1j / 4. / math.pi) * (1j)**m * (2. * m + 1.)
 
-	# Define a dot-product function between the translation direction
-	# and the sample direction with specified angular coordinates
-	sd = lambda t, p: numpy.dot(s, sph2cart(1., t, p))
+	# Compute Legendre angle argument dot(s,sd) for sample directions sd
+	stheta = numpy.sin(theta)[:,numpy.newaxis]
+	sds = (s[0] * stheta * numpy.cos(phi)[numpy.newaxis,:]
+			+ s[1] * stheta * numpy.sin(phi)[numpy.newaxis,:]
+			+ s[2] * numpy.cos(theta)[:,numpy.newaxis])
 
-	# Compute the translator at the specified angular samples
-	tr = [[sum([(1j)**li * (2. * li + 1.) * v * h
-		for li, (h, v) in enumerate(zip(hl, legpoly(sd(th, ph), l)))])
-		for th in theta] for ph in phi]
+	# Initialize the translator
+	tr = 0
 
+	# Sum the terms of the translator
+	for hv, pv in izip(hl, legpoly(sds, l)): tr += hv * pv
 	return tr
 
 def legpoly (x, n = 0):
@@ -148,21 +153,21 @@ def legpoly (x, n = 0):
 	evaluated at argument x.
 	'''
 
-	if abs(x) > 1.0:
-		raise ValueError("Argument must be in the range [-1,1]")
+	if numpy.any(numpy.abs(x) > 1.0):
+		raise ValueError("Arguments must be in [-1,1]")
 	if n < 0:
 		raise ValueError("Order must be nonnegative")
 
+	# Set some recursion values
+	cur = x
+	prev = numpy.ones_like(x)
+
 	# Yield the zero-order value
-	yield 1.0
+	yield prev
 
 	# Yield the first-order value, if that order is desired
 	if n < 1: raise StopIteration
-	else: yield x
-
-	# Set some recursion values
-	cur = x
-	prev = 1.0
+	else: yield cur
 
 	# Now compute the subsequent values
 	for i in xrange(1, n):
@@ -211,6 +216,26 @@ def legendre (t, m):
 	ddp = ((m - 2.) * t * dp + m * (p1 - dpl)) / (t**2 - 1.)
 
 	return p, dp, ddp
+
+
+def clenshaw (m):
+	'''
+	Compute the Clenshaw-Curtis quadrature nodes and weights in the
+	interval [0,pi] for a specified order m.
+	'''
+	n = m - 1
+	idx = numpy.arange(m)
+	# Nodes are equally spaced in the interval
+	nodes = idx * math.pi / float(n)
+	# Endpoint weights should be halved to avoid aliasing
+	cj = (numpy.mod(idx, n) == 0).choose(2., 1.)
+	k = numpy.arange(1, int(n / 2) + 1)[:,numpy.newaxis]
+	bk = (k < n / 2.).choose(1., 2.)
+	# The weights are defined according to Waldvogel (2003)
+	cos = numpy.cos(2. * k * nodes[numpy.newaxis,:])
+	scl = bk / (4. * k**2 - 1.)
+	weights = (cj / n) * (1. - numpy.sum(scl * cos, axis=0))
+	return nodes, weights
 
 
 def gaussleg (m, tol = 1e-9, itmax=100):
