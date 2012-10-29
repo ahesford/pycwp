@@ -238,6 +238,20 @@ def clenshaw (m):
 	return nodes, weights
 
 
+def fejer2 (m):
+	'''
+	Compute the quadrature nodes and weights, in the interval [0, pi],
+	using Fejer's second rule for an order m.
+	'''
+	n = m - 1
+	idx = numpy.arange(m)
+	nodes = idx * math.pi / float(n)
+	k = numpy.arange(1, int(n / 2) + 1)[:,numpy.newaxis]
+	sin = numpy.sin((2. * k - 1.) * nodes[numpy.newaxis,:])
+	weights = (4. / n) * numpy.sin(nodes) * numpy.sum(sin / (2. * k - 1.), axis=0)
+	return nodes, weights
+
+
 def gaussleg (m, tol = 1e-9, itmax=100):
 	'''
 	Compute the Gauss-Legendre quadrature nodes and weights in the interval
