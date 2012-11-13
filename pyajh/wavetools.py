@@ -527,7 +527,7 @@ class SplitPade(object):
 
 		u(x, y, z + dz) = exp(1j * k * dz * sqrt(1 + Q)) u(x, y, z)
 
-	for a differential operator Q into a split-step Padé solution
+	for a differential operator Q into a split-step Pade solution
 
 		u(x, y, z + dz) = e + sum(inv(1 + b[l] * Q) * a[l] * Q * u(x, y, z)),
 
@@ -545,11 +545,11 @@ class SplitPade(object):
 	'''
 	def __init__(self, k0, dz, order = 8, l = None):
 		'''
-		Establish a split-step Padé approximant of desired order to the
+		Establish a split-step Pade approximant of desired order to the
 		split-step propagation operator characterized by kz = k0 * dz
 		for a propagation step dz through wave number k0.
 
-		When the Padé approximant is used to compute propagation, a
+		When the Pade approximant is used to compute propagation, a
 		Hann window of length l (if provided) is applied to the field
 		to avoid aliasing problems.
 		'''
@@ -635,7 +635,7 @@ class SplitPade(object):
 
 	def padederivs(self, q = 0):
 		'''
-		Return the value of the Padé approximant
+		Return the value of the Pade approximant
 
 			exp(1j * k0 * dz) + sum(a[l] * q / (1 + b[l] * q))
 
@@ -655,7 +655,7 @@ class SplitPade(object):
 	def costfunc(self):
 		'''
 		Return the value of the cost functional that constrains the
-		coefficients of the Padé approximant.
+		coefficients of the Pade approximant.
 		'''
 		cost = self.padederivs() - self.derivs
 		cost[0] = np.sum(self.a / self.b) + self.eikz
@@ -683,7 +683,7 @@ class SplitPade(object):
 	def newton(self, maxiter = 100, epsilon = 1., tol = 1e-6):
 		'''
 		Run a modified Newton method with a maximum of maxiter
-		iterations to compute the cofficients of the split-step Padé
+		iterations to compute the cofficients of the split-step Pade
 		approximation to the propagation operator.
 
 		The parameter epsilon may be less than 1 to stabilize the
@@ -710,7 +710,7 @@ class SplitPade(object):
 
 	def stabilize(self, tol = 1e-6):
 		'''
-		Detect whether more than one Padé denominator coefficients are
+		Detect whether more than one Pade denominator coefficients are
 		close within tolerance tol (a sign of degeneration to
 		lower-order approximants) and change one (and its corresponding
 		numerator) randomly.
@@ -748,7 +748,7 @@ class SplitPade(object):
 	def propagate(self, fld, obj, solver=la.lgmres, **kwargs):
 		'''
 		Compute the propagation of a field fld through a slab with
-		scattering contrast obj using a split-step Padé approximant.
+		scattering contrast obj using a split-step Pade approximant.
 
 		The kwargs are passed to the solver to invert the denominator.
 		'''
@@ -775,7 +775,7 @@ class SplitPade(object):
 		shape = [np.prod(o.shape)]*2
 
 		for i, (a, b, x0) in enumerate(zip(self.a, self.b, self.x0)):
-			print 'Computing Padé contribution', i + 1
+			print 'Computing Pade contribution', i + 1
 			mv = lambda x: flat(pade.scatop(o, grid(x), self.dz, self.k0, 1., b))
 			A = la.LinearOperator(shape, dtype=complex, matvec=mv)
 
