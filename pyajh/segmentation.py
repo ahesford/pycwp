@@ -77,9 +77,14 @@ def maptissueblk(seg, params, n, scatden=0.2, scatsd=0.6, chunk=8, smoothp=[5,3]
 	respectively, of the Gaussian pulse used to smooth tissue boundaries.
 	'''
 	# Build the Gaussian kernel for smoothing the tissue map
-	kern = cutil.smoothkern(*smoothp)
+	kern = cutil.smoothkern(*smoothp, n = 1)
 	# This convenience function smooths the tissue masks
-	def smooth3(a): return ndimage.correlate(a, kern, mode='nearest')
+	def smooth3(a):
+		b = ndimage.correlate1d(a, kern, mode='nearest', axis=0)
+		c = ndimage.correlate1d(b, kern, mode='nearest', axis=1)
+		# This avoids the need to allocate another temporary buffer
+		ndimage.correlate1d(c, kern, output=b, mode='nearest', axis=2)
+		return b
 	# Pad the blocks with the kernel width for valid convolutions
 	pad = (smoothp[0] - 1) / 2
 

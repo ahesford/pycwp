@@ -68,7 +68,8 @@ def main (argv = None):
 		elif opt[0] == '-s': kwargs['scatsd'] = float(opt[1])
 		elif opt[0] == '-c': chunk = int(opt[1])
 		elif opt[0] == '-g':
-			kwargs['smoothp'] = [float(o) for o in opt[1].split(',')]
+			kstr = opt[1].split(',')
+			kwargs['smoothp'] = [int(kstr[0]), float(kstr[1])]
 		else:
 			usage (progname)
 			return 128
