@@ -6,6 +6,38 @@ import numpy, math, operator
 from scipy import special as spec, ndimage
 from itertools import izip
 
+def fuzzyimg(img, nbr):
+	'''
+	Randomize boundaries in the image represented in the matrix img by
+	identifying the maximum and minimum values in the neighborhood of nbr
+	pixels per dimension (must be odd) centered around each pixel in the
+	image. Assign to the center pixel a uniformly distributed random value
+	between the maximum and minimum of the neighborhood.
+	'''
+	if nbr % 2 != 1: raise ValueError('Neighborhood must have odd dimensions')
+	half = (nbr - 1) / 2
+	ndim = len(img.shape)
+	# Create the maximum and minimum arrays
+	nmax = img.copy()
+	nmin = img.copy()
+	# Find the limits along each axis successively
+	for d in range(ndim):
+		# By default, grab the entire array
+		rsl = [slice(None)] * ndim
+		lsl = [slice(None)] * ndim
+		for i in range(1, half + 1):
+			# Shift left and right for each offset
+			lsl[d] = slice(i, None)
+			rsl[d] = slice(None, -i)
+			# Grab the max and min in the shifted regions
+			nmax[lsl] = numpy.fmax(nmax[lsl], img[rsl])
+			nmax[rsl] = numpy.fmax(nmax[rsl], img[lsl])
+			nmin[lsl] = numpy.fmin(nmin[lsl], img[rsl])
+			nmin[rsl] = numpy.fmin(nmin[rsl], img[lsl])
+
+	return numpy.random.rand(*img.shape).astype(img.dtype) * (nmax - nmin) + nmin
+
+
 def smoothkern(w, s, n = 3):
 	'''
 	Compute an n-dimensional Gaussian kernel with width w (must be odd) and
