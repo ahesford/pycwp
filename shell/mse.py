@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-import sys, os, getopt, numpy as np, multiprocessing
+import sys, os, getopt, numpy as np, math, multiprocessing
 from numpy import linalg as la
 from itertools import izip
 
@@ -55,19 +55,26 @@ def main (argv = None):
 		usage (progname)
 		return 128
 
-	p = multiprocessing.Pool(processes=nproc)
+	# Make sure that the shapes of all of the files agree
+	sizes = [mio.Slicer(a).shape for a in args]
+	for l, r in zip(sizes[:-1], sizes[1:]):
+		if tuple(l) != tuple(r): raise ValueError('Array sizes must agree')
 
 	# Grab the number of slices in the reference file
-	nslice = mio.Slicer(args[-1]).shape[-1]
+	nslice = sizes[-1][-1]
 
-	# Compute the error norms
+	# Compute, in parallel, the slice difference norms
+	p = multiprocessing.Pool(processes=nproc)
 	errs = np.array(p.map(slicerr, (tuple([i] + args) for i in range(nslice))))
-
+	# Normalize the slice differences from each file
 	errs = errs[:,:-1] / la.norm(errs[:,-1])
 
 	if perslice:
+		# Denominator is averaged over all slices for per-slice errors
+		errs *= math.sqrt(nslice)
 		for erow in errs: print ' '.join('%-11.6e' % ev for ev in erow)
 	else:
+		# Collapse the per-slice errors into a global RMS error
 		for i, ecol in enumerate(errs.T):
 			print '%4d %11.6e' % (i, la.norm(ecol))
 
