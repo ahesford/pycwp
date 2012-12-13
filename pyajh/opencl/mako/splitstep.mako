@@ -69,7 +69,7 @@ float2 imulr(const float2 r, const float2 c) {
 float2 csqrt(const float2);
 float2 csqrt(const float2 v) {
 	const float ang = 0.5f * atan2(v.y, v.x);
-	const float mag = sqrt(sqrt(mad(v.y, v.y, v.x * v.x)));
+	const float mag = sqrt(hypot(v.x, v.y));
 
 	return (float2) (mag) * (float2) (cos(ang), sin(ang));
 }
@@ -240,6 +240,28 @@ __kernel void screen(${gfc} fld, ${gfc} eta, const float dz) {
 	const float2 arg = imulr(${k0}f * dz, eval);
 	/* Multiply the phase shift by the field. */
 	fld[idx] = cmul(cexp(arg), fld[idx]);
+}
+
+/* To the field, apply a perturbation phase screen. The field fld is defined at
+ * the previous interface, while hfld represents the homogeneous propagation of
+ * fld to the current interface. */
+__kernel void perturb(${gfc} fld, ${gfc} hfld, ${gfc} eta, const float dz) {
+	${getindices('i', 'j', 'idx')};
+
+	const float2 eval = eta[idx];
+	const float2 fval = fld[idx];
+	const float2 hval = hfld[idx];
+
+	const float delta = ${k0}f * dz;
+
+	const float2 phi = cmul(hval, (float2) (fval.x, -fval.y));
+	const float2 dpsi = (float2) (atan2(phi.y, phi.x) / delta, 0.0f);
+	const float2 dpsq = (float2) (dpsi.x * dpsi.x, 0.0f);
+
+	const float2 ctval = cmul(eval, eval) - (float2) (1.0f, 0.0f);
+	const float2 arg = imulr(delta, csqrt(ctval + dpsq) - dpsi);
+
+	fld[idx] = cmul(cexp(arg), hval);
 }
 
 /* Compute z = a * x + y for vectors x, y, z and real scalar a. */
