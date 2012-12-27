@@ -22,6 +22,8 @@ def gencompress(c, rho, atn):
 
 	The time constants for the compressibilities k1 and k2 are,
 	respectively, t1 = 11.49 ns and t2 = 77.29 ns.
+
+	Attenuation slopes less than 0.1 dB/cm/MHz are assumed to be zero.
 	'''
 	# Define polynomial coefficients for the curve fit
 	a1 = (1.37424E-09, -7.86182E-09, 1.62596E-08, -1.23225E-08,
@@ -33,7 +35,7 @@ def gencompress(c, rho, atn):
 			1.04052E-10, -5.07517E-11)
 
 	# Watch for zero attenuation
-	alpha = (np.abs(atn) > 1e-2).choose(1., atn)
+	alpha = (np.abs(atn) > 0.1).choose(1., atn)
 	asq = np.sqrt(alpha)
 
 	# Compute the compressibilities
@@ -42,7 +44,7 @@ def gencompress(c, rho, atn):
 			(a[4] / c + a[9]) * alpha) / rho for a in [a1, a2]]
 
 	# Correct the compressibilities where there is zero attenuation
-	k1, k2 = [(np.abs(atn) > 1e-2).choose(0., k) for k in [k1, k2]]
+	k1, k2 = [(np.abs(atn) > 0.1).choose(0., k) for k in [k1, k2]]
 
 	return k1, k2
 
