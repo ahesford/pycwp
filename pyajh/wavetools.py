@@ -33,7 +33,7 @@ def gencompress(c, rho, atn):
 			1.04052E-10, -5.07517E-11)
 
 	# Watch for zero attenuation
-	alpha = (np.abs(atn) > 1e-6).choose(1., atn)
+	alpha = (np.abs(atn) > 1e-2).choose(1., atn)
 	asq = np.sqrt(alpha)
 
 	# Compute the compressibilities
@@ -42,7 +42,7 @@ def gencompress(c, rho, atn):
 			(a[4] / c + a[9]) * alpha) / rho for a in [a1, a2]]
 
 	# Correct the compressibilities where there is zero attenuation
-	k1, k2 = [(np.abs(atn) > 1e-6).choose(0., k) for k in [k1, k2]]
+	k1, k2 = [(np.abs(atn) > 1e-2).choose(0., k) for k in [k1, k2]]
 
 	return k1, k2
 
@@ -52,7 +52,7 @@ def compress2spd(c, rho, k, f):
 	Convert the sound speed c (m/s at zero frequency), the density rho
 	(kg/m**3) and the generalized compressibilities k = (k1, k2) returned
 	by the gencompress function into a sound speed at the specified
-	frequency f (MHz).
+	frequency f (Hz).
 
 	The time constants are fixed at t1 = 11.49 ns and t2 = 77.29 ns.
 	'''
