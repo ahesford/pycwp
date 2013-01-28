@@ -296,8 +296,8 @@ __kernel void green3d(${gfc} fld, const float zoff) {
 
 	% if d:
 		const float ctheta = dot(rv / (float3) r, (float3) ${prtuple(dirax)});
-		const float stheta = sin(acos(clamp(ctheta, -1.0f, 1.0f)));
-		const float mag = ctheta * exp(${-dirmag}f * stheta * stheta);
+		const float sthsq = 1.0f - ctheta * ctheta;
+		const float mag = ctheta * exp(${-dirmag}f * sthsq);
 	% endif
 
 	fld[idx] = ${'' if d is None else '(float2) mag *'} grf;

@@ -114,8 +114,10 @@ def directivity(obs, src, d, a):
 
 	# Compute the cosine of the angle
 	ctheta = reduce(np.add, [x * y for x, y in izip(r, d)]) / rn / dn
+	# Compute the square of the sine of the angle
+	sthsq = 1. - ctheta**2
 	# Compute and return the pattern
-	return ctheta * np.exp(-a * np.sin(np.arccos(ctheta))**2)
+	return ctheta * np.exp(-a * sthsq)
 
 
 def green3d(k, r):
