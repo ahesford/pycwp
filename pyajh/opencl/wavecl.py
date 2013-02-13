@@ -417,7 +417,7 @@ class SplitStep(object):
 		# Scratch space used during computations
 		self.scratch = [empty() for i in range(3)]
 		# The index of refraction gets two buffers for transmission
-		self.eta = [empty() for i in range(2)]
+		self.obj = [empty() for i in range(2)]
 		# Initialize refractive index and fields
 		self.reset()
 
@@ -439,26 +439,9 @@ class SplitStep(object):
 		'''
 		grid = self.grid
 
-		o = np.ones(grid, dtype=np.complex64)
-		for eta in self.eta: eta.set(o, async=True)
-
 		z = np.zeros(grid, dtype=np.complex64)
 		for fld in self.fld: fld.set(z, async=True)
-
-
-	def copyfield(self, fld = None, idx = 0):
-		'''
-		If fld is provided, copy the provided field into the CL field
-		buffer at index idx. Otherwise, return a NumPy array containing
-		a copy of the already-populated CL field buffer at idx.
-
-		Copies from the device are synchronous.
-		Copies to the device are asynchronous on the propagation queue.
-		'''
-		if fld is None: return self.fld[idx].get()
-		else:
-			fld = fld.astype(np.complex64).ravel('F')
-			self.fld[idx].set(fld, async=True)
+		for obj in self.obj: obj.set(z, async=True)
 
 
 	def setincident(self, zoff, idx = 0):
@@ -471,7 +454,7 @@ class SplitStep(object):
 		self.prog.green3d(self.fwdque, self.grid, None, inc, zoff)
 
 
-	def etaupdate(self, obj):
+	def objupdate(self, obj):
 		'''
 		Update the rolling buffer with the index of refraction,
 		corresponding to an object contrast obj, for the next slab.
@@ -481,13 +464,11 @@ class SplitStep(object):
 		# Transfers occur in the transmission queue for concurrency
 		prog, queue, grid = self.prog, self.tranque, self.grid
 		# Roll the buffer so the next slab is second
-		nxt, cur = self.eta
-		self.eta = [cur, nxt]
-		# Copy the next slab index asynchronously
-		obj = obj.astype(np.complex64).ravel('F')
-		nxt.set(obj, queue=queue, async=True)
-		# Convert the next index of refraction to an object
-		prog.obj2eta(queue, grid, None, nxt.data)
+		nxt, cur = self.obj
+		self.obj = [cur, nxt]
+
+		# Transfer the object contrast into the next-slab buffer
+		util.rectxfer(queue, nxt.data, grid, np.complex64, obj)
 
 		# Return pointers to the current and next slabs
 		return cur, nxt
@@ -506,7 +487,7 @@ class SplitStep(object):
 		# Point to the field, scratch buffers, and refractive index
 		fld = fld.data if fld is not None else self.fld[idx].data
 		u, v, x = [s.data for s in self.scratch]
-		eta = self.eta[0].data
+		obj = self.obj[0].data
 
 		# These constants will be used in field computations
 		one = np.float32(1.)
@@ -518,9 +499,9 @@ class SplitStep(object):
 			prog.atteny(fwdque, (grid[0], self.l), None, fld)
 
 		# Multiply, in v, the field by the contrast
-		prog.ctmul(fwdque, grid, None, v, eta, fld)
+		prog.ctmul(fwdque, grid, None, v, obj, fld)
 		# Multiply, in u, the field by the high-order spatial operator
-		prog.hospat(fwdque, grid, None, u, eta, fld)
+		prog.hospat(fwdque, grid, None, u, obj, fld)
 
 		# From here, the field, u and v should be spectral
 		self.fftplan.execute(fld)
@@ -532,7 +513,7 @@ class SplitStep(object):
 		prog.laplacian(fwdque, grid, None, x, fld)
 		# Apply the high-order spatial operator to x
 		self.fftplan.execute(x, inverse=True)
-		prog.hospat(fwdque, grid, None, x, eta, x)
+		prog.hospat(fwdque, grid, None, x, obj, x)
 		self.fftplan.execute(x)
 		# Add x to u to get the high-order spatial corrections
 		prog.caxpy(fwdque, grid, None, x, one, u, x)
@@ -541,7 +522,7 @@ class SplitStep(object):
 		prog.hospec(fwdque, grid, None, u, fld)
 		# Multiply u by the contrast in the spatial domain
 		self.fftplan.execute(u, inverse=True)
-		prog.ctmul(fwdque, grid, None, u, eta, u)
+		prog.ctmul(fwdque, grid, None, u, obj, u)
 		self.fftplan.execute(u)
 		# Apply the high-order spectral operator to v = v + u / w**2
 		prog.caxpy(fwdque, grid, None, v, self.w, u, v)
@@ -559,7 +540,7 @@ class SplitStep(object):
 		self.fftplan.execute(fld, inverse=True)
 
 		# Multiply by the phase screen
-		prog.screen(fwdque, grid, None, fld, eta, dz)
+		prog.screen(fwdque, grid, None, fld, obj, dz)
 
 
 	def advance(self, obj, bfld = None, shift = False):
@@ -586,12 +567,11 @@ class SplitStep(object):
 		if shift: cl.enqueue_copy(fwdque, buf.data, fwd.data)
 
 		# Push the next slab to its buffer
-		eta, enxt = [e.data for e in self.etaupdate(obj)]
+		ocur, onxt = [o.data for o in self.objupdate(obj)]
 
 		# Copy the backward-traveling field
 		if bfld is not None:
-			bfld = bfld.astype(np.complex64).ravel('F')
-			bck.set(bfld, queue=tranque, async=True)
+			util.rectxfer(tranque, bck.data, grid, np.complex64, bfld)
 
 		# Propagate the forward field a whole step
 		self.propagate(fwd)
@@ -607,17 +587,20 @@ class SplitStep(object):
 			# Propagate the combined field a half step
 			self.propagate(buf, 0.5 * self.dz)
 			fwdque.finish()
-			result = buf.get(queue=tranque, async=True)
+			result = util.rectxfer(tranque, buf.data, grid,
+					np.complex64, hostshape=obj.shape)
 
-		# Reflection coefficients replace current refractive index
-		prog.rcoeff(fwdque, grid, None, eta, eta, enxt)
 		# Compute transmission through the interface
-		if bfld is None: prog.transmit(fwdque, grid, None, fwd.data, eta)
+		if bfld is None: prog.transmit(fwdque, grid, None, fwd.data, ocur, onxt)
 		# Include reflection of backward field if appropriate
-		else: prog.txreflect(fwdque, grid, None, fwd.data, bck.data, eta)
+		else: prog.txreflect(fwdque, grid, None, fwd.data, bck.data, ocur, onxt)
 
 		if shift:
 			# Ensure copy of shifted field has finished
 			tranque.finish()
 			return result
-		else: return fwd.get(queue=fwdque, async=False)
+		else: 
+			result = util.rectxfer(fwdque, fwd.data, grid,
+					np.complex64, hostshape=obj.shape)
+			fwdque.flush()
+			return result

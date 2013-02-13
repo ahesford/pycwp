@@ -38,15 +38,42 @@ def fuzzyimg(img, nbr):
 	return numpy.random.rand(*img.shape).astype(img.dtype) * (nmax - nmin) + nmin
 
 
+def commongrid(lgrid, rgrid):
+	'''
+	For two grids with dimensions
+
+		lgrid = [lx, ly, ...] and
+		rgrid = [rx, ry, ...],
+
+	return a common grid
+
+		cgrid = [cx, cy, ...]
+
+	such that each dimension is the minimum of the corresponding dimsnsions
+	in lgrid and rgrid. Also return offsets
+
+		loff = [lox, loy, ...] and
+		roff = [rox, roy, ...]
+
+	that indicate the starting coordinates of the common grid in the left
+	and right grids, respectively.
+	'''
+
+	cgrid = [min(lv, rv) for lv, rv in zip(lgrid, rgrid)]
+	loff = [max(0, (lv - rv) / 2) for lv, rv in zip(lgrid, rgrid)]
+	roff = [max(0, (rv - lv) / 2) for lv, rv in zip(lgrid, rgrid)]
+	return cgrid, loff, roff
+
+
 def smoothkern(w, s, n = 3):
 	'''
 	Compute an n-dimensional Gaussian kernel with width w (must be odd) and
 	standard deviation s, both measured in pixels. When
-	
+
 		w = 2 * int(4 * s) + 1,
 
 	then convolution with the kernel is equivalent to calling
-	
+
 		scipy.ndimage.gaussian_filter
 
 	with sigma = s.

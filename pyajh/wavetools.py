@@ -457,15 +457,6 @@ class SplitStep(object):
 		return [(c - 0.5 * (n - 1.)) * self.h for c, n in zip(cg, g)]
 
 
-	def copyfield(self, fld = None):
-		'''
-		If fld is provided, copy the provided field to self.fld.
-		Otherwise, return the contents of self.fld.
-		'''
-		if fld is None: return self.fld
-		else: self.fld = fld
-
-
 	def etaupdate(self, obj):
 		'''
 		Update the rolling buffer with the refractive index

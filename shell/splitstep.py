@@ -23,12 +23,12 @@ def usage(execname):
   
   OPTIONAL ARGUMENTS:
   -h: Display this message and exit
-  -a: Specify the width of the Hann attenuating window at each edge (default: 50)
+  -a: Specify the width of the Hann attenuating window at each edge (default: 100)
   -f: Specify the incident frequency, f, in MHz (default: 3.0)
   -s: Specify the grid spacing, s, in mm (default: 0.05)
-  -c: Specify the sound speed, c, in mm/us (default: 1.5)
-  -p: Pad the domain to [nx,ny] pixels for attenuation (default: domain plus Hann window)
-  -w: Specify the high-order spectral correction weight (default: 0.32)
+  -c: Specify the sound speed, c, in mm/us (default: 1.507)
+  -p: Pad the domain to [nx,ny] pixels (default: next power of two)
+  -w: Specify the high-order spectral correction weight (default: 0.39)
   -d: Specify a directivity axis x,y,z with width parameter w (default: none)
   -g: Use OpenCL computing device g on the first platform (default: system default device)
 	'''
@@ -38,8 +38,9 @@ if __name__ == '__main__':
 	execname = sys.argv[0]
 
 	# Store the default parameters
-	a, c, s, f, k0, w, = 50, 1.5, 0.05, 3.0, 2 * math.pi, 0.32
-	d, p, ctx = [None]*3
+	a, c, s, f, k0, w = 100, 1.507, 0.05, 3.0, 2 * math.pi, 0.39
+	d, p = [None]*2
+	ctx = 0
 
 	optlist, args = getopt.getopt(sys.argv[1:], 'ha:f:s:c:d:p:g:w:')
 
@@ -67,7 +68,7 @@ if __name__ == '__main__':
 	print 'Step size in wavelengths is %g, Hann window thickness is %d' % (h, a)
 
 	# Set up a slice-wise input reader
-	inmat = mio.Slicer(args[1])
+	inmat = mio.readbmat(args[1])
 	# Automatically pad the domain, if necessary
 	if p is None: p = [cutil.ceilpow2(g) for g in inmat.shape[:-1]]
 
@@ -77,25 +78,8 @@ if __name__ == '__main__':
 	src = tuple(float(s) * f / c for s in args[0].split(','))
 
 	print 'Creating split-step engine... '
-	if ctx is not None:
-		sse = wavecl.SplitStep(k0, p[0], p[1], h,
-				src=src, d=d, l=a, w=w, context=ctx)
-	else:
-		# Initialize the underlying FFTW library to use threads
-		splitstep.fft.init()
-		sse = wavetools.SplitStep(k0, p[0], p[1], h, l=a, w=w)
-		# Set the incident field generator
-		def srcfld(obs):
-			r = np.sqrt(reduce(np.add, ((s - o)**2 for s, o in zip(src, obs))))
-			ptsrc = wavetools.green3d(k0, r)
-			if d is None: return ptsrc
-			else: return ptsrc * wavetools.directivity(obs, src, d[:-1], d[-1])
-		sse.setincgen(srcfld)
-		print 'Using %d threads for calculation' % splitstep.fft.nthread
-
-	# Create a slice tuple to strip out the padding when writing
-	lpad = [(pv - gv) / 2 for pv, gv in zip(p, inmat.shape)]
-	sl = [slice(lv, -(pv - gv - lv)) for pv, gv, lv in zip(p, inmat.shape, lpad)]
+	sse = wavecl.SplitStep(k0, p[0], p[1], h,
+			src=src, d=d, l=a, w=w, context=ctx)
 
 	# Compute the z height of a specified slab
 	zoff = lambda i: sse.h * (float(i) - 0.5 * float(inmat.shape[-1] - 1.))
@@ -103,9 +87,6 @@ if __name__ == '__main__':
 	# Augment the grid with the third (extended) dimension
 	# An extra slice is required to turn around the field
 	p += [inmat.shape[-1] + 1]
-
-	# This buffer will store the average contrast value on an expanded grid
-	obj = np.zeros(p[:2], inmat.dtype, order='F')
 
 	# Create a progress bar to display computation progress
 	bar = util.ProgressBar([0, p[-1]], width=50)
@@ -118,16 +99,16 @@ if __name__ == '__main__':
 	util.printflush(str(bar) + ' (forward) \r')
 
 	# Open a file to store the forward field
-	fmat = mio.Slicer(args[2] + '.forward', p, inmat.dtype, True)
+	fmat = np.empty(list(inmat.shape[:-1]) + p[-1:], dtype=inmat.dtype, order='F')
 
 	# Propagate the forward field through each slice
 	for idx in reversed(range(p[-1])):
 		# Grab the contrast for the next slab
-		try: obj[sl] = inmat[idx - 1]
-		except IndexError: obj[:,:] = 0.
+		try: obj = inmat[:,:,idx - 1]
+		except IndexError: obj = np.zeros(inmat.shape[:-1], np.complex64, order='F')
 		# Advance and write the forward-traveling field
 		f = sse.advance(obj)
-		fmat[idx - 1] = f
+		fmat[:,:,idx - 1] = f
 		# Increment and print the progress bar
 		bar.increment()
 		util.printflush(str(bar) + ' (forward) \r')
@@ -138,17 +119,17 @@ if __name__ == '__main__':
 	util.printflush(str(bar) + ' (backward)\r')
 
 	# Create a combined output file; errors will truncate the file
-	with mio.Slicer(args[2], inmat.shape, inmat.dtype, True) as outmat:
+	with mio.Slicer(args[2], inmat.shape, inmat.dtype.type, True) as outmat:
 		# Propagate the reverse field through each slice
 		for idx in range(p[-1]):
 			# Grab the contrast for the next slab
-			try: obj[sl] = inmat[idx]
-			except IndexError: obj[:,:] = 0.
+			try: obj = inmat[:,:,idx]
+			except IndexError: obj = np.zeros(inmat.shape[:-1], np.complex64, order='F')
 			# Advance the backward traveling field
 			# This requires the forward field in the slab
 			# Also compute a half-shift of the combined field
-			b = sse.advance(obj, fmat[idx - 1], True)
-			try: outmat[idx - 1] = b[sl]
+			b = sse.advance(obj, fmat[:,:,idx - 1], True)
+			try: outmat[idx - 1] = b
 			except IndexError: pass
 			# Increment and print the progress bar
 			bar.increment()

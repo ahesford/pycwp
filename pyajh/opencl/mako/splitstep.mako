@@ -99,6 +99,16 @@ float2 cexp(const float2 v) {
 	return (float2) (exp(v.x)) * (float2) (cos(v.y), sin(v.y));
 }
 
+/* Compute the reflection coefficient for the interface between the current and
+ * next indices of refraction. */
+float2 rcoeff(const float2, const float2);
+float2 rcoeff(const float2 cur, const float2 next) {
+	const float2 one = (float2) (1.0f, 0.0f);
+	const float2 ec = csqrt(cur + one);
+	const float2 en = csqrt(next + one);
+	return cdiv(ec - en, ec + en);
+}
+
 <%
 	# The axes that will be attenuated
 	axes = ['x', 'y']
@@ -130,39 +140,6 @@ float2 cexp(const float2 v) {
 
 ## All subsequent kernels should use a global work grid size of (nx, ny) unless
 ## otherwise noted. The local work grid size is not significant.
-
-/* Convert, in place, an object contrast into an index of refraction. The
- * global work grid should be (nx, ny). */
-__kernel void obj2eta(${gfc} obj) {
-	${getindices('i', 'j', 'idx')}
-
-	const float2 eval = csqrt(obj[idx] + (float2) (1.0f, 0.0f));
-	obj[idx] = eval;
-}
-
-/* Compute, in place, the average index of refraction. On input, eta stores the
- * index of refraction for the previous slab; aug stores the index of
- * refraction for the next slab. On output, eta stores the average index of
- * refraction for the two slabs. */
-__kernel void avgeta(${gfc} eta, ${gfc} aug) {
-	${getindices('i', 'j', 'idx')}
-
-	/* Compute the next half contribution to the average. */
-	const float2 nval = aug[idx];
-	const float2 oval = eta[idx];
-	/* Update the average index of refraction. */
-	eta[idx] = (float2) (0.5f) * (nval + oval);
-}
-
-/* Compute the reflection coefficients for the current interface. */
-__kernel void rcoeff(${gfc} rc, ${gfc} cur, ${gfc} next) {
-	${getindices('i', 'j', 'idx')}
-
-	const float2 nval = next[idx];
-	const float2 cval = cur[idx];
-
-	rc[idx] = cdiv(cval - nval, nval + cval);
-}
 
 /* Apply the homogeneous propagator to the field in the spectral domain. */
 __kernel void propagate(${gfc} fld, const float dz) {
@@ -207,61 +184,42 @@ __kernel void laplacian(${gfc} u, ${gfc} f) {
 }
 
 /* In u, apply the high-order spatial operator QQ to the input field f. */
-__kernel void hospat(${gfc} u, ${gfc} eta, ${gfc} f) {
+__kernel void hospat(${gfc} u, ${gfc} obj, ${gfc} f) {
 	/* Grab the spatial sample  for the current work item. */
 	${getindices('i', 'j', 'idx')}
 
-	const float2 eval = eta[idx];
+	/* Grab the contrast value for the work item. */
+	const float2 oval = obj[idx];
 	const float2 one = (float2) (1.0f, 0.0f);
-	const float2 qval = cdiv(one, eval + one) - (float2) (0.5f, 0.0f) +
-				(float2) (0.125f) * (cmul(eval, eval) - one);
+	const float2 eval = cdiv(one, csqrt(oval + one) + one);
+	/* Compute 1 / (eta + 1) + 0.5 + obj / 8. */
+	const float2 qval = eval - (float2) (0.5f, 0.0f) + (float2) (0.125f) * oval;
 
 	u[idx] = cmul(qval, f[idx]);
 }
 
 /* In u, store the product of the object contrast with the field f. */
-__kernel void ctmul(${gfc} u, ${gfc} eta, ${gfc} f) {
+__kernel void ctmul(${gfc} u, ${gfc} obj, ${gfc} f) {
 	/* Grab the spatial sample for the current work item. */
 	${getindices('i', 'j', 'idx')}
 
-	const float2 eval = eta[idx];
-	const float2 qval = cmul(eval,eval) - (float2) (1.0f, 0.0f);
+	const float2 qval = obj[idx];
 
 	u[idx] = cmul(f[idx], qval);
 }
 
 /* To the field, apply the phase screen resulting from medium variations. */
-__kernel void screen(${gfc} fld, ${gfc} eta, const float dz) {
+__kernel void screen(${gfc} fld, ${gfc} obj, const float dz) {
 	${getindices('i', 'j', 'idx')};
 
-	const float2 eval = eta[idx] - (float2) (1.0f, 0.0f);
+	const float2 oval = obj[idx];
+	const float2 one = (float2) (1.0f, 0.0f);
+	const float2 eval = csqrt(oval + one) - one;
 
 	/* Compute i * k0 * dz * (eta - 1). */
 	const float2 arg = imulr(${k0}f * dz, eval);
 	/* Multiply the phase shift by the field. */
 	fld[idx] = cmul(cexp(arg), fld[idx]);
-}
-
-/* To the field, apply a perturbation phase screen. The field fld is defined at
- * the previous interface, while hfld represents the homogeneous propagation of
- * fld to the current interface. */
-__kernel void perturb(${gfc} fld, ${gfc} hfld, ${gfc} eta, const float dz) {
-	${getindices('i', 'j', 'idx')};
-
-	const float2 eval = eta[idx];
-	const float2 fval = fld[idx];
-	const float2 hval = hfld[idx];
-
-	const float delta = ${k0}f * dz;
-
-	const float2 phi = cmul(hval, (float2) (fval.x, -fval.y));
-	const float2 dpsi = (float2) (atan2(phi.y, phi.x) / delta, 0.0f);
-	const float2 dpsq = (float2) (dpsi.x * dpsi.x, 0.0f);
-
-	const float2 ctval = cmul(eval, eval) - (float2) (1.0f, 0.0f);
-	const float2 arg = imulr(delta, csqrt(ctval + dpsq) - dpsi);
-
-	fld[idx] = cmul(cexp(arg), hval);
 }
 
 /* Compute z = a * x + y for vectors x, y, z and real scalar a. */
@@ -304,22 +262,26 @@ __kernel void green3d(${gfc} fld, const float zoff) {
 }
 
 /* Transmit a field through an interface with reflection coefficients rc. */
-__kernel void transmit(${gfc} fwd, ${gfc} rc) {
+__kernel void transmit(${gfc} fwd, ${gfc} ocur, ${gfc} onxt) {
 	${getindices('i', 'j', 'idx')}
 
+	const float2 cval = ocur[idx];
+	const float2 nval = onxt[idx];
 	const float2 fval = fwd[idx];
-	const float2 rval = rc[idx];
+	const float2 rval = rcoeff(cval, nval);
 	fwd[idx] = fval + cmul(rval, fval);
 }
 
 /* Transmit a field through an interface with reflection coefficients rc.
  * Also reflect the backward-traveling wave bck and add to the field. */
-__kernel void txreflect(${gfc} fwd, ${gfc} bck, ${gfc} rc) {
+__kernel void txreflect(${gfc} fwd, ${gfc} bck, ${gfc} ocur, ${gfc} onxt) {
 	${getindices('i', 'j', 'idx')}
 
+	const float2 cval = ocur[idx];
+	const float2 nval = onxt[idx];
 	const float2 fval = fwd[idx];
 	const float2 bval = bck[idx];
-	const float2 rval = rc[idx];
+	const float2 rval = rcoeff(cval, nval);
 	const float2 cor = cmul(cdiv(rval, (float2) (1.0f, 0.0f) - rval), bval);
 	fwd[idx] = fval + cmul(rval, fval) - cor;
 }
