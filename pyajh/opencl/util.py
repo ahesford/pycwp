@@ -29,85 +29,101 @@ def grabcontext(context = None):
 	return cl.Context(devices=[cl.get_platforms()[0].get_devices()[context]])
 
 
-def rectxfer(queue, buffer, bufshape, buftype, hostbuf = None, hostshape = None):
+class RectangularTransfer(object):
 	'''
-	Execute a transfer between host and device memory on the specified
-	queue. The OpenCL device buffer is organized as a multi-dimensional
-	grid with elements of type buftype (which must be a Numpy type) and
-	dimensions of bufshape.
-
-	If hostbuf is provided, hostshape is ignored and the transfer copies
-	the contents of hostbuf into the GPU buffer. The host buffer must be a
-	Numpy array and will be interpreted to be of the same type as the
-	OpenCL device buffer. Any host dimensions shorter than the
-	corresponding dimensions of the device dimensions will be centered in
-	the device buffer; host dimensions longer than corresponding device
-	dimensions will be symmetrically clipped.
-
-	If hostbuf is not provided, hostshape must be provided. The transfer
-	will copy the contents of the device buffer into a newly created array
-	with the specified shape and a Numpy type that matches the device
-	buffer. As with host-to-device transfers, device dimensions that are
-	smaller than the corresponding host dimension will be centered in the
-	host buffer, and device dimensions that are larger than the
-	corresponding host dimensions will be symetrically clipped.
-
-	Multi-dimensional arrays are always interpreted in FORTRAN order.
-
-	All transfers are non-blocking.
+	A reusable parameter store (and host-side buffer) for rectangular
+	buffer transfers between a host and device.
 	'''
-	# Ensure that one of hostbuf and hostshape is specified
-	if hostbuf is None and hostshape is None:
-		raise ValueError('One of hostbuf or hostshape must be specified')
-	# If the host buffer was provided, get its shape
-	if hostbuf is not None: hostshape = hostbuf.shape
-	# Ensure that all dimensions are compatible
-	if len(hostshape) != len(bufshape):
-		raise ValueError('The dimensionality of both buffers must agree')
-	# Ensure that the dimensionality is 2 or 3
-	if len(bufshape) != 2 and len(bufshape) != 3:
-		raise ValueError('Rectangular transfers are supported for 2-D or 3-D only')
+	def __init__(self, bufshape, hostshape, dtype, alloc_host=True):
+		'''
+		Establish a transfer window that is the intersection of the
+		host and device shapes, and determine the host and device
+		origins for the transfer.
 
-	# Grab the number of bytes in each device record
-	byterec = buftype().nbytes
+		The transfer window is always centered along each axis of both
+		device and host arrays.
 
-	# Compute the transfer region along with the buffer and host origins
-	region, buffer_origin, host_origin = cutil.commongrid(bufshape, hostshape)
+		FORTRAN ordering is always assumed.
+		'''
+		# Ensure that all dimensions are compatible
+		if len(hostshape) != len(bufshape):
+			raise ValueError('Dimensionality of arrays buffers must agree')
+		# Ensure that the dimensionality is 2 or 3
+		if len(bufshape) != 2 and len(bufshape) != 3:
+			raise ValueError('Rectangular transfers require 2-D or 3-D arrays')
 
-	# Scale the first dimension by the number of bytes in each record
-	region[0] *= byterec
-	host_origin[0] *= byterec
-	buffer_origin[0] *= byterec
+		# Copy the transfer parameters and the data type
+		self.hostshape = hostshape[:]
+		self.bufshape = bufshape[:]
+		self.dtype = dtype
 
-	# Set the buffer and host pitches
-	buffer_pitches = [byterec * bufshape[0]]
-	host_pitches = [byterec * hostshape[0]]
-	# The slice pitch is required for 3-D copies
-	if len(bufshape) > 2:
-		buffer_pitches += [buffer_pitches[0] * bufshape[1]]
-		host_pitches += [host_pitches[0] * hostshape[1]]
+		# Grab the number of bytes in each device record
+		byterec = dtype().nbytes
 
-	if hostbuf is not None:
+		# Compute the transfer region and buffer and host origins
+		region, buffer_origin, host_origin = cutil.commongrid(bufshape, hostshape)
+
+		# Scale the first dimension by the number of bytes in each record
+		region[0] *= byterec
+		host_origin[0] *= byterec
+		buffer_origin[0] *= byterec
+
+		# Set the buffer and host pitches
+		buffer_pitches = [byterec * bufshape[0]]
+		host_pitches = [byterec * hostshape[0]]
+		# The slice pitch is required for 3-D copies
+		if len(bufshape) > 2:
+			buffer_pitches += [buffer_pitches[0] * bufshape[1]]
+			host_pitches += [host_pitches[0] * hostshape[1]]
+
+		# Save the transfer parameters
+		self.region = region
+		self.host_origin = host_origin
+		self.buffer_origin = buffer_origin
+		self.buffer_pitches = buffer_pitches
+		self.host_pitches = host_pitches
+
+		# Optionally allocate a host-side buffer to receive transfers
+		if alloc_host: self.rcvbuffer = np.zeros(hostshape, dtype, order='F')
+		else: self.rcvbuffer = None
+
+
+	def fromdevice(self, queue, clbuffer, is_blocking=False):
+		'''
+		Initiate a transfer on the specified queue from the specified
+		device buffer to the internal host-side buffer.
+		'''
+		if self.rcvbuffer is None:
+			raise IOError('Device-to-host transfer requires host-side buffer')
+
+		cl.enqueue_copy(queue, self.rcvbuffer, clbuffer,
+				region=self.region,
+				buffer_origin=self.buffer_origin,
+				host_origin=self.host_origin,
+				buffer_pitches=self.buffer_pitches,
+				host_pitches=self.host_pitches,
+				is_blocking=is_blocking)
+		return self.rcvbuffer
+
+
+	def todevice(self, queue, clbuffer, hostbuf, is_blocking=False):
+		'''
+		Initiate a transfer on the specified queue from the specified
+		host buffer to the specified device buffer.
+
+		If necessary, the data type of the host array will be
+		reinterpreted to the expected type before transfer.
+		'''
+		if list(self.hostshape) != list(hostbuf.shape):
+			raise ValueError('Host buffer dimensions differ from expected values')
+
 		# Transfer to the device if a host buffer was provided
 		# Reinterpret the data type of the host buffer if necessary
-		if np.dtype(buftype) != hostbuf.dtype:
-			hostbuf = hostbuf.astype(buftype)
-		cl.enqueue_copy(queue, buffer, hostbuf,
-				region=region,
-				buffer_origin=buffer_origin,
-				host_origin=host_origin,
-				buffer_pitches=buffer_pitches,
-				host_pitches=host_pitches,
-				is_blocking=False)
-	else:
-		# Create a flat buffer to receive data
-		hostbuf = np.zeros(hostshape, dtype=buftype, order='F')
-		cl.enqueue_copy(queue, hostbuf, buffer,
-				region=region,
-				buffer_origin=buffer_origin,
-				host_origin=host_origin,
-				buffer_pitches=buffer_pitches,
-				host_pitches=host_pitches,
-				is_blocking=False)
-		# Reshape the flat buffer into the expected form
-		return hostbuf
+		if hostbuf.dtype != self.dtype: hostbuf = hostbuf.astype(buftype)
+		cl.enqueue_copy(queue, clbuffer, hostbuf,
+				region=self.region,
+				buffer_origin=self.buffer_origin,
+				host_origin=self.host_origin,
+				buffer_pitches=self.buffer_pitches,
+				host_pitches=self.host_pitches,
+				is_blocking=is_blocking)

@@ -81,6 +81,9 @@ if __name__ == '__main__':
 	sse = wavecl.SplitStep(k0, p[0], p[1], h,
 			src=src, d=d, l=a, w=w, context=ctx)
 
+	# Restrict device transfers to the object grid
+	sse.setroi(inmat.shape[:-1])
+
 	# Compute the z height of a specified slab
 	zoff = lambda i: sse.h * (float(i) - 0.5 * float(inmat.shape[-1] - 1.))
 

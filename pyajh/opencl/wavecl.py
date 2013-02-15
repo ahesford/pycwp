@@ -421,6 +421,9 @@ class SplitStep(object):
 		# Initialize refractive index and fields
 		self.reset()
 
+		# By default, device exchange happens on the full grid
+		self.rectxfer = util.RectangularTransfer(grid, grid, np.complex64)
+
 
 	def slicecoords(self):
 		'''
@@ -442,6 +445,14 @@ class SplitStep(object):
 		z = np.zeros(grid, dtype=np.complex64)
 		for fld in self.fld: fld.set(z, async=True)
 		for obj in self.obj: obj.set(z, async=True)
+
+
+	def setroi(self, rgrid):
+		'''
+		Set a region of interest that will limit device transfers
+		within the computational grid.
+		'''
+		self.rectxfer = util.RectangularTransfer(self.grid, rgrid, np.complex64)
 
 
 	def setincident(self, zoff, idx = 0):
@@ -468,7 +479,7 @@ class SplitStep(object):
 		self.obj = [cur, nxt]
 
 		# Transfer the object contrast into the next-slab buffer
-		util.rectxfer(queue, nxt.data, grid, np.complex64, obj)
+		self.rectxfer.todevice(queue, nxt.data, obj)
 
 		# Return pointers to the current and next slabs
 		return cur, nxt
@@ -570,8 +581,7 @@ class SplitStep(object):
 		ocur, onxt = [o.data for o in self.objupdate(obj)]
 
 		# Copy the backward-traveling field
-		if bfld is not None:
-			util.rectxfer(tranque, bck.data, grid, np.complex64, bfld)
+		if bfld is not None: self.rectxfer.todevice(tranque, bck.data, bfld)
 
 		# Propagate the forward field a whole step
 		self.propagate(fwd)
@@ -587,8 +597,7 @@ class SplitStep(object):
 			# Propagate the combined field a half step
 			self.propagate(buf, 0.5 * self.dz)
 			fwdque.finish()
-			result = util.rectxfer(tranque, buf.data, grid,
-					np.complex64, hostshape=obj.shape)
+			result = self.rectxfer.fromdevice(tranque, buf.data)
 
 		# Compute transmission through the interface
 		if bfld is None: prog.transmit(fwdque, grid, None, fwd.data, ocur, onxt)
@@ -599,8 +608,7 @@ class SplitStep(object):
 			# Ensure copy of shifted field has finished
 			tranque.finish()
 			return result
-		else: 
-			result = util.rectxfer(fwdque, fwd.data, grid,
-					np.complex64, hostshape=obj.shape)
-			fwdque.finish()
-			return result
+		else:
+			# Return the field from the device, but block
+			# to ensure that the queue will finish
+			return self.rectxfer.fromdevice(fwdque, fwd.data, True)
