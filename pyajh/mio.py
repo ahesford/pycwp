@@ -284,7 +284,10 @@ class Slicer(object):
 		if sflat.shape[0] != self.nelts:
 			raise ValueError('Slice size does not agree with output')
 
-		sflat.astype(self.dtype).tofile(self._backer)
+		# Convert the data type if necessary
+		if np.dtype(self.dtype) != sflat.dtype:
+			sflat = sflat.astype(self.dtype)
+		sflat.tofile(self._backer)
 		self._backer.flush()
 
 

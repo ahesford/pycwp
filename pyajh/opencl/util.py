@@ -89,7 +89,10 @@ def rectxfer(queue, buffer, bufshape, buftype, hostbuf = None, hostshape = None)
 
 	if hostbuf is not None:
 		# Transfer to the device if a host buffer was provided
-		cl.enqueue_copy(queue, buffer, hostbuf.astype(buftype).ravel('F'),
+		# Reinterpret the data type of the host buffer if necessary
+		if np.dtype(buftype) != hostbuf.dtype:
+			hostbuf = hostbuf.astype(buftype)
+		cl.enqueue_copy(queue, buffer, hostbuf,
 				region=region,
 				buffer_origin=buffer_origin,
 				host_origin=host_origin,
@@ -98,7 +101,7 @@ def rectxfer(queue, buffer, bufshape, buftype, hostbuf = None, hostshape = None)
 				is_blocking=False)
 	else:
 		# Create a flat buffer to receive data
-		hostbuf = np.zeros(np.prod(hostshape), dtype=buftype)
+		hostbuf = np.zeros(hostshape, dtype=buftype, order='F')
 		cl.enqueue_copy(queue, hostbuf, buffer,
 				region=region,
 				buffer_origin=buffer_origin,
@@ -107,4 +110,4 @@ def rectxfer(queue, buffer, bufshape, buftype, hostbuf = None, hostshape = None)
 				host_pitches=host_pitches,
 				is_blocking=False)
 		# Reshape the flat buffer into the expected form
-		return hostbuf.reshape(hostshape, order='F')
+		return hostbuf

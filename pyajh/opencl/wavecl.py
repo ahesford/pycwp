@@ -286,7 +286,7 @@ class Helmholtz(fdtd.Helmholtz):
 		mf = cl.mem_flags
 		# Allocate the CL buffer for the r-squared parameter
 		self.rsq = cl.Buffer(self.context, mf.READ_ONLY | mf.COPY_HOST_PTR,
-				hostbuf=rsq.flatten('F').astype(np.float32))
+				hostbuf=rsq.astype(np.float32).ravel('F'))
 		# Allocate the CL buffers for current and off-time pressure
 		# The size is the same as the sound-speed map
 		self.pa = [cl.Buffer(self.context, mf.READ_WRITE,
@@ -323,9 +323,9 @@ class Helmholtz(fdtd.Helmholtz):
 		for d, v, f in zip(slabdims, slabvals, slabfuncs):
 			# Copy the boundary values into OpenCL buffers
 			l = cl.Buffer(self.context, mf.READ_ONLY | mf.COPY_HOST_PTR,
-					hostbuf=v[0].flatten('F').astype(np.float32))
+					hostbuf=v[0].astype(np.float32).ravel('F'))
 			r = cl.Buffer(self.context, mf.READ_ONLY | mf.COPY_HOST_PTR,
-					hostbuf=v[1].flatten('F').astype(np.float32))
+					hostbuf=v[1].astype(np.float32).ravel('F'))
 
 			# Invoke the value-copying function
 			f(self.queue, d, None, self.pa[0], l, r)
@@ -602,5 +602,5 @@ class SplitStep(object):
 		else: 
 			result = util.rectxfer(fwdque, fwd.data, grid,
 					np.complex64, hostshape=obj.shape)
-			fwdque.flush()
+			fwdque.finish()
 			return result
