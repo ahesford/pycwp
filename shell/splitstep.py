@@ -2,7 +2,7 @@
 
 import numpy as np, math, sys, getopt, os
 from pyajh import mio, wavetools, util, cutil
-from pyajh.opencl import wavecl
+from pyajh.opencl import wavecl, BufferedSlices
 from pyajh.f2py import splitstep
 
 def usage(execname):
@@ -101,41 +101,67 @@ if __name__ == '__main__':
 	bar.reset()
 	util.printflush(str(bar) + ' (forward) \r')
 
-	# Open a file to store the forward field
+	# Create an empty array to store the forward field
 	fmat = np.empty(list(inmat.shape[:-1]) + p[-1:], dtype=inmat.dtype, order='F')
+
+	# Create buffered slice objects for the contrast and forward fields
+	obj = BufferedSlices(sse.context, inmat, 5, reversed=True)
+	fbuf = BufferedSlices(sse.context, fmat, 5, read=False)
+
+	obj.start()
+	fbuf.start()
+
+	# We need an extra, empty slab in the contrast
+	zeroslab = np.zeros(inmat.shape[:-1], np.complex64, order='F')
 
 	# Propagate the forward field through each slice
 	for idx in reversed(range(p[-1])):
-		# Grab the contrast for the next slab
-		try: obj = inmat[:,:,idx - 1]
-		except IndexError: obj = np.zeros(inmat.shape[:-1], np.complex64, order='F')
+		# Try to grab the contrast, or else pad with zeros
+		try: objval = obj.getslice()
+		except ValueError: objval = zeroslab
 		# Advance and write the forward-traveling field
-		f = sse.advance(obj)
-		fmat[:,:,idx - 1] = f
+		sse.advance(objval, fbuf.getslice())
+		obj.nextslice()
+		fbuf.nextslice()
 		# Increment and print the progress bar
 		bar.increment()
 		util.printflush(str(bar) + ' (forward) \r')
+
+	# Recreate the object buffer for backward propagation
+	obj.kill()
+	obj = BufferedSlices(sse.context, inmat, 5)
+	obj.start()
+
+	# Recreate the forward field buffer for backward propagation
+	fbuf.kill()
+	fbuf = BufferedSlices(sse.context, fmat, 5, reversed=True)
+	fbuf.start()
 
 	# Reset progress bar and propagating field
 	sse.reset()
 	bar.reset()
 	util.printflush(str(bar) + ' (backward)\r')
 
-	# Create a combined output file; errors will truncate the file
 	with mio.Slicer(args[2], inmat.shape, inmat.dtype.type, True) as outmat:
 		# Propagate the reverse field through each slice
 		for idx in range(p[-1]):
-			# Grab the contrast for the next slab
-			try: obj = inmat[:,:,idx]
-			except IndexError: obj = np.zeros(inmat.shape[:-1], np.complex64, order='F')
 			# Advance the backward traveling field
 			# This requires the forward field in the slab
 			# Also compute a half-shift of the combined field
-			b = sse.advance(obj, fmat[:,:,idx - 1], True)
+			# Try to grab the contrast, or else pad with zeros
+			try: objval = obj.getslice()
+			except ValueError: objval = zeroslab
+			b = sse.advance(objval, None, fbuf.getslice(), True)
+			obj.nextslice()
+			fbuf.nextslice()
 			try: outmat[idx - 1] = b
 			except IndexError: pass
 			# Increment and print the progress bar
 			bar.increment()
 			util.printflush(str(bar) + ' (backward)\r')
-
+	
+		# Kill the I/O buffers
+		obj.kill()
+		fbuf.kill()
+	
 		print

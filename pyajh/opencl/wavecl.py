@@ -422,7 +422,7 @@ class SplitStep(object):
 		self.reset()
 
 		# By default, device exchange happens on the full grid
-		self.rectxfer = util.RectangularTransfer(grid, grid, np.complex64)
+		self.rectxfer = util.RectangularTransfer(grid, grid, np.complex64, self.context)
 
 
 	def slicecoords(self):
@@ -452,7 +452,7 @@ class SplitStep(object):
 		Set a region of interest that will limit device transfers
 		within the computational grid.
 		'''
-		self.rectxfer = util.RectangularTransfer(self.grid, rgrid, np.complex64)
+		self.rectxfer = util.RectangularTransfer(self.grid, rgrid, np.complex64, self.context)
 
 
 	def setincident(self, zoff, idx = 0):
@@ -554,7 +554,7 @@ class SplitStep(object):
 		prog.screen(fwdque, grid, None, fld, obj, dz)
 
 
-	def advance(self, obj, bfld = None, shift = False):
+	def advance(self, obj, result=None, bfld=None, shift=False):
 		'''
 		Propagate a field through the current slab and transmit it
 		through an interface with the next slab characterized by object
@@ -597,7 +597,8 @@ class SplitStep(object):
 			# Propagate the combined field a half step
 			self.propagate(buf, 0.5 * self.dz)
 			fwdque.finish()
-			result = self.rectxfer.fromdevice(tranque, buf.data)
+			# If a result buffer was provided, fill it
+			result = self.rectxfer.fromdevice(tranque, buf.data, result)
 
 		# Compute transmission through the interface
 		if bfld is None: prog.transmit(fwdque, grid, None, fwd.data, ocur, onxt)
@@ -611,4 +612,4 @@ class SplitStep(object):
 		else:
 			# Return the field from the device, but block
 			# to ensure that the queue will finish
-			return self.rectxfer.fromdevice(fwdque, fwd.data, True)
+			return self.rectxfer.fromdevice(fwdque, fwd.data, result, True)
