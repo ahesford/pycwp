@@ -1,6 +1,6 @@
 "General-purpose OpenCL routines."
 import pyopencl as cl, os.path as path, numpy as np, time
-from threading import Thread, Condition, RLock, ThreadError
+from threading import Thread, Condition, ThreadError
 from itertools import chain
 from .. import cutil
 
@@ -219,12 +219,8 @@ class BufferedSlices(Thread):
 			# Otherwise, add the buffers to the host queue
 			else: self._readyq.append((dbuf, hbuf))
 
-		# Use one reentrant lock for all queue alterations
-		qlock = RLock()
-		# This condition watches for items ready for host access
-		self._qwatch = Condition(qlock)
-		# This condition watches for items ready for backer flushing
-		self._qflush = Condition(qlock)
+		# This condition watches for queue changes
+		self._qwatch = Condition()
 		# Allocate lists of frontloaded and backloaded slices
 		self._frontload = []
 		self._backload = []
@@ -236,16 +232,12 @@ class BufferedSlices(Thread):
 		'''
 		Kill the thread by clearing both buffers.
 		'''
-		self._qwatch.acquire()
-		self._qflush.acquire()
-		self._readyq = []
-		self._idleq = []
-		self._activeq = []
-		# Notify the parent thread that something has happened
-		self._qwatch.notifyAll()
-		self._qflush.notifyAll()
-		self._qwatch.release()
-		self._qflush.release()
+		with self._qwatch:
+			self._readyq = []
+			self._idleq = []
+			self._activeq = []
+			# Notify the parent thread that something has happened
+			self._qwatch.notifyAll()
 		self.join()
 
 
@@ -256,6 +248,14 @@ class BufferedSlices(Thread):
 		return len(self._readyq) + len(self._idleq) + len(self._activeq)
 
 
+	def queueavail(self):
+		'''
+		Return the depth of the ready and idle queues. This is the
+		number of items ready to be manipulated or flushed.
+		'''
+		return len(self._readyq) + len(self._idleq)
+
+
 	def getslice(self):
 		'''
 		Return the host-side buffer at the head of the ready queue.
@@ -263,21 +263,23 @@ class BufferedSlices(Thread):
 		This function blocks until a buffer is available.
 		'''
 		# Acquire the access ready condition
-		self._qwatch.acquire()
-
-		# As long as the queue is working, wait until an item is ready
-		while self.queuedepth() > 0 and len(self._readyq) < 1:
-			self._qwatch.wait()
-
-		try:
-			# Move the ready item to the active queue
-			buf = self._readyq.pop(0)
-			self._activeq.append(buf)
-			# Return the host buffer for the item
-			return buf[1]
-		except IndexError:
-			raise ValueError('No buffered slice to return')
-		finally: self._qwatch.release()
+		with self._qwatch:
+			# As long as the queue is working, wait until an item is ready
+			# To avoid deadlocks, waiting stops if all buffers are "active"
+			while self.queueavail() > 0 and len(self._readyq) < 1:
+				self._qwatch.wait()
+			try:
+				# Move the ready item to the active queue
+				buf = self._readyq.pop(0)
+				self._activeq.append(buf)
+				# Return the host buffer for the item
+				return buf[1]
+			except IndexError:
+				raise ValueError('No buffered slice to return')
+			# Even if no change was possible (because an all-active queue
+			# was just marked for flush), notify others because this thread
+			# already consumed a notify meant for another task.
+			finally: self._qwatch.notify()
 
 
 	def nextslice(self):
@@ -289,13 +291,13 @@ class BufferedSlices(Thread):
 		is empty.
 		'''
 		# Acquire the flush notification condition
-		self._qflush.acquire()
-		try:
-			# Try to move the head of the active queue to the idle queue
-			self._idleq.append(self._activeq.pop(0))
-			self._qflush.notify()
-		except IndexError: pass
-		finally: self._qflush.release()
+		with self._qwatch:
+			try:
+				# Try to move the head of the active queue to the idle queue
+				self._idleq.append(self._activeq.pop(0))
+				# Notify any watchers of the change
+				self._qwatch.notify()
+			except IndexError: pass
 
 
 	def frontload(self, sl):
@@ -347,29 +349,24 @@ class BufferedSlices(Thread):
 		# Loop through all slices in the associated array
 		for idx, av in enumerate(iter):
 			# Acquire the flush condition
-			self._qflush.acquire()
+			with self._qwatch:
+				# Wait until an item is available for action
+				while self.queuedepth() > 0 and len(self._idleq) < 1:
+					self._qwatch.wait()
+	
+				# Give up if the queue has been killed
+				# All others have been notified
+				if self.queuedepth() < 1: break
+	
+				# Grab the first idle object
+				# This is now guaranteed to exist
+				buf = self._idleq.pop(0)
+	
+				# Process the idle event
+				if self._read: buf[1][self._grid] = av.T
+				else: av.T[self._grid] = buf[1]
 
-			# Wait until an item is available for action
-			while self.queuedepth() > 0 and len(self._idleq) < 1:
-				self._qflush.wait()
-
-			# Give up if the queue has been killed
-			if self.queuedepth() < 1:
-				self._qflush.release()
-				break
-
-			# Grab the first idle object
-			buf = self._idleq.pop(0)
-
-			# Acquire the host access condition
-			self._qwatch.acquire()
-			# Process the idle event
-			if self._read: buf[1][self._grid] = av.T
-			else: av.T[self._grid] = buf[1]
-			# Return the event back to the ready queue
-			self._readyq.append(buf)
-			# Notify anybody watching for ready items
-			self._qwatch.notify()
-			# Release both conditions
-			self._qwatch.release()
-			self._qflush.release()
+				# Return the event back to the ready queue
+				self._readyq.append(buf)
+				# Notify anybody watching for ready items
+				self._qwatch.notify()
