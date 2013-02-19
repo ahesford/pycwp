@@ -1,6 +1,7 @@
 "General-purpose OpenCL routines."
 import pyopencl as cl, os.path as path, numpy as np, time
 from threading import Thread, Lock, ThreadError
+from itertools import chain
 from .. import cutil
 
 def srcpath(fname, subdir, sname):
@@ -219,6 +220,11 @@ class BufferedSlices(Thread):
 
 		# Allocate a lock to serialize modification to the queues
 		self._qlock = Lock()
+		# Allocate lists of frontloaded and backloaded slices
+		self._frontload = []
+		self._backload = []
+		# Mark this thread a daemon to allow it to die on exit
+		self.daemon = True
 
 
 	def kill(self):
@@ -266,35 +272,38 @@ class BufferedSlices(Thread):
 
 	def frontload(self, sl):
 		'''
-		In read mode, place the contents of the array sl at the head of
-		the host queue.
+		Act as if the array sl is a slice preceding the first slice in
+		the backer array. The array must have the same dimensions and
+		datatype as one slice of the backer.
 
-		In write mode, place the contents of the array at the head of
-		the pending queue.
-
-		This will throw an IndexError if there are no available buffers
-		for the desired operation.
+		These calls may be chained to produce multiple frontloaded
+		slices.
 		'''
-		try:
-			# Lock the queue for destructive operations
-			self._qlock.acquire()
-			if self._read:
-				# Grab the first available pending object
-				buf = self._pendq.pop(0)
-				# Fill the host-side buffer as desired
-				buf[1][self._grid] = sl
-				# Inject the buffer into the head of the host queue
-				self._hostq.insert(0, buf)
-			else:
-				# Grab the first available host object
-				buf = self._hostq.pop(0)
-				# Fill the host-side buffer as desired
-				buf[1][self._grid] = sl
-				# Inject the buffer into the head of the pending queue
-				self._pendq.insert(0, buf)
-		finally:
-			try: self._qlock.release()
-			except ThreadError: pass
+		if sl.dtype != self._array.dtype:
+			raise TypeError('Extra slice is not type-compatible with backer')
+		if list(sl.shape) != list(self._array.shape[:-1]):
+			raise ValueError('Extra slice shape is not compatible with backer')
+		# Note that this has to be transposed because the array
+		# iterator is transposed for easy indexing
+		self._frontload.append(sl.T)
+
+
+	def backload(self, sl):
+		'''
+		Act as if the array sl is a slice following the last slice in
+		the backer array. The array must have the same dimensions and
+		datatype as one slice of the backer.
+
+		These calls may be chained to produce multiple backloaded
+		slices.
+		'''
+		if sl.dtype != self._array.dtype:
+			raise TypeError('Extra slice is not type-compatible with backer')
+		if list(sl.shape) != list(self._array.shape[:-1]):
+			raise ValueError('Extra slice shape is not compatible with backer')
+		# Note that this has to be transposed because the array
+		# iterator is transposed for easy indexing
+		self._backload.append(sl.T)
 
 
 	def run(self):
@@ -304,6 +313,8 @@ class BufferedSlices(Thread):
 		'''
 		if self._reversed: iter = reversed(self._array.T)
 		else: iter = self._array.T
+
+		iter = chain(self._frontload, iter, self._backload)
 
 		# Loop through all slices in the associated array
 		for idx, av in enumerate(iter):

@@ -108,19 +108,18 @@ if __name__ == '__main__':
 	obj = BufferedSlices(sse.context, inmat, 5, reversed=True)
 	fbuf = BufferedSlices(sse.context, fmat, 5, read=False)
 
+	# An empty slab is needed at the end of the contrast
+	zeroslab = np.zeros(inmat.shape[:-1], np.complex64, order='F')
+	obj.backload(zeroslab)
+
 	obj.start()
 	fbuf.start()
 
-	# We need an extra, empty slab in the contrast
-	zeroslab = np.zeros(inmat.shape[:-1], np.complex64, order='F')
-
 	# Propagate the forward field through each slice
 	for idx in reversed(range(p[-1])):
-		# Try to grab the contrast, or else pad with zeros
-		try: objval = obj.getslice()
-		except ValueError: objval = zeroslab
 		# Advance and write the forward-traveling field
-		sse.advance(objval, fbuf.getslice())
+		# The result is stored in the current fbuf slice
+		sse.advance(obj.getslice(), fbuf.getslice())
 		obj.nextslice()
 		fbuf.nextslice()
 		# Increment and print the progress bar
@@ -130,6 +129,8 @@ if __name__ == '__main__':
 	# Recreate the object buffer for backward propagation
 	obj.kill()
 	obj = BufferedSlices(sse.context, inmat, 5)
+	# Again, an empty slab is needed at the far end of the contrast
+	obj.backload(zeroslab)
 	obj.start()
 
 	# Recreate the forward field buffer for backward propagation
@@ -148,12 +149,11 @@ if __name__ == '__main__':
 			# Advance the backward traveling field
 			# This requires the forward field in the slab
 			# Also compute a half-shift of the combined field
-			# Try to grab the contrast, or else pad with zeros
-			try: objval = obj.getslice()
-			except ValueError: objval = zeroslab
-			b = sse.advance(objval, None, fbuf.getslice(), True)
+			# The result is stored in a RectangularTransfer buffer
+			b = sse.advance(obj.getslice(), None, fbuf.getslice(), True)
 			obj.nextslice()
 			fbuf.nextslice()
+			# Write the result to the desired output file
 			try: outmat[idx - 1] = b
 			except IndexError: pass
 			# Increment and print the progress bar
