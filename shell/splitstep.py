@@ -105,8 +105,8 @@ if __name__ == '__main__':
 	fmat = np.empty(list(inmat.shape[:-1]) + p[-1:], dtype=inmat.dtype, order='F')
 
 	# Create buffered slice objects for the contrast and forward fields
-	obj = BufferedSlices(sse.context, inmat, 5, reversed=True)
-	fbuf = BufferedSlices(sse.context, fmat, 5, read=False)
+	obj = BufferedSlices(inmat, 5, reversed=True, context=sse.context)
+	fbuf = BufferedSlices(fmat, 5, read=False, context=sse.context)
 
 	# An empty slab is needed at the end of the contrast
 	zeroslab = np.zeros(inmat.shape[:-1], np.complex64, order='F')
@@ -118,8 +118,9 @@ if __name__ == '__main__':
 	# Propagate the forward field through each slice
 	for idx in reversed(range(p[-1])):
 		# Advance and write the forward-traveling field
-		# The result is stored in the current fbuf slice
+		# The result is copied into the forward field buffer
 		sse.advance(obj.getslice(), fbuf.getslice())
+		# Advance the slice buffers
 		obj.nextslice()
 		fbuf.nextslice()
 		# Increment and print the progress bar
@@ -128,14 +129,15 @@ if __name__ == '__main__':
 
 	# Recreate the object buffer for backward propagation
 	obj.kill()
-	obj = BufferedSlices(sse.context, inmat, 5)
+	obj = BufferedSlices(inmat, 5, context=sse.context)
 	# Again, an empty slab is needed at the far end of the contrast
 	obj.backload(zeroslab)
 	obj.start()
 
 	# Recreate the forward field buffer for backward propagation
+	fbuf.flush()
 	fbuf.kill()
-	fbuf = BufferedSlices(sse.context, fmat, 5, reversed=True)
+	fbuf = BufferedSlices(fmat, 5, reversed=True, context=sse.context)
 	fbuf.start()
 
 	# Reset progress bar and propagating field
@@ -151,17 +153,17 @@ if __name__ == '__main__':
 			# Also compute a half-shift of the combined field
 			# The result is stored in a RectangularTransfer buffer
 			b = sse.advance(obj.getslice(), None, fbuf.getslice(), True)
+			# Write the output slice
+			outmat[idx - 1] = b
+			# Advance the slice buffers
 			obj.nextslice()
 			fbuf.nextslice()
-			# Write the result to the desired output file
-			try: outmat[idx - 1] = b
-			except IndexError: pass
 			# Increment and print the progress bar
 			bar.increment()
 			util.printflush(str(bar) + ' (backward)\r')
-	
-		# Kill the I/O buffers
-		obj.kill()
-		fbuf.kill()
-	
-		print
+
+	print
+
+	# Kill the I/O buffers
+	obj.kill()
+	fbuf.kill()

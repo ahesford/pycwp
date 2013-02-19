@@ -87,6 +87,23 @@ def writebmat (mat, outfile):
 		mat.T.tofile(outfile)
 
 
+def writemmap(infile, shape, dtype):
+	'''
+	Create a file representing a binary matrix file and memmap the file
+	into a Numpy array.
+	'''
+	outhdr = np.array(shape, np.int32)
+	hdrbytes = outhdr.nbytes
+	# Create the memmap
+	arr = np.memmap(infile, mode='w+', dtype=dtype,
+			offset=hdrbytes, order='F', shape=shape)
+	# Open the file and write the header
+	f = open(infile, 'rb+')
+	f.seek(0)
+	outhdr.tofile(f)
+	return arr
+
+
 def readbmat (infile, dim = None, dtype = None):
 	'''
 	Memory map a binary, complex matrix file, auto-sensing the precision

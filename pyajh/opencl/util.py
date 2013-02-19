@@ -164,17 +164,22 @@ class BufferedSlices(Thread):
 	for "pending" buffers and, depending on the mode, either fills these
 	buffers with the contents of the associated array or fills the
 	associated array slices with their contents.
+
+	A device context of None may also be provided to only allocate
+	host-side buffers.
 	'''
-	def __init__(self, ctx, array, nbufs, read=True, reversed=False):
+	def __init__(self, array, nbufs, read=True, reversed=False, context=None):
 		'''
-		Allocate the desired number of slice buffers in device context
-		ctx. Hopefully these will correspond to host-side "pinned"
+		Allocate the desired number of slice buffers in a device
+		context. Hopefully these will correspond to host-side "pinned"
 		memory to allow for rapid copies between host and device.
 		Associate the buffers with successive slices of the specified
 		Numpy array, either reading (if read=True) from the array to
 		the device or writing (if read=False) from the device to the
 		array. If reversed=True, slices of array are processed in
 		reverse order.
+
+		If context is None, allocate host-side buffers only.
 
 		The array (and its slices) are always interpreted in FORTRAN
 		order.
@@ -183,7 +188,7 @@ class BufferedSlices(Thread):
 		Thread.__init__(self)
 		# Reference the Numpy array and the device context
 		self._array = array
-		self._context = ctx
+		self._context = context
 		# Create the ready, idle, and active queues
 		self._idleq = []
 		self._activeq = []
@@ -207,13 +212,17 @@ class BufferedSlices(Thread):
 			hflags = cl.map_flags.READ
 
 		# Create a queue for mapping the device memory
-		queue = cl.CommandQueue(ctx)
+		if context is not None: queue = cl.CommandQueue(context)
 
 		# Allocate the device and host buffer pairs
 		for b in range(nbufs):
-			dbuf = cl.Buffer(ctx, dflags, size=nbytes)
-			hbuf = cl.enqueue_map_buffer(queue, dbuf, hflags, 0,
-					array.shape[:-1], array.dtype, order='F')[0]
+			if context is not None:
+				dbuf = cl.Buffer(context, dflags, size=nbytes)
+				hbuf = cl.enqueue_map_buffer(queue, dbuf, hflags, 0,
+						array.shape[:-1], array.dtype, order='F')[0]
+			else:
+				dbuf = None
+				hbuf = np.zeros(array.shape[:-1], array.dtype, order='F')
 			# Add the buffers to the pending queue in read mode
 			if read: self._idleq.append((dbuf, hbuf))
 			# Otherwise, add the buffers to the host queue
@@ -254,6 +263,15 @@ class BufferedSlices(Thread):
 		number of items ready to be manipulated or flushed.
 		'''
 		return len(self._readyq) + len(self._idleq)
+
+
+	def flush(self):
+		'''
+		Block until all idle buffers are processed.
+		'''
+		with self._qwatch:
+			while self.isAlive() and len(self._idleq) > 0:
+				self._qwatch.wait()
 
 
 	def getslice(self):
