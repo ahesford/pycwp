@@ -1,6 +1,6 @@
 "General-purpose OpenCL routines."
 import pyopencl as cl, os.path as path, numpy as np, time
-from threading import Thread, Lock, ThreadError
+from threading import Thread, Condition, RLock, ThreadError
 from itertools import chain
 from .. import cutil
 
@@ -184,9 +184,10 @@ class BufferedSlices(Thread):
 		# Reference the Numpy array and the device context
 		self._array = array
 		self._context = ctx
-		# Create the host-side and pending queues
-		self._hostq = []
-		self._pendq = []
+		# Create the ready, idle, and active queues
+		self._idleq = []
+		self._activeq = []
+		self._readyq = []
 		# Record whether the mode is read-write
 		self._read = read
 		# Record whether array access is reversed
@@ -214,12 +215,16 @@ class BufferedSlices(Thread):
 			hbuf = cl.enqueue_map_buffer(queue, dbuf, hflags, 0,
 					array.shape[:-1], array.dtype, order='F')[0]
 			# Add the buffers to the pending queue in read mode
-			if read: self._pendq.append((dbuf, hbuf))
+			if read: self._idleq.append((dbuf, hbuf))
 			# Otherwise, add the buffers to the host queue
-			else: self._hostq.append((dbuf, hbuf))
+			else: self._readyq.append((dbuf, hbuf))
 
-		# Allocate a lock to serialize modification to the queues
-		self._qlock = Lock()
+		# Use one reentrant lock for all queue alterations
+		qlock = RLock()
+		# This condition watches for items ready for host access
+		self._qwatch = Condition(qlock)
+		# This condition watches for items ready for backer flushing
+		self._qflush = Condition(qlock)
 		# Allocate lists of frontloaded and backloaded slices
 		self._frontload = []
 		self._backload = []
@@ -231,43 +236,66 @@ class BufferedSlices(Thread):
 		'''
 		Kill the thread by clearing both buffers.
 		'''
-		self._qlock.acquire()
-		self._pendq = []
-		self._hostq = []
-		self._qlock.release()
+		self._qwatch.acquire()
+		self._qflush.acquire()
+		self._readyq = []
+		self._idleq = []
+		self._activeq = []
+		# Notify the parent thread that something has happened
+		self._qwatch.notifyAll()
+		self._qflush.notifyAll()
+		self._qwatch.release()
+		self._qflush.release()
 		self.join()
+
+
+	def queuedepth(self):
+		'''
+		Return the depth of the queue.
+		'''
+		return len(self._readyq) + len(self._idleq) + len(self._activeq)
 
 
 	def getslice(self):
 		'''
-		Return the host-side buffer at the head of the host queue.
+		Return the host-side buffer at the head of the ready queue.
 
 		This function blocks until a buffer is available.
 		'''
-		while True:
-			try: return self._hostq[0][1]
-			except IndexError:
-				if self.isAlive(): time.sleep(1e-4)
-				else: raise ValueError('No buffered slice to return')
+		# Acquire the access ready condition
+		self._qwatch.acquire()
+
+		# As long as the queue is working, wait until an item is ready
+		while self.queuedepth() > 0 and len(self._readyq) < 1:
+			self._qwatch.wait()
+
+		try:
+			# Move the ready item to the active queue
+			buf = self._readyq.pop(0)
+			self._activeq.append(buf)
+			# Return the host buffer for the item
+			return buf[1]
+		except IndexError:
+			raise ValueError('No buffered slice to return')
+		finally: self._qwatch.release()
 
 
 	def nextslice(self):
 		'''
-		Mark the head of the host queue as no longer needed. The buffer
-		is moved to the pending queue.
+		Mark the head of the active queue as no longer needed. The buffer
+		is moved to the idle queue.
 
 		It is not an error to ask for the next slice if the host queue
 		is empty.
 		'''
+		# Acquire the flush notification condition
+		self._qflush.acquire()
 		try:
-			# Try to move the head of the host queue to the pending queue
-			self._qlock.acquire()
-			self._pendq.append(self._hostq.pop(0))
+			# Try to move the head of the active queue to the idle queue
+			self._idleq.append(self._activeq.pop(0))
+			self._qflush.notify()
 		except IndexError: pass
-		finally:
-			# Always make sure that the queue lock is released
-			try: self._qlock.release()
-			except ThreadError: pass
+		finally: self._qflush.release()
 
 
 	def frontload(self, sl):
@@ -318,19 +346,30 @@ class BufferedSlices(Thread):
 
 		# Loop through all slices in the associated array
 		for idx, av in enumerate(iter):
-			if len(self._pendq) + len(self._hostq) == 0: break
-			# Keep trying to process head events as they come available
-			while True:
-				try:
-					self._qlock.acquire()
-					# Check if the queues have been killed
-					if len(self._pendq) + len(self._hostq) == 0: break
-					buf = self._pendq.pop(0)
-					if self._read: buf[1][self._grid] = av.T
-					else: av.T[self._grid] = buf[1]
-					self._hostq.append(buf)
-				except IndexError: pass
-				else: break
-				finally:
-					try: self._qlock.release()
-					except ThreadError: pass
+			# Acquire the flush condition
+			self._qflush.acquire()
+
+			# Wait until an item is available for action
+			while self.queuedepth() > 0 and len(self._idleq) < 1:
+				self._qflush.wait()
+
+			# Give up if the queue has been killed
+			if self.queuedepth() < 1:
+				self._qflush.release()
+				break
+
+			# Grab the first idle object
+			buf = self._idleq.pop(0)
+
+			# Acquire the host access condition
+			self._qwatch.acquire()
+			# Process the idle event
+			if self._read: buf[1][self._grid] = av.T
+			else: av.T[self._grid] = buf[1]
+			# Return the event back to the ready queue
+			self._readyq.append(buf)
+			# Notify anybody watching for ready items
+			self._qwatch.notify()
+			# Release both conditions
+			self._qwatch.release()
+			self._qflush.release()
