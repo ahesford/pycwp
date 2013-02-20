@@ -91,18 +91,22 @@ class RectangularTransfer(object):
 		self.buffer_pitches = buffer_pitches
 		self.host_pitches = host_pitches
 
-		# Optionally allocate a host-side buffer to receive transfers
-		if alloc_host:
-			if context is None:
-				self.rcvbuffer = np.zeros(hostshape, dtype, order='F')
-			else:
-				queue = cl.CommandQueue(context)
-				dflags = cl.mem_flags.WRITE_ONLY | cl.mem_flags.ALLOC_HOST_PTR
-				nbytes = byterec * int(np.prod(hostshape))
-				self.devbuffer = cl.Buffer(context, dflags, nbytes)
-				self.rcvbuffer = cl.enqueue_map_buffer(queue, self.devbuffer,
-						cl.map_flags.READ, 0, hostshape, dtype, order='F')[0]
-		else: self.rcvbuffer = None
+		# Nothing more to do if no host-side buffer was requested
+		if not alloc_host:
+			self.rcvbuf = None
+			return
+
+		# Allocate a host-side buffer...
+		if context is not None:
+			# As a map of a device buffer if a context was given
+			queue = cl.CommandQueue(context)
+			dflags = cl.mem_flags.WRITE_ONLY | cl.mem_flags.ALLOC_HOST_PTR
+			hflags = cl.map_flags.READ
+			nbytes = byterec * int(np.prod(hostshape))
+			self.devbuf = cl.Buffer(context, dflags, nbytes)
+			self.rcvbuf = cl.enqueue_map_buffer(queue, self.devbuf,
+					hflags, 0, hostshape, dtype, order='F')[0]
+		else: self.rcvbuf = np.zeros(hostshape, dtype, order='F')
 
 
 	def fromdevice(self, queue, clbuffer, hostbuf=None, is_blocking=False):
@@ -111,7 +115,7 @@ class RectangularTransfer(object):
 		device buffer to the internal host-side buffer.
 		'''
 		# If no buffer was provided, use the default
-		if hostbuf is None: hostbuf = self.rcvbuffer
+		if hostbuf is None: hostbuf = self.rcvbuf
 		else:
 			# Check that the host buffer is compatible with the transfer
 			if list(self.hostshape) != list(hostbuf.shape):
