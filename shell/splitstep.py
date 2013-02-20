@@ -106,20 +106,22 @@ if __name__ == '__main__':
 
 	# Create buffered slice objects for the contrast and forward fields
 	obj = BufferedSlices(inmat, 5, reversed=True, context=sse.context)
-	fbuf = BufferedSlices(fmat, 5, read=False, context=sse.context)
-
 	# An empty slab is needed at the end of the contrast
 	zeroslab = np.zeros(inmat.shape[:-1], np.complex64, order='F')
 	obj.backload(zeroslab)
-
 	obj.start()
+
+	# The forward field buffer does not require pinned memory
+	fbuf = BufferedSlices(fmat, 5, read=False, context=sse.context)
 	fbuf.start()
 
 	# Propagate the forward field through each slice
 	for idx in reversed(range(p[-1])):
 		# Advance and write the forward-traveling field
 		# The result is copied into the forward field buffer
-		sse.advance(obj.getslice(), fbuf.getslice())
+		b = sse.advance(obj.getslice(), fbuf.getslice())
+		# Ensure that the field transfer has finished
+		b[1].wait()
 		# Advance the slice buffers
 		obj.nextslice()
 		fbuf.nextslice()
@@ -134,9 +136,10 @@ if __name__ == '__main__':
 	obj.backload(zeroslab)
 	obj.start()
 
-	# Recreate the forward field buffer for backward propagation
+	# Flush the forward field buffer to ensure consistency
 	fbuf.flush()
 	fbuf.kill()
+	# Now the forward field needs pinned memory for fast transfers
 	fbuf = BufferedSlices(fmat, 5, reversed=True, context=sse.context)
 	fbuf.start()
 
@@ -145,25 +148,34 @@ if __name__ == '__main__':
 	bar.reset()
 	util.printflush(str(bar) + ' (backward)\r')
 
-	with mio.Slicer(args[2], inmat.shape, inmat.dtype.type, True) as outmat:
-		# Propagate the reverse field through each slice
-		for idx in range(p[-1]):
-			# Advance the backward traveling field
-			# This requires the forward field in the slab
-			# Also compute a half-shift of the combined field
-			# The result is stored in a RectangularTransfer buffer
-			b = sse.advance(obj.getslice(), None, fbuf.getslice(), True)
-			# Write the output slice
-			outmat[idx - 1] = b
-			# Advance the slice buffers
-			obj.nextslice()
-			fbuf.nextslice()
-			# Increment and print the progress bar
-			bar.increment()
-			util.printflush(str(bar) + ' (backward)\r')
+	# Allocate a memory-mapped output array and an associated buffer
+	outmat = mio.writemmap(args[2], inmat.shape, inmat.dtype)
+	obuf = BufferedSlices(outmat, 5, read=False, context=sse.context)
+	obuf.frontload(np.empty_like(zeroslab))
+	obuf.start()
+
+	# Propagate the reverse field through each slice
+	for idx in range(p[-1]):
+		# Advance the backward traveling field
+		# This requires the forward field in the slab
+		# Also store a half-shifted, combined field in the output buffer
+		b = sse.advance(obj.getslice(), obuf.getslice(), fbuf.getslice(), True)
+		# Ensure that the result transfer has finished
+		b[1].wait()
+		# Advance the slice buffers
+		obj.nextslice()
+		fbuf.nextslice()
+		obuf.nextslice()
+		# Increment and print the progress bar
+		bar.increment()
+		util.printflush(str(bar) + ' (backward)\r')
 
 	print
 
 	# Kill the I/O buffers
 	obj.kill()
 	fbuf.kill()
+
+	# Flush and kill the output buffer
+	obuf.flush()
+	obuf.kill()

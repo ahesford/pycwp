@@ -113,6 +113,9 @@ class RectangularTransfer(object):
 		'''
 		Initiate a transfer on the specified queue from the specified
 		device buffer to the internal host-side buffer.
+
+		The host-side buffer and an event corresponding to the transfer
+		are returned.
 		'''
 		# If no buffer was provided, use the default
 		if hostbuf is None: hostbuf = self.rcvbuf
@@ -127,14 +130,14 @@ class RectangularTransfer(object):
 		if hostbuf is None:
 			raise IOError('Device-to-host transfer requires host-side buffer')
 
-		cl.enqueue_copy(queue, hostbuf, clbuffer,
+		event = cl.enqueue_copy(queue, hostbuf, clbuffer,
 				region=self.region,
 				buffer_origin=self.buffer_origin,
 				host_origin=self.host_origin,
 				buffer_pitches=self.buffer_pitches,
 				host_pitches=self.host_pitches,
 				is_blocking=is_blocking)
-		return hostbuf
+		return hostbuf, event
 
 
 	def todevice(self, queue, clbuffer, hostbuf, is_blocking=False):
@@ -144,6 +147,8 @@ class RectangularTransfer(object):
 
 		If necessary, the data type of the host array will be
 		reinterpreted to the expected type before transfer.
+
+		An event corresponding to the transfer is returned.
 		'''
 		if list(self.hostshape) != list(hostbuf.shape):
 			raise ValueError('Host buffer dimensions differ from expected values')
@@ -151,13 +156,14 @@ class RectangularTransfer(object):
 		# Transfer to the device if a host buffer was provided
 		# Reinterpret the data type of the host buffer if necessary
 		if hostbuf.dtype != self.dtype: hostbuf = hostbuf.astype(buftype)
-		cl.enqueue_copy(queue, clbuffer, hostbuf,
+		event = cl.enqueue_copy(queue, clbuffer, hostbuf,
 				region=self.region,
 				buffer_origin=self.buffer_origin,
 				host_origin=self.host_origin,
 				buffer_pitches=self.buffer_pitches,
 				host_pitches=self.host_pitches,
 				is_blocking=is_blocking)
+		return event
 
 
 class BufferedSlices(Thread):

@@ -422,7 +422,7 @@ class SplitStep(object):
 		self.reset()
 
 		# By default, device exchange happens on the full grid
-		self.rectxfer = util.RectangularTransfer(grid, grid, np.complex64, self.context)
+		self.rectxfer = util.RectangularTransfer(grid, grid, np.complex64, alloc_host=False)
 
 
 	def slicecoords(self):
@@ -452,7 +452,7 @@ class SplitStep(object):
 		Set a region of interest that will limit device transfers
 		within the computational grid.
 		'''
-		self.rectxfer = util.RectangularTransfer(self.grid, rgrid, np.complex64, self.context)
+		self.rectxfer = util.RectangularTransfer(self.grid, rgrid, np.complex64, alloc_host=False)
 
 
 	def setincident(self, zoff, idx = 0):
@@ -554,7 +554,7 @@ class SplitStep(object):
 		prog.screen(fwdque, grid, None, fld, obj, dz)
 
 
-	def advance(self, obj, result=None, bfld=None, shift=False):
+	def advance(self, obj, result, bfld=None, shift=False):
 		'''
 		Propagate a field through the current slab and transmit it
 		through an interface with the next slab characterized by object
@@ -567,6 +567,10 @@ class SplitStep(object):
 
 		If shift is True, the forward and backward field are also
 		shifted by half a slab to agree with full-wave solutions.
+
+		Copies of results to the host are non-blocking and, therefore,
+		are returned as a tuple with an associated event. The events
+		should be monitored to ensure consistent data.
 		'''
 		prog, grid = self.prog, self.grid
 		fwdque, tranque = self.fwdque, self.tranque
@@ -597,7 +601,7 @@ class SplitStep(object):
 			# Propagate the combined field a half step
 			self.propagate(buf, 0.5 * self.dz)
 			fwdque.finish()
-			# If a result buffer was provided, fill it
+			# Fill the result buffer with the shifted field
 			result = self.rectxfer.fromdevice(tranque, buf.data, result)
 
 		# Compute transmission through the interface
@@ -605,11 +609,6 @@ class SplitStep(object):
 		# Include reflection of backward field if appropriate
 		else: prog.txreflect(fwdque, grid, None, fwd.data, bck.data, ocur, onxt)
 
-		if shift:
-			# Ensure copy of shifted field has finished
-			tranque.finish()
-			return result
-		else:
-			# Return the field from the device, but block
-			# to ensure that the queue will finish
-			return self.rectxfer.fromdevice(fwdque, fwd.data, result, True)
+		# Return the shifted field or the forward component
+		if shift: return result
+		else: return self.rectxfer.fromdevice(fwdque, fwd.data, result)
