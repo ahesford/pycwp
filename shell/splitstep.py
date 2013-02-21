@@ -118,13 +118,13 @@ if __name__ == '__main__':
 	# Propagate the forward field through each slice
 	for idx in reversed(range(p[-1])):
 		# Advance and write the forward-traveling field
-		# The result is copied into the forward field buffer
-		b = sse.advance(obj.getslice(), fbuf.getslice())
-		# Ensure that the field transfer has finished
-		b[1].wait()
+		sse.advance(obj.getslice())
+		# Copy the device result buffer to the host queue
+		resevt = sse.getresult(fbuf.getslice())
 		# Advance the slice buffers
 		obj.nextslice()
-		fbuf.nextslice()
+		# Tell the buffer to wait until the copy is finished
+		fbuf.nextslice(resevt)
 		# Increment and print the progress bar
 		bar.increment()
 		util.printflush(str(bar) + ' (forward) \r')
@@ -158,14 +158,15 @@ if __name__ == '__main__':
 	for idx in range(p[-1]):
 		# Advance the backward traveling field
 		# This requires the forward field in the slab
-		# Also store a half-shifted, combined field in the output buffer
-		b = sse.advance(obj.getslice(), obuf.getslice(), fbuf.getslice(), True)
-		# Ensure that the result transfer has finished
-		b[1].wait()
+		# Also compute a half-shifted, combined field in the result buffer
+		sse.advance(obj.getslice(), fbuf.getslice(), True)
+		# Copy the device result buffer to the host queue
+		resevt = sse.getresult(obuf.getslice())
 		# Advance the slice buffers
 		obj.nextslice()
 		fbuf.nextslice()
-		obuf.nextslice()
+		# Tell the buffer to wait until the copy is finished
+		obuf.nextslice(resevt)
 		# Increment and print the progress bar
 		bar.increment()
 		util.printflush(str(bar) + ' (backward)\r')

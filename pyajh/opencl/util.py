@@ -233,10 +233,13 @@ class BufferedSlices(Thread):
 			else:
 				dbuf = None
 				hbuf = np.zeros(array.shape[:-1], array.dtype, order='F')
+			# Store the device and host buffers and a placeholder for an
+			# event that will block until flushes or fills can occur
+			record = (dbuf, hbuf, None)
 			# Add the buffers to the pending queue in read mode
-			if read: self._idleq.append((dbuf, hbuf))
+			if read: self._idleq.append(record)
 			# Otherwise, add the buffers to the host queue
-			else: self._readyq.append((dbuf, hbuf))
+			else: self._readyq.append(record)
 
 		# This condition watches for queue changes
 		self._qwatch = Condition()
@@ -270,7 +273,7 @@ class BufferedSlices(Thread):
 	def queueavail(self):
 		'''
 		Return the depth of the ready and idle queues. This is the
-		number of items ready to be manipulated or flushed.
+		number of items ready to be manipulated or flushed/filled.
 		'''
 		return len(self._readyq) + len(self._idleq)
 
@@ -310,19 +313,26 @@ class BufferedSlices(Thread):
 			finally: self._qwatch.notify()
 
 
-	def nextslice(self):
+	def nextslice(self, evt=None):
 		'''
 		Mark the head of the active queue as no longer needed. The buffer
 		is moved to the idle queue.
 
+		If evt is not None, it should provide a function wait() that
+		will block until the buffer can be flushed or filled.
+
 		It is not an error to ask for the next slice if the host queue
 		is empty.
 		'''
-		# Acquire the flush notification condition
+		# Acquire the flush/fill notification condition
 		with self._qwatch:
 			try:
-				# Try to move the head of the active queue to the idle queue
-				self._idleq.append(self._activeq.pop(0))
+				# Grab the head of the active queue
+				buf = self._activeq.pop(0)
+				# Attach the wait event, if it was specified
+				buf = (buf[0], buf[1], evt)
+				# Put the record at the end of the idle queue
+				self._idleq.append(buf)
 				# Notify any watchers of the change
 				self._qwatch.notify()
 			except IndexError: pass
@@ -386,14 +396,19 @@ class BufferedSlices(Thread):
 				# All others have been notified
 				if self.queuedepth() < 1: break
 	
-				# Grab the first idle object
-				# This is now guaranteed to exist
+				# Grab the first idle object, existence guaranteed
 				buf = self._idleq.pop(0)
+
+				# Attempt to block until flush or fill can occur
+				try: buf[2].wait()
+				except AttributeError: pass
 	
 				# Process the idle event
 				if self._read: buf[1][self._grid] = av.T
 				else: av.T[self._grid] = buf[1]
 
+				# Kill the wait event for recycling
+				buf = (buf[0], buf[1], None)
 				# Return the event back to the ready queue
 				self._readyq.append(buf)
 				# Notify anybody watching for ready items

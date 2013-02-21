@@ -420,6 +420,8 @@ class SplitStep(object):
 		self.obj = [empty() for i in range(2)]
 		# Initialize refractive index and fields
 		self.reset()
+		# Initialize result-holding space and an event to mark validity
+		self.result = [empty(), None]
 
 		# By default, device exchange happens on the full grid
 		self.rectxfer = util.RectangularTransfer(grid, grid, np.complex64, alloc_host=False)
@@ -554,7 +556,7 @@ class SplitStep(object):
 		prog.screen(fwdque, grid, None, fld, obj, dz)
 
 
-	def advance(self, obj, result, bfld=None, shift=False):
+	def advance(self, obj, bfld=None, shift=False):
 		'''
 		Propagate a field through the current slab and transmit it
 		through an interface with the next slab characterized by object
@@ -568,9 +570,9 @@ class SplitStep(object):
 		If shift is True, the forward and backward field are also
 		shifted by half a slab to agree with full-wave solutions.
 
-		Copies of results to the host are non-blocking and, therefore,
-		are returned as a tuple with an associated event. The events
-		should be monitored to ensure consistent data.
+		The relevant result (either the forward field or the
+		half-shifted combined field) is copied into a device-side
+		buffer for later retrieval and handling.
 		'''
 		prog, grid = self.prog, self.grid
 		fwdque, tranque = self.fwdque, self.tranque
@@ -579,7 +581,7 @@ class SplitStep(object):
 		fwd, bck, buf = self.fld
 
 		# Copy the forward field for shifting if necessary
-		if shift: shevt = cl.enqueue_copy(fwdque, buf.data, fwd.data)
+		if shift: cl.enqueue_copy(fwdque, buf.data, fwd.data)
 
 		# Push the next slab to its buffer
 		ocur, onxt, obevt = self.objupdate(obj)
@@ -588,9 +590,6 @@ class SplitStep(object):
 		# Copy the backward-traveling field
 		if bfld is not None:
 			bfevt = self.rectxfer.todevice(tranque, bck.data, bfld)
-
-		# Wait for the field to be copied
-		if shift: shevt.wait()
 
 		# Propagate the forward field a whole step
 		self.propagate(fwd)
@@ -607,14 +606,46 @@ class SplitStep(object):
 			# Propagate the combined field a half step
 			self.propagate(buf, 0.5 * self.dz)
 			fwdque.finish()
-			# Fill the result buffer with the shifted field
-			result = self.rectxfer.fromdevice(tranque, buf.data, result)
+			# Make sure the result buffer is free for overwriting
+			try: self.result[1].wait()
+			except AttributeError: pass
+			# Copy the shifted field into the result buffer
+			evt = cl.enqueue_copy(tranque, self.result[0].data, buf.data)
+			self.result[1] = evt
 
 		# Compute transmission through the interface
 		if bfld is None: prog.transmit(fwdque, grid, None, fwd.data, ocur, onxt)
 		# Include reflection of backward field if appropriate
 		else: prog.txreflect(fwdque, grid, None, fwd.data, bck.data, ocur, onxt)
 
-		# Return the shifted field or the forward component
-		if shift: return result
-		else: return self.rectxfer.fromdevice(fwdque, fwd.data, result)
+		# If shifted fields were desired, the result copy has already begun
+		if shift: return
+
+		# Make sure the result buffer is available
+		try: self.result[1].wait()
+		except AttributeError: pass
+		# Copy the forward field into the result buffer
+		# Use the forward queue to ensure transmissions have completed
+		evt = cl.enqueue_copy(fwdque, self.result[0].data, fwd.data)
+		self.result[1] = evt
+
+
+	def getresult(self, hostbuf):
+		'''
+		Wait for the intra-device transfer of the previous result to
+		the result buffer, and initiate a device-to-host copy of the
+		valid result buffer into hostbuf.
+
+		An event corresponding to the transfer is returned. This event
+		also becomes the "ready condition" for recycling of the result
+		buffer in subsequent calls to advance().
+		'''
+		tranque, result = self.tranque, self.result
+		# Attempt to wait for result-buffer consistency
+		try: result[1].wait()
+		except AttributeError: pass
+		# Initiate the rectangular transfer on the transfer queue
+		evt = self.rectxfer.fromdevice(tranque, result[0].data, hostbuf)[1]
+		# The new result-buffer consistency condition is this transfer event
+		result[1] = evt
+		return evt
