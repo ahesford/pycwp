@@ -479,10 +479,10 @@ class SplitStep(object):
 		self.obj = [cur, nxt]
 
 		# Transfer the object contrast into the next-slab buffer
-		self.rectxfer.todevice(queue, nxt.data, obj)
+		evt = self.rectxfer.todevice(queue, nxt.data, obj)
 
-		# Return pointers to the current and next slabs
-		return cur, nxt
+		# Return pointers to the current and next slabs and a transfer event
+		return cur, nxt, evt
 
 
 	def propagate(self, fld = None, dz = None, idx = 0):
@@ -579,19 +579,25 @@ class SplitStep(object):
 		fwd, bck, buf = self.fld
 
 		# Copy the forward field for shifting if necessary
-		if shift: cl.enqueue_copy(fwdque, buf.data, fwd.data)
+		if shift: shevt = cl.enqueue_copy(fwdque, buf.data, fwd.data)
 
 		# Push the next slab to its buffer
-		ocur, onxt = [o.data for o in self.objupdate(obj)]
+		ocur, onxt, obevt = self.objupdate(obj)
+		ocur, onxt = [o.data for o in [ocur, onxt]]
 
 		# Copy the backward-traveling field
-		if bfld is not None: self.rectxfer.todevice(tranque, bck.data, bfld)
+		if bfld is not None:
+			bfevt = self.rectxfer.todevice(tranque, bck.data, bfld)
+
+		# Wait for the field to be copied
+		if shift: shevt.wait()
 
 		# Propagate the forward field a whole step
 		self.propagate(fwd)
 
 		# Ensure that transfers to the device are finished
-		tranque.finish()
+		obevt.wait()
+		if bfld is not None: bfevt.wait()
 
 		if shift:
 			# Add the forward and backward fields
