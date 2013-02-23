@@ -482,6 +482,8 @@ class SplitStep(object):
 		nxt, cur = self.obj
 		self.obj = [cur, nxt]
 
+		# Ensure that the next slab is free for reuse
+		nxt.sync(queue)
 		# Transfer the object contrast into the next-slab buffer
 		evt = self.rectxfer.todevice(queue, nxt, obj)
 
@@ -554,10 +556,8 @@ class SplitStep(object):
 		# Take the inverse FFT of the field and the Laplacian
 		self.fftplan.execute(fld, inverse=True)
 
-		# Multiply by the phase screen
-		evt = prog.screen(fwdque, grid, None, fld, obj, dz)
-		# Tag the last computation with an event
-		return evt
+		# Multiply by the phase screen, returning the event
+		return prog.screen(fwdque, grid, None, fld, obj, dz)
 
 
 	def advance(self, obj, bfld=None, shift=False):
@@ -621,14 +621,17 @@ class SplitStep(object):
 
 		# Compute transmission through the interface
 		if bfld is None:
-			prog.transmit(fwdque, grid, None,
+			evt = prog.transmit(fwdque, grid, None,
 				fwd, ocur, onxt, wait_for=[obevt])
 		# Include reflection of backward field if appropriate
 		else:
 			# Ensure the copy has finished
 			bck.sync(fwdque)
-			prog.txreflect(fwdque, grid, None, fwd,
+			evt = prog.txreflect(fwdque, grid, None, fwd,
 					bck, ocur, onxt, wait_for=[obevt])
+
+		# Attach the transmission event to the current slab contrast
+		ocur.attachevent(evt)
 
 		# If shifted fields were desired, the result copy has already begun
 		if shift: return
