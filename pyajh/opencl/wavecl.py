@@ -619,16 +619,16 @@ class SplitStep(object):
 			# Attach the copy event to the result buffer
 			self.result.attachevent(evt)
 
+		# Ensure the next slab has been received
+		cl.enqueue_marker(fwdque, wait_for=[obevt])
 		# Compute transmission through the interface
 		if bfld is None:
-			evt = prog.transmit(fwdque, grid, None,
-				fwd, ocur, onxt, wait_for=[obevt])
+			evt = prog.transmit(fwdque, grid, None, fwd, ocur, onxt)
 		# Include reflection of backward field if appropriate
 		else:
-			# Ensure the copy has finished
+			# Ensure the backward field has been received
 			bck.sync(fwdque)
-			evt = prog.txreflect(fwdque, grid, None, fwd,
-					bck, ocur, onxt, wait_for=[obevt])
+			evt = prog.txreflect(fwdque, grid, None, fwd, bck, ocur, onxt)
 
 		# Attach the transmission event to the current slab contrast
 		ocur.attachevent(evt)
