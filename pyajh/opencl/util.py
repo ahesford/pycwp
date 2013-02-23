@@ -109,7 +109,7 @@ class RectangularTransfer(object):
 		else: self.rcvbuf = np.zeros(hostshape, dtype, order='F')
 
 
-	def fromdevice(self, queue, clbuffer, hostbuf=None, is_blocking=False):
+	def fromdevice(self, queue, clbuffer, hostbuf=None, is_blocking=False, **kwargs):
 		'''
 		Initiate a transfer on the specified queue from the specified
 		device buffer to the internal host-side buffer.
@@ -136,11 +136,11 @@ class RectangularTransfer(object):
 				host_origin=self.host_origin,
 				buffer_pitches=self.buffer_pitches,
 				host_pitches=self.host_pitches,
-				is_blocking=is_blocking)
+				is_blocking=is_blocking, **kwargs)
 		return hostbuf, event
 
 
-	def todevice(self, queue, clbuffer, hostbuf, is_blocking=False):
+	def todevice(self, queue, clbuffer, hostbuf, is_blocking=False, **kwargs):
 		'''
 		Initiate a transfer on the specified queue from the specified
 		host buffer to the specified device buffer.
@@ -162,7 +162,7 @@ class RectangularTransfer(object):
 				host_origin=self.host_origin,
 				buffer_pitches=self.buffer_pitches,
 				host_pitches=self.host_pitches,
-				is_blocking=is_blocking)
+				is_blocking=is_blocking, **kwargs)
 		return event
 
 

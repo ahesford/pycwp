@@ -483,22 +483,22 @@ class SplitStep(object):
 		# Transfer the object contrast into the next-slab buffer
 		evt = self.rectxfer.todevice(queue, nxt.data, obj)
 
-		# Return pointers to the current and next slabs and a transfer event
-		return cur, nxt, evt
+		# Return buffers of the current and next slabs and a transfer event
+		return cur.data, nxt.data, evt
 
 
 	def propagate(self, fld = None, dz = None, idx = 0):
 		'''
-		Propagate the field stored in the PyOpenCL array fld (or, if
-		fld is None, the current in-device field at index idx) a step
-		dz (or, if dz is None, the default step size) through the
+		Propagate the field stored in the device buffer fld (or, if fld
+		is None, the current in-device field at index idx) a step dz
+		(or, if dz is None, the default step size) through the
 		currently represented medium.
 		'''
 		prog, grid = self.prog, self.grid
 		fwdque = self.fwdque
 
 		# Point to the field, scratch buffers, and refractive index
-		fld = fld.data if fld is not None else self.fld[idx].data
+		if fld is None: fld = self.fld[idx].data
 		u, v, x = [s.data for s in self.scratch]
 		obj = self.obj[0].data
 
@@ -553,7 +553,9 @@ class SplitStep(object):
 		self.fftplan.execute(fld, inverse=True)
 
 		# Multiply by the phase screen
-		prog.screen(fwdque, grid, None, fld, obj, dz)
+		evt = prog.screen(fwdque, grid, None, fld, obj, dz)
+		# Tag the last computation with an event
+		return evt
 
 
 	def advance(self, obj, bfld=None, shift=False):
@@ -573,79 +575,91 @@ class SplitStep(object):
 		The relevant result (either the forward field or the
 		half-shifted combined field) is copied into a device-side
 		buffer for later retrieval and handling.
+
+		Note that getresult() or wait() should be called between calls
+		to advance() to ensure that the buffers used in advance() are
+		available for use.
 		'''
 		prog, grid = self.prog, self.grid
 		fwdque, tranque = self.fwdque, self.tranque
 
 		# Point to the field components
-		fwd, bck, buf = self.fld
+		fwd, bck, buf = [f.data for f in self.fld]
 
 		# Copy the forward field for shifting if necessary
-		if shift: cl.enqueue_copy(fwdque, buf.data, fwd.data)
+		if shift: cl.enqueue_copy(fwdque, buf, fwd)
 
 		# Push the next slab to its buffer
 		ocur, onxt, obevt = self.objupdate(obj)
-		ocur, onxt = [o.data for o in [ocur, onxt]]
 
 		# Copy the backward-traveling field
 		if bfld is not None:
-			bfevt = self.rectxfer.todevice(tranque, bck.data, bfld)
+			bfevt = self.rectxfer.todevice(tranque, bck, bfld)
 
 		# Propagate the forward field a whole step
 		self.propagate(fwd)
 
-		# Ensure that transfers to the device are finished
-		obevt.wait()
-		if bfld is not None: bfevt.wait()
-
 		if shift:
 			# Add the forward and backward fields
 			if bfld is not None:
-				prog.caxpy(fwdque, grid, None, buf.data,
-					np.float32(1.), buf.data, bck.data)
+				prog.caxpy(fwdque, grid, None, buf,
+						np.float32(1.), buf,
+						bck, wait_for=[bfevt])
 			# Propagate the combined field a half step
-			self.propagate(buf, 0.5 * self.dz)
-			fwdque.finish()
+			# Save the propagation event for delaying result copies
+			wlist = [self.propagate(buf, 0.5 * self.dz)]
+			res, evt = self.result[0].data, self.result[1]
 			# Make sure the result buffer is free for overwriting
-			try: self.result[1].wait()
-			except AttributeError: pass
+			if evt is not None: wlist.append(evt)
 			# Copy the shifted field into the result buffer
-			evt = cl.enqueue_copy(tranque, self.result[0].data, buf.data)
+			evt = cl.enqueue_copy(tranque, res, buf, wait_for=wlist)
 			self.result[1] = evt
 
 		# Compute transmission through the interface
-		if bfld is None: prog.transmit(fwdque, grid, None, fwd.data, ocur, onxt)
+		if bfld is None:
+			prog.transmit(fwdque, grid, None,
+				fwd, ocur, onxt, wait_for=[obevt])
 		# Include reflection of backward field if appropriate
-		else: prog.txreflect(fwdque, grid, None, fwd.data, bck.data, ocur, onxt)
+		else:
+			prog.txreflect(fwdque, grid, None, fwd,
+					bck, ocur, onxt, wait_for=[obevt, bfevt])
 
 		# If shifted fields were desired, the result copy has already begun
 		if shift: return
 
 		# Make sure the result buffer is available
-		try: self.result[1].wait()
-		except AttributeError: pass
+		buf, evt = self.result[0].data, self.result[1]
+		wlist = None if evt is None else [evt]
 		# Copy the forward field into the result buffer
 		# Use the forward queue to ensure transmissions have completed
-		evt = cl.enqueue_copy(fwdque, self.result[0].data, fwd.data)
+		evt = cl.enqueue_copy(fwdque, buf, fwd, wait_for=wlist)
 		self.result[1] = evt
 
 
-	def getresult(self, hostbuf):
+	def getresult(self, hbuf):
 		'''
 		Wait for the intra-device transfer of the previous result to
 		the result buffer, and initiate a device-to-host copy of the
-		valid result buffer into hostbuf.
+		valid result buffer into hbuf.
 
 		An event corresponding to the transfer is returned. This event
 		also becomes the "ready condition" for recycling of the result
 		buffer in subsequent calls to advance().
 		'''
-		tranque, result = self.tranque, self.result
+		tranque = self.tranque
+		dbuf, evt = self.result[0].data, self.result[1]
 		# Attempt to wait for result-buffer consistency
-		try: result[1].wait()
-		except AttributeError: pass
+		wlist = None if evt is None else [evt]
 		# Initiate the rectangular transfer on the transfer queue
-		evt = self.rectxfer.fromdevice(tranque, result[0].data, hostbuf)[1]
+		evt = self.rectxfer.fromdevice(tranque, dbuf, hbuf, wait_for=wlist)[1]
 		# The new result-buffer consistency condition is this transfer event
-		result[1] = evt
+		self.result[1] = evt
 		return evt
+
+
+	def wait(self):
+		'''
+		Block until all pending transfers and computations are finished.
+		'''
+		self.fwdque.finish()
+		self.tranque.finish()
