@@ -409,19 +409,22 @@ class SplitStep(object):
 		# Create an FFT plan in the OpenCL propagation queue
 		self.fftplan = Plan((nx, ny), queue=self.fwdque)
 
-		queue, grid = self.fwdque, self.grid
-		# By default, all buffers use the calculation queue
-		empty = lambda : cla.empty(queue, grid, np.complex64, order='F')
+		grid = self.grid
+		def newbuffer():
+			nbytes = int(np.prod(grid)) * np.complex64().nbytes
+			flags = cl.mem_flags.READ_WRITE
+			return util.SyncBuffer(self.context, flags, size=nbytes)
 		# Buffers to store the propagating (twice) and backward fields
-		self.fld = [empty() for i in range(3)]
+		self.fld = [newbuffer() for i in range(3)]
 		# Scratch space used during computations
-		self.scratch = [empty() for i in range(3)]
+		self.scratch = [newbuffer() for i in range(3)]
 		# The index of refraction gets two buffers for transmission
-		self.obj = [empty() for i in range(2)]
+		self.obj = [newbuffer() for i in range(2)]
+		# Initialize buffer to hold results of advance()
+		self.result = newbuffer()
+
 		# Initialize refractive index and fields
 		self.reset()
-		# Initialize result-holding space and an event to mark validity
-		self.result = [empty(), None]
 
 		# By default, device exchange happens on the full grid
 		self.rectxfer = util.RectangularTransfer(grid, grid, np.complex64, alloc_host=False)
@@ -443,10 +446,9 @@ class SplitStep(object):
 		refractive index buffer to unity.
 		'''
 		grid = self.grid
-
 		z = np.zeros(grid, dtype=np.complex64)
-		for fld in self.fld: fld.set(z, async=True)
-		for obj in self.obj: obj.set(z, async=True)
+		for a in self.fld + self.obj: 
+			cl.enqueue_copy(self.fwdque, a, z, is_blocking=False)
 
 
 	def setroi(self, rgrid):
@@ -462,7 +464,7 @@ class SplitStep(object):
 		Set the value of the CL field buffer at index idx to the
 		incident field at a height zoff.
 		'''
-		inc = self.fld[idx].data
+		inc = self.fld[idx]
 		zoff = np.float32(zoff)
 		self.prog.green3d(self.fwdque, self.grid, None, inc, zoff)
 
@@ -481,10 +483,10 @@ class SplitStep(object):
 		self.obj = [cur, nxt]
 
 		# Transfer the object contrast into the next-slab buffer
-		evt = self.rectxfer.todevice(queue, nxt.data, obj)
+		evt = self.rectxfer.todevice(queue, nxt, obj)
 
 		# Return buffers of the current and next slabs and a transfer event
-		return cur.data, nxt.data, evt
+		return cur, nxt, evt
 
 
 	def propagate(self, fld = None, dz = None, idx = 0):
@@ -498,9 +500,9 @@ class SplitStep(object):
 		fwdque = self.fwdque
 
 		# Point to the field, scratch buffers, and refractive index
-		if fld is None: fld = self.fld[idx].data
-		u, v, x = [s.data for s in self.scratch]
-		obj = self.obj[0].data
+		if fld is None: fld = self.fld[idx]
+		u, v, x = [s for s in self.scratch]
+		obj = self.obj[0]
 
 		# These constants will be used in field computations
 		one = np.float32(1.)
@@ -584,7 +586,7 @@ class SplitStep(object):
 		fwdque, tranque = self.fwdque, self.tranque
 
 		# Point to the field components
-		fwd, bck, buf = [f.data for f in self.fld]
+		fwd, bck, buf = [f for f in self.fld]
 
 		# Copy the forward field for shifting if necessary
 		if shift: cl.enqueue_copy(fwdque, buf, fwd)
@@ -592,28 +594,30 @@ class SplitStep(object):
 		# Push the next slab to its buffer
 		ocur, onxt, obevt = self.objupdate(obj)
 
-		# Copy the backward-traveling field
 		if bfld is not None:
+			# Copy the backward-traveling field
 			bfevt = self.rectxfer.todevice(tranque, bck, bfld)
+			# Attach the copy event to the backward buffer
+			bck.attachevent(bfevt)
 
 		# Propagate the forward field a whole step
 		self.propagate(fwd)
 
 		if shift:
-			# Add the forward and backward fields
 			if bfld is not None:
-				prog.caxpy(fwdque, grid, None, buf,
-						np.float32(1.), buf,
-						bck, wait_for=[bfevt])
+				# Ensure the copy has finished
+				bck.sync(fwdque)
+				# Add the forward and backward fields
+				prog.caxpy(fwdque, grid, None, buf, 
+						np.float32(1.), buf, bck)
 			# Propagate the combined field a half step
 			# Save the propagation event for delaying result copies
-			wlist = [self.propagate(buf, 0.5 * self.dz)]
-			res, evt = self.result[0].data, self.result[1]
-			# Make sure the result buffer is free for overwriting
-			if evt is not None: wlist.append(evt)
+			pevt = self.propagate(buf, 0.5 * self.dz)
+			self.result.sync(tranque)
 			# Copy the shifted field into the result buffer
-			evt = cl.enqueue_copy(tranque, res, buf, wait_for=wlist)
-			self.result[1] = evt
+			evt = cl.enqueue_copy(tranque, self.result, buf, wait_for=[pevt])
+			# Attach the copy event to the result buffer
+			self.result.attachevent(evt)
 
 		# Compute transmission through the interface
 		if bfld is None:
@@ -621,19 +625,21 @@ class SplitStep(object):
 				fwd, ocur, onxt, wait_for=[obevt])
 		# Include reflection of backward field if appropriate
 		else:
+			# Ensure the copy has finished
+			bck.sync(fwdque)
 			prog.txreflect(fwdque, grid, None, fwd,
-					bck, ocur, onxt, wait_for=[obevt, bfevt])
+					bck, ocur, onxt, wait_for=[obevt])
 
 		# If shifted fields were desired, the result copy has already begun
 		if shift: return
 
 		# Make sure the result buffer is available
-		buf, evt = self.result[0].data, self.result[1]
-		wlist = None if evt is None else [evt]
+		self.result.sync(fwdque)
 		# Copy the forward field into the result buffer
 		# Use the forward queue to ensure transmissions have completed
-		evt = cl.enqueue_copy(fwdque, buf, fwd, wait_for=wlist)
-		self.result[1] = evt
+		evt = cl.enqueue_copy(fwdque, self.result, fwd)
+		# Attach the copy event to the result buffer
+		self.result.attachevent(evt)
 
 
 	def getresult(self, hbuf):
@@ -647,13 +653,12 @@ class SplitStep(object):
 		buffer in subsequent calls to advance().
 		'''
 		tranque = self.tranque
-		dbuf, evt = self.result[0].data, self.result[1]
-		# Attempt to wait for result-buffer consistency
-		wlist = None if evt is None else [evt]
+		# Make sure the result buffer is available
+		self.result.sync(tranque)
 		# Initiate the rectangular transfer on the transfer queue
-		evt = self.rectxfer.fromdevice(tranque, dbuf, hbuf, wait_for=wlist)[1]
-		# The new result-buffer consistency condition is this transfer event
-		self.result[1] = evt
+		evt = self.rectxfer.fromdevice(tranque, self.result, hbuf)[1]
+		# Attach the copy event to the result buffer
+		self.result.attachevent(evt)
 		return evt
 
 

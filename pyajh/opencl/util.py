@@ -31,6 +31,53 @@ def grabcontext(context = None):
 	return cl.Context(devices=[cl.get_platforms()[0].get_devices()[context]])
 
 
+class SyncBuffer(cl.Buffer):
+	'''
+	This extends a standard PyOpenCL Buffer object by providing an attached
+	event. The event may be injected into a queue to force a
+	synchronization point, or it may be replaced with another event.
+	'''
+	def __init__(self, *args, **kwargs):
+		'''
+		See documentation for pyopencl.Buffer for argument descriptions.
+		'''
+		# Initialize the underlying buffer object
+		cl.Buffer.__init__(self, *args, **kwargs)
+		# Create an empty event
+		self._event = None
+
+
+	def attachevent(self, evt):
+		'''
+		Attach the event evt to the buffer.
+		'''
+		self._event = evt
+
+
+	def detachevent(self):
+		'''
+		Clear an event attached to the buffer.
+		'''
+		self._event = None
+
+
+	def sync(self, queue):
+		'''
+		Inject a pyopencl marker into the specified queue that waits
+		for the attached event.
+		'''
+		if self._event is None: return
+		cl.enqueue_marker(queue, wait_for=[self._event])
+
+
+	def wait(self):
+		'''
+		Block until the associated event is clear.
+		'''
+		try: self._event.wait()
+		except AttributeError: pass
+
+
 class RectangularTransfer(object):
 	'''
 	A reusable parameter store (and host-side buffer) for rectangular
