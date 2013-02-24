@@ -61,7 +61,8 @@ float hann(const uint t) {
 }
 
 /* Compute i * r * c for real r and complex c. */
-float2 imulr(const float2 r, const float2 c) {
+float2 imulr(const float, const float2);
+float2 imulr(const float r, const float2 c) {
 	return (float2) (r) * (float2) (-c.y, c.x);
 }
 
