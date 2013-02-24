@@ -487,10 +487,9 @@ class SplitStep(object):
 		nxt.sync(queue)
 		# Transfer the object contrast into the next-slab buffer
 		evt = self.rectxfer.todevice(queue, nxt, obj)
-		nxt.attachevent(evt)
 
 		# Return buffers of the current and next slabs and a transfer event
-		return cur, nxt
+		return cur, nxt, evt
 
 
 	def propagate(self, fld = None, dz = None, idx = 0):
@@ -593,7 +592,7 @@ class SplitStep(object):
 			cl.enqueue_copy(fwdque, buf, fwd)
 
 		# Push the next slab to its buffer
-		ocur, onxt = self.objupdate(obj)
+		ocur, onxt, obevt = self.objupdate(obj)
 
 		if bfld is not None:
 			# Ensure that the buffer is free from prior calculations
@@ -625,7 +624,7 @@ class SplitStep(object):
 			buf.attachevent(evt)
 
 		# Ensure the next slab has been received
-		onxt.sync(fwdque)
+		cl.enqueue_barrier(fwdque, wait_for=[obevt])
 		# Compute transmission through the interface
 		if bfld is None:
 			evt = prog.transmit(fwdque, grid, None, fwd, ocur, onxt)
