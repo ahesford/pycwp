@@ -403,8 +403,9 @@ class SplitStep(object):
 
 		# Create a command queue for forward propagation calculations
 		self.fwdque = cl.CommandQueue(self.context)
-		# Create a command queue for transmissions
-		self.tranque = cl.CommandQueue(self.context)
+		# Create command queues for transfers
+		self.recvque = cl.CommandQueue(self.context)
+		self.sendque = cl.CommandQueue(self.context)
 
 		# Create an FFT plan in the OpenCL propagation queue
 		self.fftplan = Plan((nx, ny), queue=self.fwdque)
@@ -477,12 +478,12 @@ class SplitStep(object):
 		The transmission queue is used for updates to facilitate
 		concurrency with forward propagation algorithms.  '''
 		# Transfers occur in the transmission queue for concurrency
-		prog, queue, grid = self.prog, self.tranque, self.grid
+		prog, queue, grid = self.prog, self.recvque, self.grid
 		# Roll the buffer so the next slab is second
 		nxt, cur = self.obj
 		self.obj = [cur, nxt]
 
-		# Ensure that the next slab is free for reuse
+		# Ensure buffer is not used by prior calculations
 		nxt.sync(queue)
 		# Transfer the object contrast into the next-slab buffer
 		evt = self.rectxfer.todevice(queue, nxt, obj)
@@ -503,7 +504,7 @@ class SplitStep(object):
 
 		# Point to the field, scratch buffers, and refractive index
 		if fld is None: fld = self.fld[idx]
-		u, v, x = [s for s in self.scratch]
+		u, v, x = self.scratch
 		obj = self.obj[0]
 
 		# These constants will be used in field computations
@@ -577,35 +578,38 @@ class SplitStep(object):
 		The relevant result (either the forward field or the
 		half-shifted combined field) is copied into a device-side
 		buffer for later retrieval and handling.
-
-		Note that getresult() or wait() should be called between calls
-		to advance() to ensure that the buffers used in advance() are
-		available for use.
 		'''
 		prog, grid = self.prog, self.grid
-		fwdque, tranque = self.fwdque, self.tranque
+		fwdque, recvque, sendque = self.fwdque, self.recvque, self.sendque
 
 		# Point to the field components
 		fwd, bck, buf = [f for f in self.fld]
 
-		# Copy the forward field for shifting if necessary
-		if shift: cl.enqueue_copy(fwdque, buf, fwd)
+		if shift:
+			# Ensure that a prior copy isn't using the buffer
+			buf.sync(fwdque)
+			# Copy the forward field for shifting if necessary
+			cl.enqueue_copy(fwdque, buf, fwd)
 
 		# Push the next slab to its buffer
 		ocur, onxt, obevt = self.objupdate(obj)
 
 		if bfld is not None:
+			# Ensure that the buffer is free from prior calculations
+			bck.sync(recvque)
 			# Copy the backward-traveling field
-			bfevt = self.rectxfer.todevice(tranque, bck, bfld)
+			bfevt = self.rectxfer.todevice(recvque, bck, bfld)
 			# Attach the copy event to the backward buffer
 			bck.attachevent(bfevt)
 
-		# Propagate the forward field a whole step
+		# Ensure that no prior copy is using the field buffer
+		fwd.sync(fwdque)
+		# Propagate the forward field a whole step on fwdque
 		self.propagate(fwd)
 
 		if shift:
 			if bfld is not None:
-				# Ensure the copy has finished
+				# Ensure copy has finished before fwdque resumes
 				bck.sync(fwdque)
 				# Add the forward and backward fields
 				prog.caxpy(fwdque, grid, None, buf, 
@@ -613,11 +617,11 @@ class SplitStep(object):
 			# Propagate the combined field a half step
 			# Save the propagation event for delaying result copies
 			pevt = self.propagate(buf, 0.5 * self.dz)
-			self.result.sync(tranque)
 			# Copy the shifted field into the result buffer
-			evt = cl.enqueue_copy(tranque, self.result, buf, wait_for=[pevt])
-			# Attach the copy event to the result buffer
-			self.result.attachevent(evt)
+			# No result sync necessary, all mods occur on sendque
+			evt = cl.enqueue_copy(sendque, self.result, buf, wait_for=[pevt])
+			# Attach the copy event to the source buffer
+			buf.attachevent(evt)
 
 		# Ensure the next slab has been received
 		cl.enqueue_marker(fwdque, wait_for=[obevt])
@@ -632,17 +636,17 @@ class SplitStep(object):
 
 		# Attach the transmission event to the current slab contrast
 		ocur.attachevent(evt)
+		# Also attach the event to the backward field buffer
+		bck.attachevent(evt)
 
 		# If shifted fields were desired, the result copy has already begun
 		if shift: return
 
-		# Make sure the result buffer is available
-		self.result.sync(fwdque)
 		# Copy the forward field into the result buffer
-		# Use the forward queue to ensure transmissions have completed
-		evt = cl.enqueue_copy(fwdque, self.result, fwd)
-		# Attach the copy event to the result buffer
-		self.result.attachevent(evt)
+		# Wait for transmissions to finish for consistency
+		evt = cl.enqueue_copy(sendque, self.result, fwd, wait_for=[evt])
+		# Attach the copy event to the field buffer
+		fwd.attachevent(evt)
 
 
 	def getresult(self, hbuf):
@@ -651,23 +655,12 @@ class SplitStep(object):
 		the result buffer, and initiate a device-to-host copy of the
 		valid result buffer into hbuf.
 
-		An event corresponding to the transfer is returned. This event
-		also becomes the "ready condition" for recycling of the result
-		buffer in subsequent calls to advance().
+		An event corresponding to the transfer is returned.
 		'''
-		tranque = self.tranque
-		# Make sure the result buffer is available
-		self.result.sync(tranque)
+		sendque = self.sendque
 		# Initiate the rectangular transfer on the transfer queue
-		evt = self.rectxfer.fromdevice(tranque, self.result, hbuf)[1]
+		# No sync necessary, all mods to result buffer occur on sendque
+		evt = self.rectxfer.fromdevice(sendque, self.result, hbuf)[1]
 		# Attach the copy event to the result buffer
 		self.result.attachevent(evt)
 		return evt
-
-
-	def wait(self):
-		'''
-		Block until all pending transfers and computations are finished.
-		'''
-		self.fwdque.finish()
-		self.tranque.finish()
