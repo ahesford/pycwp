@@ -67,7 +67,7 @@ class SyncBuffer(cl.Buffer):
 		for the attached event.
 		'''
 		if self._event is None: return
-		cl.enqueue_marker(queue, wait_for=[self._event])
+		cl.enqueue_barrier(queue, wait_for=[self._event])
 
 
 	def wait(self):
