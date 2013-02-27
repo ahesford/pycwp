@@ -174,6 +174,7 @@ __kernel void hospec(${gfc} u, ${gfc} f) {
 	u[idx] = cmul(kzn / (float2) kzd, f[idx]);
 }
 
+% if hospat:
 /* In u, apply the spectral Laplacian operator P to the input field f. */
 __kernel void laplacian(${gfc} u, ${gfc} f) {
 	/* Grab the spectral sample for the current work item. */
@@ -198,6 +199,7 @@ __kernel void hospat(${gfc} u, ${gfc} obj, ${gfc} f) {
 
 	u[idx] = cmul(qval, f[idx]);
 }
+% endif
 
 /* In u, store the product of the object contrast with the field f. */
 __kernel void ctmul(${gfc} u, ${gfc} obj, ${gfc} f) {
@@ -229,13 +231,17 @@ __kernel void caxpy(${gfc} z, const float a, ${gfc} x, ${gfc} y) {
 	z[idx] = y[idx] + (float2) (a) * x[idx];
 }
 
-/* Given field corrections u and v, compute
- * f = f + delta * (u + v) for delta = 1j * k0 * dz. */
-__kernel void corrfld(${gfc} f, ${gfc} u, ${gfc} v, const float dz) {
+/* Given field corrections u, v and x, compute
+ * f = f + delta * (u + v + x) for delta = 1j * k0 * dz.
+ *
+ * The argument x is excluded if high-order spatial corrections
+ * are not employed. */
+__kernel void corrfld(${gfc} f, ${gfc} u, ${gfc} v,
+		${(gfc + ' x, ') if hospat else ''} const float dz) {
 	${getindices('i', 'j', 'idx')}
 
-	const float2 upv = u[idx] + v[idx];
-	f[idx] += imulr(${k0}f * dz, upv);
+	const float2 corr = u[idx] + v[idx] ${'+ x[idx]' if hospat else ''};
+	f[idx] += imulr(${k0}f * dz, corr);
 }
 
 /* Compute the value of the Green's function at a slab with height zoff. */

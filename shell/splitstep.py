@@ -7,7 +7,7 @@ from pyajh.f2py import splitstep
 
 def usage(execname):
 	binfile = os.path.basename(execname)
-	print 'USAGE:', binfile, '[-h] [-a a] [-g g] [-f f] [-s s] [-c c] [-p nx,ny] [-w w] [-d x,y,z,w]', '<src> <infile> <outfile>'
+	print 'USAGE:', binfile, '[-h] [-q] [-a a] [-g g] [-f f] [-s s] [-c c] [-p nx,ny] [-w w] [-d x,y,z,w]', '<src> <infile> <outfile>'
 	print '''
   Using the split-step method, compute the field induced in a contrast
   medium specified in infile by a point source at location src = x,y,z.
@@ -23,6 +23,7 @@ def usage(execname):
   
   OPTIONAL ARGUMENTS:
   -h: Display this message and exit
+  -q: Use high-order spatial corrections to improve accuracy (default: no)
   -a: Specify the width of the Hann attenuating window at each edge (default: 100)
   -f: Specify the incident frequency, f, in MHz (default: 3.0)
   -s: Specify the grid spacing, s, in mm (default: 0.05)
@@ -40,9 +41,10 @@ if __name__ == '__main__':
 	# Store the default parameters
 	a, c, s, f, k0, w = 100, 1.507, 0.05, 3.0, 2 * math.pi, 0.39
 	d, p = [None]*2
+	hospat = False
 	ctx = 0
 
-	optlist, args = getopt.getopt(sys.argv[1:], 'ha:f:s:c:d:p:g:w:')
+	optlist, args = getopt.getopt(sys.argv[1:], 'hqa:f:s:c:d:p:g:w:')
 
 	for opt in optlist:
 		if opt[0] == '-a': a = int(opt[1])
@@ -53,6 +55,7 @@ if __name__ == '__main__':
 		elif opt[0] == '-c': c = float(opt[1])
 		elif opt[0] == '-g': ctx = int(opt[1])
 		elif opt[0] == '-w': w = float(opt[1])
+		elif opt[0] == '-q': hospat = True
 		else:
 			usage(execname)
 			sys.exit(128)
@@ -78,8 +81,8 @@ if __name__ == '__main__':
 	src = tuple(float(s) * f / c for s in args[0].split(','))
 
 	print 'Creating split-step engine... '
-	sse = wavecl.SplitStep(k0, p[0], p[1], h,
-			src=src, d=d, l=a, w=w, context=ctx)
+	sse = wavecl.SplitStep(k0, p[0], p[1], h, src=src,
+			d=d, l=a, w=w, hospat=hospat, context=ctx)
 
 	# Restrict device transfers to the object grid
 	sse.setroi(inmat.shape[:-1])
