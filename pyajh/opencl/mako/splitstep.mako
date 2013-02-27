@@ -231,13 +231,14 @@ __kernel void caxpy(${gfc} z, const float a, ${gfc} x, ${gfc} y) {
 
 /* Given field corrections u, v and x, compute
  * f = f + delta * (u + v + x) for delta = 1j * k0 * dz.
- * The argument x is ignored if null. */
+ * Each of the arguments u, v and x will be ignored if NULL. */
 __kernel void corrfld(${gfc} f, ${gfc} u, ${gfc} v, ${gfc} x, const float dz) {
 	${getindices('i', 'j', 'idx')}
 
+	const float2 uval = (u == 0)? (float2) (0.0f) : u[idx];
+	const float2 vval = (v == 0)? (float2) (0.0f) : v[idx];
 	const float2 xval = (x == 0)? (float2) (0.0f) : x[idx];
-	const float2 corr = u[idx] + v[idx] + xval;
-	f[idx] += imulr(${k0}f * dz, corr);
+	f[idx] += imulr(${k0}f * dz, uval + vval + xval);
 }
 
 /* Compute the value of the Green's function at a slab with height zoff. */

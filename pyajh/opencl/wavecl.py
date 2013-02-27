@@ -45,7 +45,7 @@ class SplineInterpolator(object):
 		self.context = util.grabcontext(context)
 
 		# Build the program for the context
-		t = Template(filename=SplineInterpolator._kernel, output_encoding='ascii')
+		t = Template(filename=self._kernel, output_encoding='ascii')
 		self.prog = cl.Program(self.context, t.render(ntheta = ntheta,
 			nphi = nphi, p = self.precision)).build()
 
@@ -163,7 +163,7 @@ class FarMatrix:
 		self.n, self.dc = n, dc
 
 		# Read the Mako template for the kernel
-		t = Template(filename=FarMatrix._kernel, output_encoding='ascii')
+		t = Template(filename=self._kernel, output_encoding='ascii')
 
 		# Build the program for the context
 		self.prog = cl.Program(self.context, t.render(pts = self.pts,
@@ -270,7 +270,7 @@ class Helmholtz(fdtd.Helmholtz):
 		self.queue = cl.CommandQueue(self.context)
 
 		# Build a Mako template for the source code
-		t = Template(filename=Helmholtz._kernel, output_encoding='ascii')
+		t = Template(filename=self._kernel, output_encoding='ascii')
 
 		# Render the source template for the specific problem
 		# and compile the OpenCL kernels in the program
@@ -368,7 +368,7 @@ class SplitStep(object):
 	_kernel = util.srcpath(__file__, 'mako', 'splitstep.mako')
 
 	def __init__(self, k0, nx, ny, h, src, d = None, l = 10,
-			dz = None, w = 0.32, hospat = False, context = None):
+			dz = None, w = 0.39, propcorr = None, context = None):
 		'''
 		Initialize a split-step engine over an nx-by-ny grid with
 		isotropic step size h. The unitless wave number is k0. The wave
@@ -385,12 +385,22 @@ class SplitStep(object):
 
 		The parameter w (as a multiplier 1 / w**2) governs the
 		high-order spectral cross term.
+
+		If propcorr is specified, it should be a tuple of Booleans of
+		the form (hospec, hospat) that determines whether corrections
+		involving high-order spectral or spatial terms, respectively,
+		are used in the propagator by default. If propcorr is
+		unspecified, both corrections are used.
 		'''
 		# Copy the parameters
 		self.grid = nx, ny
 		self.h, self.k0, self.l = h, k0, l
 		self.w = np.float32(1. / w**2)
-		self.hospat = hospat
+		# Specify the use of corrective terms
+		if propcorr is not None:
+			self.propcorr = tuple(propcorr)
+		else: self.propcorr = (True, True)
+
 		# Set the step length
 		self.dz = dz if dz else h
 
@@ -398,7 +408,7 @@ class SplitStep(object):
 		self.context = util.grabcontext(context)
 
 		# Build the program for the context
-		t = Template(filename=SplitStep._kernel, output_encoding='ascii')
+		t = Template(filename=self._kernel, output_encoding='ascii')
 		src = t.render(grid = self.grid, k0=k0, h=h, src=src, d=d, l=l)
 		self.prog = cl.Program(self.context, src).build()
 
@@ -442,14 +452,19 @@ class SplitStep(object):
 		return [(c - 0.5 * (n - 1.)) * self.h for c, n in zip(cg, g)]
 
 
-	def reset(self):
+	def reset(self, propcorr = None):
 		'''
 		Reset the propagating and backward fields to zero and the prior
 		refractive index buffer to unity.
+
+		If propcorr is provided, it should be tuple as described in the
+		docstring for __init__(). This will change the default behavior
+		of corrective terms in the propagator.
 		'''
+		if propcorr is not None: self.propcorr = tuple(propcorr)
 		grid = self.grid
 		z = np.zeros(grid, dtype=np.complex64)
-		for a in self.fld + self.obj: 
+		for a in self.fld + self.obj:
 			cl.enqueue_copy(self.fwdque, a, z, is_blocking=False)
 
 
@@ -477,7 +492,8 @@ class SplitStep(object):
 		corresponding to an object contrast obj, for the next slab.
 
 		The transmission queue is used for updates to facilitate
-		concurrency with forward propagation algorithms.  '''
+		concurrency with forward propagation algorithms.
+		'''
 		# Transfers occur in the transmission queue for concurrency
 		prog, queue, grid = self.prog, self.recvque, self.grid
 		# Roll the buffer so the next slab is second
@@ -493,26 +509,24 @@ class SplitStep(object):
 		return cur, nxt, evt
 
 
-	def propagate(self, fld = None, dz = None, idx = 0, hospat = None):
+	def propagate(self, fld = None, dz = None, idx = 0, corr = None):
 		'''
 		Propagate the field stored in the device buffer fld (or, if fld
 		is None, the current in-device field at index idx) a step dz
 		(or, if dz is None, the default step size) through the
 		currently represented medium.
 
-		If hospat is provided, it should be a Boolean value that
-		determines whether high-order spatial corrections are employed.
-		If hospat is None, the instance default is used.
+		If corr is not None, it should be a tuple as described in the
+		reset() docstring to control the use of corrective terms in the
+		spectral propagator. Otherwise, the instance default is used.
 		'''
 		prog, grid = self.prog, self.grid
 		fwdque = self.fwdque
-		if hospat is None: hospat = self.hospat
+		hospec, hospat = corr if corr is not None else self.propcorr
 
 		# Point to the field, scratch buffers, and refractive index
 		if fld is None: fld = self.fld[idx]
 		u, v, x = self.scratch
-		# Buffer x is only used for high-order spatial corrections
-		if not hospat: x = None
 		obj = self.obj[0]
 
 		# These constants will be used in field computations
@@ -525,13 +539,14 @@ class SplitStep(object):
 			prog.atteny(fwdque, (grid[0], self.l), None, fld)
 
 		# Multiply, in v, the field by the contrast
-		prog.ctmul(fwdque, grid, None, v, obj, fld)
-		# Apply, in u, the high-order spatial operator if desired
+		if hospec: prog.ctmul(fwdque, grid, None, v, obj, fld)
+		# Multiply, in u, the field by the high-order spatial operator
 		if hospat: prog.hospat(fwdque, grid, None, u, obj, fld)
 
 		# From here, the field should be spectral
 		self.fftplan.execute(fld)
 
+		# Compute high-order spatial corrections or set the buffer to NULL
 		if hospat:
 			# With high-order spatial terms, transform u as well
 			self.fftplan.execute(u)
@@ -544,23 +559,27 @@ class SplitStep(object):
 			self.fftplan.execute(x)
 			# Add x to u to get the high-order spatial corrections
 			prog.caxpy(fwdque, grid, None, x, one, u, x)
+		else: x = None
 
-		# Apply, in u, the high-order spectral operator to the field
-		prog.hospec(fwdque, grid, None, u, fld)
-		# Multiply u by the contrast in the spatial domain
-		self.fftplan.execute(u, inverse=True)
-		prog.ctmul(fwdque, grid, None, u, obj, u)
-		# Let v = v + u / w**2 in the spatial domain
-		prog.caxpy(fwdque, grid, None, v, self.w, u, v)
-		# Transform u and v into the spectral domain
-		self.fftplan.execute(u)
-		self.fftplan.execute(v)
-		# Apply the high-order spectral operator to the new v
-		prog.hospec(fwdque, grid, None, v, v)
+		# Compute high-order spectral corrections or set buffers to NULL
+		if hospec:
+			# Apply, in u, the high-order spectral operator to the field
+			prog.hospec(fwdque, grid, None, u, fld)
+			# Multiply u by the contrast in the spatial domain
+			self.fftplan.execute(u, inverse=True)
+			prog.ctmul(fwdque, grid, None, u, obj, u)
+			# Let v = v + u / w**2 in the spatial domain
+			prog.caxpy(fwdque, grid, None, v, self.w, u, v)
+			# Transform u and v into the spectral domain
+			self.fftplan.execute(u)
+			self.fftplan.execute(v)
+			# Apply the high-order spectral operator to the new v
+			prog.hospec(fwdque, grid, None, v, v)
+		else: u, v = None, None
 
-		# Add all appropriate high-order corrections to the field; x is
-		# None (NULL) unless high-order spatial corrections are used
-		prog.corrfld(fwdque, grid, None, fld, u, v, x, dz)
+		# Add all appropriate high-order corrections to the field
+		if hospat or hospec:
+			prog.corrfld(fwdque, grid, None, fld, u, v, x, dz)
 
 		# Propagate the field through a homogeneous slab
 		prog.propagate(fwdque, grid, None, fld, dz)
@@ -572,7 +591,7 @@ class SplitStep(object):
 		return prog.screen(fwdque, grid, None, fld, obj, dz)
 
 
-	def advance(self, obj, bfld=None, shift=False):
+	def advance(self, obj, bfld=None, shift=False, corr=None, shcorr=None):
 		'''
 		Propagate a field through the current slab and transmit it
 		through an interface with the next slab characterized by object
@@ -589,6 +608,14 @@ class SplitStep(object):
 		The relevant result (either the forward field or the
 		half-shifted combined field) is copied into a device-side
 		buffer for later retrieval and handling.
+
+		If corr is not None, it should be a tuple as specified in the
+		reset() docstring to override the default use of corrective
+		terms in the spectral propagator.
+
+		The argument shcorr is interpreted exactly as corr, but is used
+		instead of corr for the propagation used to shift the field to
+		the center of the slab.
 		'''
 		prog, grid = self.prog, self.grid
 		fwdque, recvque, sendque = self.fwdque, self.recvque, self.sendque
@@ -616,18 +643,18 @@ class SplitStep(object):
 		# Ensure that no prior copy is using the field buffer
 		fwd.sync(fwdque)
 		# Propagate the forward field a whole step on fwdque
-		self.propagate(fwd)
+		self.propagate(fwd, corr=corr)
 
 		if shift:
 			if bfld is not None:
 				# Ensure copy has finished before fwdque resumes
 				bck.sync(fwdque)
 				# Add the forward and backward fields
-				prog.caxpy(fwdque, grid, None, buf, 
+				prog.caxpy(fwdque, grid, None, buf,
 						np.float32(1.), buf, bck)
 			# Propagate the combined field a half step
 			# Save the propagation event for delaying result copies
-			pevt = self.propagate(buf, 0.5 * self.dz)
+			pevt = self.propagate(buf, 0.5 * self.dz, corr=shcorr)
 			# Copy the shifted field into the result buffer
 			# No result sync necessary, all mods occur on sendque
 			evt = cl.enqueue_copy(sendque, self.result, buf, wait_for=[pevt])

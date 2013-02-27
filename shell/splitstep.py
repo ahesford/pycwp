@@ -2,12 +2,11 @@
 
 import numpy as np, math, sys, getopt, os
 from pyajh import mio, wavetools, util, cutil
-from pyajh.opencl import wavecl, BufferedSlices
-from pyajh.f2py import splitstep
+from pyajh.opencl import SplitStep, BufferedSlices
 
 def usage(execname):
 	binfile = os.path.basename(execname)
-	print 'USAGE:', binfile, '[-h] [-q] [-a a] [-g g] [-f f] [-s s] [-c c] [-p nx,ny] [-w w] [-d x,y,z,w]', '<src> <infile> <outfile>'
+	print 'USAGE:', binfile, '[-h] [-q q] [-p p] [-a a] [-g g] [-f f] [-s s] [-c c] [-e nx,ny] [-w w] [-d x,y,z,w]', '<src> <infile> <outfile>'
 	print '''
   Using the split-step method, compute the field induced in a contrast
   medium specified in infile by a point source at location src = x,y,z.
@@ -20,10 +19,16 @@ def usage(execname):
 
   The computational domain is padded to the next larger power of 2 for
   artificial attenuation.
+
+  Computations happen in three passes: a forward pass through the medium, a
+  backward pass to pick up backward scatter, and a third pass (computed along
+  with the second pass) to shift the fields in each slice to the center for
+  comparison to reference methods.
   
   OPTIONAL ARGUMENTS:
   -h: Display this message and exit
-  -q: Use high-order spatial corrections to improve accuracy (default: no)
+  -q: Use high-order spatial terms in the first q passes (default: 0)
+  -p: Use high-order spectral terms in the first p passes (default: 2)
   -a: Specify the width of the Hann attenuating window at each edge (default: 100)
   -f: Specify the incident frequency, f, in MHz (default: 3.0)
   -s: Specify the grid spacing, s, in mm (default: 0.05)
@@ -40,22 +45,25 @@ if __name__ == '__main__':
 
 	# Store the default parameters
 	a, c, s, f, k0, w = 100, 1.507, 0.05, 3.0, 2 * math.pi, 0.39
-	d, p = [None]*2
-	hospat = False
+	d, dom = [None]*2
+	# Determine the number of slabs that use high-order corrections
+	hospat, hospec = 0, 2
+
 	ctx = 0
 
-	optlist, args = getopt.getopt(sys.argv[1:], 'hqa:f:s:c:d:p:g:w:')
+	optlist, args = getopt.getopt(sys.argv[1:], 'hq:a:f:s:c:d:p:g:w:e:')
 
 	for opt in optlist:
 		if opt[0] == '-a': a = int(opt[1])
 		elif opt[0] == '-d': d = [float(ds) for ds in opt[1].split(',')]
-		elif opt[0] == '-p': p = [int(ps) for ps in opt[1].split(',')]
+		elif opt[0] == '-e': dom = [int(ps) for ps in opt[1].split(',')]
 		elif opt[0] == '-f': f = float(opt[1])
 		elif opt[0] == '-s': s = float(opt[1])
 		elif opt[0] == '-c': c = float(opt[1])
 		elif opt[0] == '-g': ctx = int(opt[1])
 		elif opt[0] == '-w': w = float(opt[1])
-		elif opt[0] == '-q': hospat = True
+		elif opt[0] == '-q': hospat = int(opt[1])
+		elif opt[0] == '-p': hospec = int(opt[1])
 		else:
 			usage(execname)
 			sys.exit(128)
@@ -73,16 +81,16 @@ if __name__ == '__main__':
 	# Set up a slice-wise input reader
 	inmat = mio.readbmat(args[1])
 	# Automatically pad the domain, if necessary
-	if p is None: p = [cutil.ceilpow2(g) for g in inmat.shape[:-1]]
+	if dom is None: dom = [cutil.ceilpow2(g) for g in inmat.shape[:-1]]
 
-	print 'Computing on expanded grid', p
+	print 'Computing on expanded grid', dom
 
 	# Grab the source location in wavelengths
 	src = tuple(float(s) * f / c for s in args[0].split(','))
 
 	print 'Creating split-step engine... '
-	sse = wavecl.SplitStep(k0, p[0], p[1], h, src=src,
-			d=d, l=a, w=w, hospat=hospat, context=ctx)
+	sse = SplitStep(k0, dom[0], dom[1], h, src=src, d=d, l=a, w=w, 
+			propcorr=(hospec > 0, hospat > 0), context=ctx)
 
 	# Restrict device transfers to the object grid
 	sse.setroi(inmat.shape[:-1])
@@ -92,10 +100,10 @@ if __name__ == '__main__':
 
 	# Augment the grid with the third (extended) dimension
 	# An extra slice is required to turn around the field
-	p += [inmat.shape[-1] + 1]
+	dom = list(inmat.shape[:-1]) + [inmat.shape[-1] + 1]
 
 	# Create a progress bar to display computation progress
-	bar = util.ProgressBar([0, p[-1]], width=50)
+	bar = util.ProgressBar([0, dom[-1]], width=50)
 
 	# Compute the initial forward-traveling field
 	sse.setincident(zoff(inmat.shape[-1] + 0.5))
@@ -105,7 +113,7 @@ if __name__ == '__main__':
 	util.printflush(str(bar) + ' (forward) \r')
 
 	# Create an empty array to store the forward field
-	fmat = np.empty(list(inmat.shape[:-1]) + p[-1:], dtype=inmat.dtype, order='F')
+	fmat = np.empty(dom, dtype=inmat.dtype, order='F')
 
 	# Create buffered slice objects for the contrast and forward fields
 	obj = BufferedSlices(inmat, 5, reversed=True, context=sse.context)
@@ -119,7 +127,7 @@ if __name__ == '__main__':
 	fbuf.start()
 
 	# Propagate the forward field through each slice
-	for idx in reversed(range(p[-1])):
+	for idx in reversed(range(dom[-1])):
 		# Advance and write the forward-traveling field
 		sse.advance(obj.getslice())
 		# Copy the device result buffer to the host queue
@@ -146,8 +154,9 @@ if __name__ == '__main__':
 	fbuf = BufferedSlices(fmat, 5, reversed=True, context=sse.context)
 	fbuf.start()
 
-	# Reset progress bar and propagating field
-	sse.reset()
+	# Reset the split-step state and change the default corrective terms
+	sse.reset((hospec > 1, hospat > 1))
+	# Reset and reprint the progress bar
 	bar.reset()
 	util.printflush(str(bar) + ' (backward)\r')
 
@@ -157,12 +166,15 @@ if __name__ == '__main__':
 	obuf.frontload(np.empty_like(zeroslab))
 	obuf.start()
 
+	# Determine the propagator terms to include in the shifting pass
+	shcorr = (hospec > 2, hospat > 2)
+
 	# Propagate the reverse field through each slice
-	for idx in range(p[-1]):
+	for idx in range(dom[-1]):
 		# Advance the backward traveling field
 		# This requires the forward field in the slab
 		# Also compute a half-shifted, combined field in the result buffer
-		sse.advance(obj.getslice(), fbuf.getslice(), True)
+		sse.advance(obj.getslice(), fbuf.getslice(), True, shcorr=shcorr)
 		# Copy the device result buffer to the host queue
 		resevt = sse.getresult(obuf.getslice())
 		# Advance the slice buffers
