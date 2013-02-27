@@ -399,8 +399,7 @@ class SplitStep(object):
 
 		# Build the program for the context
 		t = Template(filename=SplitStep._kernel, output_encoding='ascii')
-		src = t.render(grid = self.grid, k0=k0, h=h,
-				src=src, d=d, l=l, hospat=hospat)
+		src = t.render(grid = self.grid, k0=k0, h=h, src=src, d=d, l=l)
 		self.prog = cl.Program(self.context, src).build()
 
 		# Create a command queue for forward propagation calculations
@@ -420,7 +419,7 @@ class SplitStep(object):
 		# Buffers to store the propagating (twice) and backward fields
 		self.fld = [newbuffer() for i in range(3)]
 		# Scratch space used during computations
-		self.scratch = [newbuffer() for i in range(3 if hospat else 2)]
+		self.scratch = [newbuffer() for i in range(3)]
 		# The index of refraction gets two buffers for transmission
 		self.obj = [newbuffer() for i in range(2)]
 		# Initialize buffer to hold results of advance()
@@ -494,20 +493,26 @@ class SplitStep(object):
 		return cur, nxt, evt
 
 
-	def propagate(self, fld = None, dz = None, idx = 0):
+	def propagate(self, fld = None, dz = None, idx = 0, hospat = None):
 		'''
 		Propagate the field stored in the device buffer fld (or, if fld
 		is None, the current in-device field at index idx) a step dz
 		(or, if dz is None, the default step size) through the
 		currently represented medium.
+
+		If hospat is provided, it should be a Boolean value that
+		determines whether high-order spatial corrections are employed.
+		If hospat is None, the instance default is used.
 		'''
 		prog, grid = self.prog, self.grid
 		fwdque = self.fwdque
+		if hospat is None: hospat = self.hospat
 
 		# Point to the field, scratch buffers, and refractive index
 		if fld is None: fld = self.fld[idx]
-		if self.hospat: u, v, x = self.scratch
-		else: u, v = self.scratch
+		u, v, x = self.scratch
+		# Buffer x is only used for high-order spatial corrections
+		if not hospat: x = None
 		obj = self.obj[0]
 
 		# These constants will be used in field computations
@@ -522,12 +527,12 @@ class SplitStep(object):
 		# Multiply, in v, the field by the contrast
 		prog.ctmul(fwdque, grid, None, v, obj, fld)
 		# Apply, in u, the high-order spatial operator if desired
-		if self.hospat: prog.hospat(fwdque, grid, None, u, obj, fld)
+		if hospat: prog.hospat(fwdque, grid, None, u, obj, fld)
 
 		# From here, the field should be spectral
 		self.fftplan.execute(fld)
 
-		if self.hospat:
+		if hospat:
 			# With high-order spatial terms, transform u as well
 			self.fftplan.execute(u)
 			# Compute the scaled, spectral Laplacians of u and the field (in x)
@@ -553,9 +558,9 @@ class SplitStep(object):
 		# Apply the high-order spectral operator to the new v
 		prog.hospec(fwdque, grid, None, v, v)
 
-		# Add all appropriate high-order corrections to the field
-		if self.hospat: prog.corrfld(fwdque, grid, None, fld, x, u, v, dz)
-		else: prog.corrfld(fwdque, grid, None, fld, u, v, dz)
+		# Add all appropriate high-order corrections to the field; x is
+		# None (NULL) unless high-order spatial corrections are used
+		prog.corrfld(fwdque, grid, None, fld, u, v, x, dz)
 
 		# Propagate the field through a homogeneous slab
 		prog.propagate(fwdque, grid, None, fld, dz)
