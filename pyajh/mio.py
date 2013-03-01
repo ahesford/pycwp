@@ -250,6 +250,13 @@ class Slicer(object):
 		self._backer.close()
 
 
+	def __len__(self):
+		'''
+		Return the number of slices.
+		'''
+		return self.shape[-1]
+
+
 	def __iter__(self):
 		'''
 		Create a generator to read each desired slice in succession.
@@ -259,8 +266,8 @@ class Slicer(object):
 		self.setslice(0)
 
 		# Yield each slice along the last index
-		for idx in range(self.shape[-1]):
-			yield (idx, self.readslice())
+		for idx in range(len(self)):
+			yield (idx, self[idx])
 
 		return
 

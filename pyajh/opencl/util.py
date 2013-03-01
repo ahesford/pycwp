@@ -1,6 +1,6 @@
 "General-purpose OpenCL routines."
 import pyopencl as cl, os.path as path, numpy as np, time
-from threading import Thread, Condition, ThreadError
+from threading import Thread, Condition, RLock
 from itertools import chain
 from .. import cutil
 
@@ -288,8 +288,11 @@ class BufferedSlices(Thread):
 			# Otherwise, add the buffers to the host queue
 			else: self._readyq.append(record)
 
-		# This condition watches for queue changes
-		self._qwatch = Condition()
+		# Two conditions watch item ready and recycle events
+		# The lock is shared to ensure queue alterations are atomic
+		queuelock = RLock()
+		self._qrecycle = Condition(queuelock)
+		self._qwatch = Condition(queuelock)
 		# Allocate lists of frontloaded and backloaded slices
 		self._frontload = []
 		self._backload = []
@@ -301,12 +304,13 @@ class BufferedSlices(Thread):
 		'''
 		Kill the thread by clearing both buffers.
 		'''
-		with self._qwatch:
+		with self._qwatch, self._qrecycle:
 			self._readyq = []
 			self._idleq = []
 			self._activeq = []
-			# Notify the parent thread that something has happened
+			# Notify all watching threads that the queue has changed
 			self._qwatch.notifyAll()
+			self._qrecycle.notifyAll()
 		self.join()
 
 
@@ -315,14 +319,6 @@ class BufferedSlices(Thread):
 		Return the depth of the queue.
 		'''
 		return len(self._readyq) + len(self._idleq) + len(self._activeq)
-
-
-	def queueavail(self):
-		'''
-		Return the depth of the ready and idle queues. This is the
-		number of items ready to be manipulated or flushed/filled.
-		'''
-		return len(self._readyq) + len(self._idleq)
 
 
 	def flush(self):
@@ -340,11 +336,11 @@ class BufferedSlices(Thread):
 
 		This function blocks until a buffer is available.
 		'''
-		# Acquire the access ready condition
+		# Lock the queue
 		with self._qwatch:
-			# As long as the queue is working, wait until an item is ready
-			# To avoid deadlocks, waiting stops if all buffers are "active"
-			while self.queueavail() > 0 and len(self._readyq) < 1:
+			# Wait until an item is ready as long as there is
+			# a non-empty idle queue
+			while len(self._idleq) > 0 and len(self._readyq) < 1:
 				self._qwatch.wait()
 			try:
 				# Move the ready item to the active queue
@@ -354,10 +350,6 @@ class BufferedSlices(Thread):
 				return buf[1]
 			except IndexError:
 				raise ValueError('No buffered slice to return')
-			# Even if no change was possible (because an all-active queue
-			# was just marked for flush), notify others because this thread
-			# already consumed a notify meant for another task.
-			finally: self._qwatch.notify()
 
 
 	def nextslice(self, evt=None):
@@ -371,8 +363,8 @@ class BufferedSlices(Thread):
 		It is not an error to ask for the next slice if the host queue
 		is empty.
 		'''
-		# Acquire the flush/fill notification condition
-		with self._qwatch:
+		# Lock the queue
+		with self._qrecycle:
 			try:
 				# Grab the head of the active queue
 				buf = self._activeq.pop(0)
@@ -381,7 +373,7 @@ class BufferedSlices(Thread):
 				# Put the record at the end of the idle queue
 				self._idleq.append(buf)
 				# Notify any watchers of the change
-				self._qwatch.notify()
+				self._qrecycle.notify()
 			except IndexError: pass
 
 
@@ -433,11 +425,11 @@ class BufferedSlices(Thread):
 
 		# Loop through all slices in the associated array
 		for idx, av in enumerate(iter):
-			# Acquire the flush condition
-			with self._qwatch:
-				# Wait until an item is available for action
+			# Lock the queue
+			with self._qrecycle:
+				# Wait until an item is available for recycling
 				while self.queuedepth() > 0 and len(self._idleq) < 1:
-					self._qwatch.wait()
+					self._qrecycle.wait()
 	
 				# Give up if the queue has been killed
 				# All others have been notified
@@ -458,5 +450,5 @@ class BufferedSlices(Thread):
 				buf = (buf[0], buf[1], None)
 				# Return the event back to the ready queue
 				self._readyq.append(buf)
-				# Notify anybody watching for ready items
-				self._qwatch.notify()
+				# Notify all watchers for ready events
+				with self._qwatch: self._qwatch.notifyAll()
