@@ -280,13 +280,6 @@ class Slicer(object):
 		return
 
 
-	def clobber(self):
-		'''
-		Truncate the backer to zero length.
-		'''
-		self._backer.truncate(0)
-
-
 	def setslice(self, i):
 		'''
 		Point the file to the start of slice i.

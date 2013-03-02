@@ -1,6 +1,6 @@
 "General-purpose OpenCL routines."
 import pyopencl as cl, os.path as path, numpy as np, time
-from threading import Thread, Condition, RLock
+from threading import Thread, Condition, RLock, ThreadError
 from itertools import chain
 from .. import cutil
 
@@ -263,26 +263,25 @@ class BufferedSlices(Thread):
 	A device context of None may also be provided to only allocate
 	host-side buffers.
 	'''
-	def __init__(self, array, nbufs, read=True, reversed=False, context=None):
+	def __init__(self, backer, nbufs, read=True, context=None):
 		'''
 		Allocate the desired number of slice buffers in a device
 		context. Hopefully these will correspond to host-side "pinned"
 		memory to allow for rapid copies between host and device.
 		Associate the buffers with successive slices of the specified
-		Numpy array, either reading (if read=True) from the array to
-		the device or writing (if read=False) from the device to the
-		array. If reversed=True, slices of array are processed in
-		reverse order.
+		Slicer object backer, either reading (if read=True) from the
+		backer to the device or writing (if read=False) from the device
+		to the backer.
 
 		If context is None, allocate host-side buffers only.
 
-		The array (and its slices) are always interpreted in FORTRAN
+		The backer (and its slices) are always interpreted in FORTRAN
 		order.
 		'''
 		# Call the Thread constructor
 		Thread.__init__(self)
-		# Reference the Numpy array and the device context
-		self._array = array
+		# Reference the backer and the device context
+		self._backer = backer
 		self._context = context
 		# Create the ready, idle, and active queues
 		self._idleq = []
@@ -290,8 +289,6 @@ class BufferedSlices(Thread):
 		self._readyq = []
 		# Record whether the mode is read-write
 		self._read = read
-		# Record whether array access is reversed
-		self._reversed = reversed
 
 		# Set some default memory flags depending on the read/write mode
 		if read:
@@ -307,11 +304,11 @@ class BufferedSlices(Thread):
 		# Allocate the device and host buffer pairs
 		for b in range(nbufs):
 			if context is not None:
-				dbuf, hbuf = mapbuffer(queue, array.shape[:-1],
-						array.dtype, dflags, hflags)
+				dbuf, hbuf = mapbuffer(queue, backer.shape[:-1],
+						backer.dtype, dflags, hflags)
 			else:
 				dbuf = None
-				hbuf = np.zeros(array.shape[:-1], array.dtype, order='F')
+				hbuf = np.zeros(backer.shape[:-1], backer.dtype, order='F')
 			# Store the device and host buffers and a placeholder for an
 			# event that will block until flushes or fills can occur
 			record = (dbuf, hbuf, None)
@@ -328,6 +325,9 @@ class BufferedSlices(Thread):
 		# Mark this thread a daemon to allow it to die on exit
 		self.daemon = True
 
+		# By default, iterate through the backer in order
+		self._iter = range(len(self._backer))
+
 
 	def kill(self):
 		'''
@@ -341,6 +341,16 @@ class BufferedSlices(Thread):
 			self._qwatch.notifyAll()
 			self._qrecycle.notifyAll()
 		self.join()
+
+
+	def setiter(self, iter):
+		'''
+		Use the iterator iter to step through slices in the backer,
+		instead of the default forward sequential iterator.
+		'''
+		if self.isAlive():
+			raise ThreadError('Cannot set iterator while thread is running')
+		self._iter = iter
 
 
 	def queuedepth(self):
@@ -409,17 +419,13 @@ class BufferedSlices(Thread):
 	def run(self):
 		'''
 		Whenever there are items in the pending queue, either write
-		them to or read them from the associated array in order.
+		them to or read them from the associated backer in order.
 		'''
-		iter = range(len(self._array))
-		if self._reversed: iter = reversed(iter)
+		# Create a list of slice objects to refer to one backer slice
+		grid = [slice(None) for d in range(len(self._backer.shape) - 1)]
 
-		# Create a list of slice objects to refer to one array slice
-		grid = [slice(None) for d in range(len(self._array.shape) - 1)]
-
-
-		# Loop through all slices in the associated array
-		for idx in iter:
+		# Loop through the desired slices in the associated backer
+		for idx in self._iter:
 			# Lock the queue
 			with self._qrecycle:
 				# Wait until an item is available for recycling
@@ -437,8 +443,8 @@ class BufferedSlices(Thread):
 				except AttributeError: pass
 	
 				# Process the idle event
-				if self._read: buf[1][grid] = self._array[idx]
-				else: self._array[idx] = buf[1]
+				if self._read: buf[1][grid] = self._backer[idx]
+				else: self._backer[idx] = buf[1]
 
 				# Kill the wait event for recycling
 				buf = (buf[0], buf[1], None)
