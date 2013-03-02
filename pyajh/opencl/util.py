@@ -31,6 +31,44 @@ def grabcontext(context = None):
 	return cl.Context(devices=[cl.get_platforms()[0].get_devices()[context]])
 
 
+def mapbuffer(queue, shape, dtype, dflags = cl.mem_flags.ALLOC_HOST_PTR,
+		hflags = cl.map_flags.READ | cl.map_flags.WRITE, order='F'):
+	'''
+	Create a device buffer in the context associated with queue that
+	corresponds to a Numpy array of the specified shape and dtype. By
+	default, the device buffer and host map may be both read and written.
+	All accepted flags arguments to pyopencl.Buffer and
+	pyopencl.enqueue_map_buffer may be passed in dflags and hflags,
+	respectively. Note that dflags will ALWAYS be ORed with
+	CL_MEM_ALLOC_HOST_PTR to ensure that the memory is mappable. Some
+	combinations of dflags (like CL_MEM_USE_HOST_PTR) may therefore be
+	incompatible.
+
+	If queue is a device context instead of a queue, a new queue will be
+	created for the buffer map.
+
+	The return is a tuple containing the Buffer object and the Numpy array
+	that maps to the buffer.
+	'''
+	# Make sure queue is a CommandQueue, otherwise treat it as a context
+	try: context = queue.context
+	except AttributeError:
+		context = queue
+		queue = cl.CommandQueue(context)
+
+	# Figure out the desired number of bytes in the map
+	nbytes = np.dtype(dtype).type().nbytes * cutil.prod(shape)
+	# Ensure that the device flags always contain CL_MEM_ALLOC_HOST_PTR
+	dflags |= cl.mem_flags.ALLOC_HOST_PTR
+	# Create the device buffer
+	dbuf = cl.Buffer(context, dflags, size=nbytes)
+	# Map the device buffer to the host with no offset
+	hbuf, evt = cl.enqueue_map_buffer(queue, dbuf, hflags, 0, shape, dtype, order)
+	# Ensure that the enqueued mapping has finished
+	evt.wait()
+	return dbuf, hbuf
+
+
 class SyncBuffer(cl.Buffer):
 	'''
 	This extends a standard PyOpenCL Buffer object by providing an attached
@@ -113,7 +151,7 @@ class RectangularTransfer(object):
 		self.dtype = dtype
 
 		# Grab the number of bytes in each device record
-		byterec = dtype().nbytes
+		byterec = np.dtype(dtype).type().nbytes
 
 		# Compute the transfer region and buffer and host origins
 		region, buffer_origin, host_origin = cutil.commongrid(bufshape, hostshape)
@@ -255,17 +293,12 @@ class BufferedSlices(Thread):
 		# Record whether array access is reversed
 		self._reversed = reversed
 
-		# Create a list of slice objects to refer to one array slice
-		self._grid = [slice(None) for d in range(len(array.shape) - 1)]
-
-		# Figure the size of the buffers to allocate
-		nbytes = array[self._grid + [0]].nbytes
 		# Set some default memory flags depending on the read/write mode
 		if read:
-			dflags = cl.mem_flags.READ_ONLY | cl.mem_flags.ALLOC_HOST_PTR
+			dflags = cl.mem_flags.READ_ONLY
 			hflags = cl.map_flags.WRITE
 		else:
-			dflags = cl.mem_flags.WRITE_ONLY | cl.mem_flags.ALLOC_HOST_PTR
+			dflags = cl.mem_flags.WRITE_ONLY
 			hflags = cl.map_flags.READ
 
 		# Create a queue for mapping the device memory
@@ -274,9 +307,8 @@ class BufferedSlices(Thread):
 		# Allocate the device and host buffer pairs
 		for b in range(nbufs):
 			if context is not None:
-				dbuf = cl.Buffer(context, dflags, size=nbytes)
-				hbuf = cl.enqueue_map_buffer(queue, dbuf, hflags, 0,
-						array.shape[:-1], array.dtype, order='F')[0]
+				dbuf, hbuf = mapbuffer(queue, array.shape[:-1],
+						array.dtype, dflags, hflags)
 			else:
 				dbuf = None
 				hbuf = np.zeros(array.shape[:-1], array.dtype, order='F')
@@ -293,9 +325,6 @@ class BufferedSlices(Thread):
 		queuelock = RLock()
 		self._qrecycle = Condition(queuelock)
 		self._qwatch = Condition(queuelock)
-		# Allocate lists of frontloaded and backloaded slices
-		self._frontload = []
-		self._backload = []
 		# Mark this thread a daemon to allow it to die on exit
 		self.daemon = True
 
@@ -349,7 +378,7 @@ class BufferedSlices(Thread):
 				# Return the host buffer for the item
 				return buf[1]
 			except IndexError:
-				raise ValueError('No buffered slice to return')
+				raise IndexError('No remaining slices')
 
 
 	def nextslice(self, evt=None):
@@ -377,54 +406,20 @@ class BufferedSlices(Thread):
 			except IndexError: pass
 
 
-	def frontload(self, sl):
-		'''
-		Act as if the array sl is a slice preceding the first slice in
-		the backer array. The array must have the same dimensions and
-		datatype as one slice of the backer.
-
-		These calls may be chained to produce multiple frontloaded
-		slices.
-		'''
-		if sl.dtype != self._array.dtype:
-			raise TypeError('Extra slice is not type-compatible with backer')
-		if list(sl.shape) != list(self._array.shape[:-1]):
-			raise ValueError('Extra slice shape is not compatible with backer')
-		# Note that this has to be transposed because the array
-		# iterator is transposed for easy indexing
-		self._frontload.append(sl.T)
-
-
-	def backload(self, sl):
-		'''
-		Act as if the array sl is a slice following the last slice in
-		the backer array. The array must have the same dimensions and
-		datatype as one slice of the backer.
-
-		These calls may be chained to produce multiple backloaded
-		slices.
-		'''
-		if sl.dtype != self._array.dtype:
-			raise TypeError('Extra slice is not type-compatible with backer')
-		if list(sl.shape) != list(self._array.shape[:-1]):
-			raise ValueError('Extra slice shape is not compatible with backer')
-		# Note that this has to be transposed because the array
-		# iterator is transposed for easy indexing
-		self._backload.append(sl.T)
-
-
 	def run(self):
 		'''
 		Whenever there are items in the pending queue, either write
 		them to or read them from the associated array in order.
 		'''
-		if self._reversed: iter = reversed(self._array.T)
-		else: iter = self._array.T
+		iter = range(len(self._array))
+		if self._reversed: iter = reversed(iter)
 
-		iter = chain(self._frontload, iter, self._backload)
+		# Create a list of slice objects to refer to one array slice
+		grid = [slice(None) for d in range(len(self._array.shape) - 1)]
+
 
 		# Loop through all slices in the associated array
-		for idx, av in enumerate(iter):
+		for idx in iter:
 			# Lock the queue
 			with self._qrecycle:
 				# Wait until an item is available for recycling
@@ -432,7 +427,6 @@ class BufferedSlices(Thread):
 					self._qrecycle.wait()
 	
 				# Give up if the queue has been killed
-				# All others have been notified
 				if self.queuedepth() < 1: break
 	
 				# Grab the first idle object, existence guaranteed
@@ -443,12 +437,25 @@ class BufferedSlices(Thread):
 				except AttributeError: pass
 	
 				# Process the idle event
-				if self._read: buf[1][self._grid] = av.T
-				else: av.T[self._grid] = buf[1]
+				if self._read: buf[1][grid] = self._array[idx]
+				else: self._array[idx] = buf[1]
 
 				# Kill the wait event for recycling
 				buf = (buf[0], buf[1], None)
 				# Return the event back to the ready queue
 				self._readyq.append(buf)
 				# Notify all watchers for ready events
+				with self._qwatch: self._qwatch.notifyAll()
+
+		# Stay alive to retire any outstanding recylced events
+		while True:
+			with self._qrecycle:
+				# Wait until an item is available for recycling
+				while self.queuedepth() > 0 and len(self._idleq) < 1:
+					self._qrecycle.wait()
+				# Give up if the queue has been killed
+				if self.queuedepth() < 1: break
+				# Throw away the idle event, existence guaranteed
+				self._idleq.pop(0)
+				# Notify all watchers that the queue has changed
 				with self._qwatch: self._qwatch.notifyAll()

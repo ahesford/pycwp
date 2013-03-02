@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import numpy as np, math, sys, getopt, os
+from tempfile import TemporaryFile
 from pyajh import mio, wavetools, util, cutil
 from pyajh.opencl import SplitStep, BufferedSlices
 
@@ -79,7 +80,7 @@ if __name__ == '__main__':
 	print 'Step size in wavelengths is %g, Hann window thickness is %d' % (h, a)
 
 	# Set up a slice-wise input reader
-	inmat = mio.readbmat(args[1])
+	inmat = mio.Slicer(args[1])
 	# Automatically pad the domain, if necessary
 	if dom is None: dom = [cutil.ceilpow2(g) for g in inmat.shape[:-1]]
 
@@ -113,13 +114,12 @@ if __name__ == '__main__':
 	util.printflush(str(bar) + ' (forward) \r')
 
 	# Create an empty array to store the forward field
-	fmat = np.empty(dom, dtype=inmat.dtype, order='F')
+	fmat = mio.Slicer(TemporaryFile(dir='.'), dom, inmat.dtype, True)
 
+	# An empty slab is needed at the end of the medium
+	zeroslab = np.zeros(inmat.shape[:-1], inmat.dtype, order='F')
 	# Create buffered slice objects for the contrast and forward fields
 	obj = BufferedSlices(inmat, 5, reversed=True, context=sse.context)
-	# An empty slab is needed at the end of the contrast
-	zeroslab = np.zeros(inmat.shape[:-1], np.complex64, order='F')
-	obj.backload(zeroslab)
 	obj.start()
 
 	# The forward field buffer does not require pinned memory
@@ -128,8 +128,12 @@ if __name__ == '__main__':
 
 	# Propagate the forward field through each slice
 	for idx in reversed(range(dom[-1])):
+		# Try to grab the next slice, or reuse the prior buffer
+		# to write a bunch of zeros
+		try: obval = obj.getslice()
+		except IndexError: obval[:,:] = zeroslab
 		# Advance and write the forward-traveling field
-		sse.advance(obj.getslice())
+		sse.advance(obval)
 		# Copy the device result buffer to the host queue
 		resevt = sse.getresult(fbuf.getslice())
 		# Advance the slice buffers
@@ -143,8 +147,6 @@ if __name__ == '__main__':
 	# Recreate the object buffer for backward propagation
 	obj.kill()
 	obj = BufferedSlices(inmat, 5, context=sse.context)
-	# Again, an empty slab is needed at the far end of the contrast
-	obj.backload(zeroslab)
 	obj.start()
 
 	# Flush the forward field buffer to ensure consistency
@@ -161,9 +163,8 @@ if __name__ == '__main__':
 	util.printflush(str(bar) + ' (backward)\r')
 
 	# Allocate a memory-mapped output array and an associated buffer
-	outmat = mio.writemmap(args[2], inmat.shape, inmat.dtype)
+	outmat = mio.Slicer(args[2], inmat.shape, inmat.dtype, True)
 	obuf = BufferedSlices(outmat, 5, read=False, context=sse.context)
-	obuf.frontload(np.empty_like(zeroslab))
 	obuf.start()
 
 	# Determine the propagator terms to include in the shifting pass
@@ -171,17 +172,22 @@ if __name__ == '__main__':
 
 	# Propagate the reverse field through each slice
 	for idx in range(dom[-1]):
+		# Try to grab the next slice, or reuse the prior buffer
+		try: obval = obj.getslice()
+		except IndexError: obval[:,:] = zeroslab
 		# Advance the backward traveling field
 		# This requires the forward field in the slab
 		# Also compute a half-shifted, combined field in the result buffer
-		sse.advance(obj.getslice(), fbuf.getslice(), True, shcorr=shcorr)
+		sse.advance(obval, fbuf.getslice(), True, shcorr=shcorr)
 		# Copy the device result buffer to the host queue
-		resevt = sse.getresult(obuf.getslice())
+		# The first slab is outside the domain and is not recorded
+		if idx > 0:
+			resevt = sse.getresult(obuf.getslice())
+			# Tell the buffer to wait until the copy is finished
+			obuf.nextslice(resevt)
 		# Advance the slice buffers
 		obj.nextslice()
 		fbuf.nextslice()
-		# Tell the buffer to wait until the copy is finished
-		obuf.nextslice(resevt)
 		# Increment and print the progress bar
 		bar.increment()
 		util.printflush(str(bar) + ' (backward)\r')
@@ -195,3 +201,6 @@ if __name__ == '__main__':
 	# Flush and kill the output buffer
 	obuf.flush()
 	obuf.kill()
+
+	# Truncate the file to kill pending disk flushes
+	fmat.clobber()

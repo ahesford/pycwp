@@ -27,8 +27,11 @@ def getmattype (infile, dim = None, dtype = None):
 	hdr = np.fromfile(infile, dtype=np.int32, count=maxdim+2)
 
 	# Try to limit the pool of auto-sensed data types, if possible
-	try: datatypes = { dtype().nbytes : dtype }
-	except: datatypes = { np.float32().nbytes : np.float32,
+	# Ensure that the datatype is a Numpy type
+	if dtype is not None:
+		dtype = np.dtype(dtype).type
+		datatypes = { dtype().nbytes : dtype }
+	else: datatypes = { np.float32().nbytes : np.float32,
 			np.complex64().nbytes : np.complex64,
 			np.complex128().nbytes : np.complex128 }
 
@@ -63,6 +66,10 @@ def getmattype (infile, dim = None, dtype = None):
 
 	# Seek to the end of the header
 	infile.seek(hdrlen * np.int32().nbytes)
+
+	# Ensure that the type and shape are compatible with array types
+	dtype = np.dtype(dtype)
+	matsize = tuple(int(d) for d in matsize)
 
 	# Return the matrix size and data type
 	return (matsize, dtype)
@@ -122,8 +129,8 @@ def readbmat (infile, dim = None, dtype = None):
 		matsize, dtype = getmattype(infile, dim, dtype)
 
 		# Create the read-only memory map and close the source file
-		datamap = np.memmap(infile, offset=infile.tell(), mode='c',
-				dtype=dtype, shape=tuple(matsize), order='F')
+		datamap = np.memmap(infile, offset=infile.tell(),
+				mode='c', dtype=dtype, shape=matsize, order='F')
 	return datamap
 
 
@@ -197,21 +204,22 @@ class Slicer(object):
 			self._created = True
 
 			# Copy the matrix shape and data type
-			self.shape = dim[:]
-			self.dtype = dtype
+			self.shape = tuple(int(d) for d in dim)
+			self.dtype = np.dtype(dtype)
 
 			# Open the file and write the header
 			np.array(self.shape, dtype=np.int32).tofile(f)
 
 			# Set the desired size of the output
-			f.truncate(f.tell() + cutil.prod(self.shape) * self.dtype().nbytes)
+			nbytes = cutil.prod(self.shape) * self.dtype.type().nbytes
+			f.truncate(f.tell() + nbytes)
 
 		# Copy the backer file
 		self._backer = f
 
 		# The number of elements and bytes per slice
 		self.nelts = cutil.prod(self.shape[:-1])
-		self.slicebytes = self.nelts * self.dtype().nbytes
+		self.slicebytes = self.nelts * self.dtype.type().nbytes
 
 		# Store the start of the data block
 		self.fstart = self._backer.tell()
@@ -272,6 +280,13 @@ class Slicer(object):
 		return
 
 
+	def clobber(self):
+		'''
+		Truncate the backer to zero length.
+		'''
+		self._backer.truncate(0)
+
+
 	def setslice(self, i):
 		'''
 		Point the file to the start of slice i.
@@ -309,7 +324,7 @@ class Slicer(object):
 			raise ValueError('Slice size does not agree with output')
 
 		# Convert the data type if necessary
-		if np.dtype(self.dtype) != sflat.dtype:
+		if self.dtype != sflat.dtype:
 			sflat = sflat.astype(self.dtype)
 		sflat.tofile(self._backer)
 		self._backer.flush()
