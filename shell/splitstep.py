@@ -119,7 +119,7 @@ if __name__ == '__main__':
 	# An empty slab is needed for propagation beyond the medium
 	zeroslab = mapbuffer(sse.context, inmat.shape[:-1], inmat.dtype,
 			cl.mem_flags.READ_ONLY, cl.map_flags.WRITE)[1]
-	zeroslab[:,:] = np.zeros(inmat.shape[:-1], inmat.dtype, order='F')
+	zeroslab.fill(0.)
 	# Read the contrast in reverse
 	obj = BufferedSlices(inmat, 5, context=sse.context)
 	obj.setiter(reversed(range(len(inmat))))
@@ -131,8 +131,7 @@ if __name__ == '__main__':
 
 	# Propagate the forward field through each slice
 	for idx in reversed(range(dom[-1])):
-		# Try to grab the next slice, or reuse the prior buffer
-		# to write a bunch of zeros
+		# Try to grab the next contrast, or default to zero
 		try: obval = obj.getslice()
 		except IndexError: obval = zeroslab
 		# Advance and write the forward-traveling field
@@ -179,7 +178,7 @@ if __name__ == '__main__':
 
 	# Propagate the reverse field through each slice
 	for idx in range(dom[-1]):
-		# Try to grab the next slice, or reuse the prior buffer
+		# Try to grab the next contrast, or default to zero
 		try: obval = obj.getslice()
 		except IndexError: obval = zeroslab
 		# Advance the backward traveling field
