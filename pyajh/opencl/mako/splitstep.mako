@@ -56,7 +56,8 @@
 /* Compute the value for a Hann window of width l at point t. */
 float hann(const uint);
 float hann(const uint t) {
-	float sv = sin(${math.pi}f * (float) t / ${2. * l - 1.}f);
+	/* sinpi(x) computes sin(pi * x). */
+	float sv = sinpi((float) t / ${2. * l - 1.}f);
 	return sv * sv;
 }
 
@@ -71,8 +72,11 @@ float2 csqrt(const float2);
 float2 csqrt(const float2 v) {
 	const float ang = 0.5f * atan2(v.y, v.x);
 	const float mag = sqrt(hypot(v.x, v.y));
+	/* Return the sine of the angle and store the cosine in cosa. */
+	float cosa;
+	const float sina = sincos(ang, &cosa);
 
-	return (float2) (mag) * (float2) (cos(ang), sin(ang));
+	return (float2) (mag) * (float2) (cosa, sina);
 }
 
 /* Compute the complex square root of a real value v. */
@@ -97,7 +101,10 @@ float2 cmul(const float2 a, const float2 b) {
 /* Compute the exponential of a complex value v. */
 float2 cexp(const float2);
 float2 cexp(const float2 v) {
-	return (float2) (exp(v.x)) * (float2) (cos(v.y), sin(v.y));
+	/* Return the sine of the angle and store the cosine in cosa. */
+	float cosa;
+	const float sina = sincos(v.y, &cosa);
+	return (float2) (exp(v.x)) * (float2) (cosa, sina);
 }
 
 /* Compute the reflection coefficient for the interface between the current and
@@ -253,8 +260,11 @@ __kernel void green3d(${gfc} fld, const float zoff) {
 	const float r = length(rv);
 	const float kr = ${k0}f * r;
 
+	/* Return the sine of the argument and store in ckr the cosine. */
+	float ckr;
+	const float skr = sincos(kr, &ckr);
 	/* Compute the value of the Green's function. */
-	const float2 grf = (float2) (cos(kr), sin(kr)) / (float2) (${4. * math.pi}f * r);
+	const float2 grf = (float2) (ckr, skr) / (float2) (${4. * math.pi}f * r);
 
 	% if d:
 		const float ctheta = dot(rv / (float3) r, (float3) ${prtuple(dirax)});
