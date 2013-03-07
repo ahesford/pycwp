@@ -7,7 +7,7 @@ from pyajh.opencl import SplitStep, BufferedSlices, mapbuffer
 
 def usage(execname):
 	binfile = os.path.basename(execname)
-	print 'USAGE:', binfile, '[-h] [-q q] [-p p] [-a a] [-g g] [-f f] [-s s] [-c c] [-e nx,ny] [-w w] [-d x,y,z,w]', '<src> <infile> <outfile>'
+	print 'USAGE:', binfile, '[-h] [-q q] [-p p] [-a a] [-g g] [-f f] [-z z] [-s s] [-c c] [-e nx,ny] [-w w] [-d x,y,z,w]', '<src> <infile> <outfile>'
 	print '''
   Using the split-step method, compute the field induced in a contrast
   medium specified in infile by a point source at location src = x,y,z.
@@ -32,12 +32,13 @@ def usage(execname):
   -p: Use high-order spectral terms in the first p passes (default: 2)
   -a: Specify the width of the Hann attenuating window at each edge (default: 100)
   -f: Specify the incident frequency, f, in MHz (default: 3.0)
-  -s: Specify the grid spacing, s, in mm (default: 0.05)
+  -s: Specify the transverse grid spacing, s, in mm (default: 0.05)
+  -z: Specify the propagation step, z, in mm (default: transverse grid spacing)
   -c: Specify the sound speed, c, in mm/us (default: 1.507)
   -p: Pad the domain to [nx,ny] pixels (default: next power of two)
   -w: Specify the high-order spectral correction weight (default: 0.39)
   -d: Specify a directivity axis x,y,z with width parameter w (default: none)
-  -g: Use OpenCL computing device g on the first platform (default: system default device)
+  -g: Use OpenCL computing device g on the first platform (default: first device)
 	'''
 
 if __name__ == '__main__':
@@ -45,21 +46,22 @@ if __name__ == '__main__':
 	execname = sys.argv[0]
 
 	# Store the default parameters
-	a, c, s, f, k0, w = 100, 1.507, 0.05, 3.0, 2 * math.pi, 0.39
-	d, dom = [None]*2
+	a, c, h, f, k0, w = 100, 1.507, 0.05, 3.0, 2 * math.pi, 0.39
+	d, dom, dz = [None]*3
 	# Determine the number of slabs that use high-order corrections
 	hospat, hospec = 0, 2
 
 	ctx = 0
 
-	optlist, args = getopt.getopt(sys.argv[1:], 'hq:a:f:s:c:d:p:g:w:e:')
+	optlist, args = getopt.getopt(sys.argv[1:], 'hq:a:f:s:z:c:d:p:g:w:e:')
 
 	for opt in optlist:
 		if opt[0] == '-a': a = int(opt[1])
 		elif opt[0] == '-d': d = [float(ds) for ds in opt[1].split(',')]
 		elif opt[0] == '-e': dom = [int(ps) for ps in opt[1].split(',')]
 		elif opt[0] == '-f': f = float(opt[1])
-		elif opt[0] == '-s': s = float(opt[1])
+		elif opt[0] == '-s': h = float(opt[1])
+		elif opt[0] == '-z': dz = float(opt[1])
 		elif opt[0] == '-c': c = float(opt[1])
 		elif opt[0] == '-g': ctx = int(opt[1])
 		elif opt[0] == '-w': w = float(opt[1])
@@ -73,11 +75,14 @@ if __name__ == '__main__':
 		usage(execname)
 		sys.exit(128)
 
-	# Compute the step size in wavelengths
-	h = s * f / c
+	# Convert transverse and propagation step sizes to wavelengths
+	h *= f / c
+	if dz is not None: dz *= f / c
+	else: dz = h
 
 	print 'Split-step simulation, frequency %g MHz, background %g mm/us' % (f, c)
-	print 'Step size in wavelengths is %g, Hann window thickness is %d' % (h, a)
+	print 'Step size in wavelengths: %g (transverse), %g (propagation)' % (h, dz)
+	print 'Hann window thickness: %d pixels' % a
 
 	# Set up a slice-wise input reader
 	inmat = mio.Slicer(args[1])
@@ -91,13 +96,13 @@ if __name__ == '__main__':
 
 	print 'Creating split-step engine... '
 	sse = SplitStep(k0, dom[0], dom[1], h, src=src, d=d, l=a, w=w, 
-			propcorr=(hospec > 0, hospat > 0), context=ctx)
+			dz=dz, propcorr=(hospec > 0, hospat > 0), context=ctx)
 
 	# Restrict device transfers to the object grid
 	sse.setroi(inmat.shape[:-1])
 
 	# Compute the z height of a specified slab
-	zoff = lambda i: sse.h * (float(i) - 0.5 * float(inmat.shape[-1] - 1.))
+	zoff = lambda i: sse.dz * (float(i) - 0.5 * float(inmat.shape[-1] - 1.))
 
 	# Augment the grid with the third (extended) dimension
 	# An extra slice is required to turn around the field
