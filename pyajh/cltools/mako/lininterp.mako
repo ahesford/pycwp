@@ -17,7 +17,7 @@
 </%def>
 
 __kernel void lininterp(__write_only ${image} dst, __read_only ${image} src) {
-	const sampler_t lin = CLK_FILTER_LINEAR | CLK_NORMALIZED_COORDS_TRUE | CLK_ADDRESS_CLAMP;
+	const sampler_t lin = CLK_FILTER_LINEAR | CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP;
 	/* Grab the index into the work item. */
 	const ${idxtype} idx = (${idxtype}) (get_global_id(0), get_global_id(1)
 		${', get_global_id(2)' if dim == 3 else ''} );
@@ -25,14 +25,15 @@ __kernel void lininterp(__write_only ${image} dst, __read_only ${image} src) {
 		${', (float) idx.z' if dim == 3 else ''} );
 
 	const ${crdtype} h = (${crdtype}) (0.5f);
-	const ${crdtype} one = (${crdtype}) (1.0f);
 	const ${crdtype} dstshape = (${crdtype}) ${prtuple(dstshape)};
 	const ${crdtype} srcshape = (${crdtype}) ${prtuple(srcshape)};
 
 	/* Compute the scale between destination and source pixels. */
 	const ${crdtype} scale = srcshape / dstshape;
-	/* Convert destination coordinates to normalized source coordinates. */
-	const ${crdtype} crd = (scale * (fidx + h) - h) / (srcshape - one);
+	/* Convert destination coordinates to source coordinates. */
+	/* Note that crd SHOULD be shifted left by half a pixel, but OpenCL
+	 * already subtracts half a pixel when finding the interp interval. */
+	const ${crdtype} crd = scale * (fidx + h);
 
 	/* Read the interpolated value and write to the destination. */
 	const float4 pval = read_imagef(src, lin, crd);
