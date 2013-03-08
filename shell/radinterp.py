@@ -2,7 +2,7 @@
 
 import numpy as np, math, sys, getopt, os
 from pyajh import mio, cutil, harmonic
-from pyajh.opencl import interpolators as clinterp
+from pyajh.cltools import interpolators as clinterp
 
 def usage(execname):
 	binfile = os.path.basename(execname)

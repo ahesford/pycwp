@@ -2,7 +2,7 @@
 
 import numpy as np, math, sys, getopt, itertools, os
 from pyajh import mio, cutil, harmonic
-from pyajh.opencl import wavecl
+from pyajh.cltools import wavecl
 
 def usage(execname):
 	binfile = os.path.basename(execname)

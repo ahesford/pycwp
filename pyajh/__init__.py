@@ -5,5 +5,5 @@ data.
 '''
 
 __all__ = [ 'aca', 'cutil', 'fdtd', 'focusing', 'geom', 
-		'harmonic', 'mio', 'f2py', 'opencl', 'segmentation',
+		'harmonic', 'mio', 'f2py', 'cltools', 'segmentation',
 		'scattering', 'shtransform', 'util', 'wavetools' ]

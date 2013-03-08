@@ -3,7 +3,7 @@
 import numpy as np, math, sys, getopt, os, pyopencl as cl
 from tempfile import TemporaryFile
 from pyajh import mio, wavetools, util, cutil
-from pyajh.opencl import SplitStep, BufferedSlices, mapbuffer
+from pyajh.cltools import SplitStep, BufferedSlices, mapbuffer
 
 def usage(execname):
 	binfile = os.path.basename(execname)
