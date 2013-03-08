@@ -2,7 +2,7 @@
 
 import numpy as np, math, sys, getopt, os
 from pyajh import mio, cutil, harmonic
-from pyajh.opencl import wavecl
+from pyajh.opencl import interpolators as clinterp
 
 def usage(execname):
 	binfile = os.path.basename(execname)
@@ -61,7 +61,7 @@ if __name__ == '__main__':
 		# Create the interpolation matrix
 		if iord > 0: a = harmonic.SphericalInterpolator(thetas, iord)
 		else: a = harmonic.HarmonicSpline(thetas, tol)
-	else: a = wavecl.SplineInterpolator(ntc, 2 * (ntc - 2), tol)
+	else: a = clinterp.HarmonicSpline(ntc, 2 * (ntc - 2), tol)
 
 	# Interpolate each column of the matrix and write it to a file
 	# Truncate any existing output file
