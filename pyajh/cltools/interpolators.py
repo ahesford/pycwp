@@ -159,7 +159,7 @@ class LinearInterpolator(object):
 		self._dstim = cl.Image(context, mf.WRITE_ONLY, fmt, shape=self.dstshape)
 
 		t = Template(filename=self._kernel, output_encoding='ascii')
-		src = t.render(srcshape=self.srcshape, dstshape=self.dstshape, )
+		src = t.render(srcshape=self.srcshape, dstshape=self.dstshape)
 		self.prog = cl.Program(context, src).build()
 
 
