@@ -35,7 +35,7 @@ def usage(execname):
   -s: Specify the transverse grid spacing, s, in mm (default: 0.05)
   -z: Specify the propagation step, z, in mm (default: transverse grid spacing)
   -c: Specify the sound speed, c, in mm/us (default: 1.507)
-  -p: Pad the domain to [nx,ny] pixels (default: next power of two)
+  -e: Pad the domain to [nx,ny] pixels (default: next power of two)
   -w: Specify the high-order spectral correction weight (default: 0.39)
   -d: Specify a directivity axis x,y,z with width parameter w (default: none)
   -g: Use OpenCL computing device g on the first platform (default: first device)
