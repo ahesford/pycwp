@@ -91,7 +91,7 @@ def binomial(n, k):
 	'''
 	Compute the binomial coefficient n choose k.
 	'''
-	return numpy.prod([float(n - (k - i)) / i for i in range(1, k+1)])
+	return prod(float(n - (k - i)) / i for i in range(1, k+1))
 
 def ceilpow2(x):
 	'''
@@ -156,7 +156,7 @@ def lagrange(x, pts):
 	def lgwt(x, pi, pj): return float(x - pj) / float(pi - pj)
 
 	# Compute all the weights
-	wts = [prod([lgwt(x, pi, pj) for j, pj in enumerate(pts) if i != j])
+	wts = [prod(lgwt(x, pi, pj) for j, pj in enumerate(pts) if i != j)
 			for i, pi in enumerate(pts)]
 
 	return wts
@@ -401,7 +401,7 @@ def psnr (x, y):
 	This assumes x = y + N, where N is noise and y is signal.
 	'''
 	# Compute the average per-pixel squared error
-	err = numpy.sum (numpy.abs(x - y)**2) / numpy.prod(x.shape)
+	err = numpy.sum (numpy.abs(x - y)**2) / float(prod(x.shape))
 	# Compute the square of the maximum signal value
 	maxval = numpy.max(numpy.abs(y))**2
 

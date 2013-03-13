@@ -30,7 +30,7 @@ def bumpmap(ptden, sigma, shape):
 
 	The resulting distribution has zero mean and unit standard deviation.
 	'''
-	ntot = np.prod(shape)
+	ntot = cutil.prod(shape)
 	# Compute the number of points that will be nonzero
 	npts = ptden * ntot
 	# Compute the locations of the nonzero points

@@ -187,7 +187,7 @@ class RectangularTransfer(object):
 			queue = cl.CommandQueue(context)
 			dflags = cl.mem_flags.WRITE_ONLY | cl.mem_flags.ALLOC_HOST_PTR
 			hflags = cl.map_flags.READ
-			nbytes = byterec * int(np.prod(hostshape))
+			nbytes = byterec * cutil.prod(hostshape)
 			self.devbuf = cl.Buffer(context, dflags, nbytes)
 			self.rcvbuf = cl.enqueue_map_buffer(queue, self.devbuf,
 					hflags, 0, hostshape, dtype, order='F')[0]

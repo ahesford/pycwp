@@ -251,12 +251,12 @@ def srcint(k, src, obs, cell, ifunc, n = 4, wts = None):
 	qpts = ([o + s * wts[i][0] for i, o, s in zip(c, src, sc)] for c in enum(coords))
 
 	# Compute the corresponding quadrature weights
-	qwts = (np.prod([wts[i][1] for i in c]) for c in enum(coords))
+	qwts = (cutil.prod(wts[i][1] for i in c) for c in enum(coords))
 
 	# Sum all contributions to the integral
 	ival = np.sum(w * ifunc(k, p, obs) for w, p in izip(qwts, qpts))
 
-	return ival * np.prod(cell) / 2.**dim
+	return ival * cutil.prod(cell) / 2.**dim
 
 
 class CGFFT(object):
@@ -289,7 +289,7 @@ class CGFFT(object):
 		r = np.sqrt(np.sum([c**2 for c in coords], axis=0))
 
 		# Evaluate the Green's function on the grid
-		self.grf = greenfunc(k, r) * np.prod(cell)
+		self.grf = greenfunc(k, r) * cutil.prod(cell)
 
 		# Correct the zero value to remove the singularity
 		self.grf[[slice(1) for d in range(dim)]] = duffyint(k, [0.]*dim, cell)
@@ -329,7 +329,7 @@ class CGFFT(object):
 		'''
 
 		# Compute the dimensions of the linear system
-		n = np.prod(obj.shape)
+		n = cutil.prod(obj.shape)
 
 		# Function to compute the matrix-vector product
 		mvp = lambda v: self.scatmvp(v.reshape(obj.shape, order='F'), obj).ravel('F')
@@ -767,7 +767,7 @@ class SplitPade(object):
 		outfld = self.eikz * f
 
 		# Build the shape of the flattened matrix
-		shape = [np.prod(o.shape)]*2
+		shape = [cutil.prod(o.shape)]*2
 
 		for i, (a, b, x0) in enumerate(zip(self.a, self.b, self.x0)):
 			print 'Computing Pade contribution', i + 1

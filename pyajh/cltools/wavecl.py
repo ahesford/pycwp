@@ -304,7 +304,7 @@ class SplitStep(object):
 
 		grid = self.grid
 		def newbuffer():
-			nbytes = int(np.prod(grid)) * np.complex64().nbytes
+			nbytes = cutil.prod(grid) * np.complex64().nbytes
 			flags = cl.mem_flags.READ_WRITE
 			return util.SyncBuffer(self.context, flags, size=nbytes)
 		# Buffers to store the propagating (twice) and backward fields

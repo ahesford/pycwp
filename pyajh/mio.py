@@ -3,6 +3,7 @@ Routines for reading and writing binary matrix files in FORTRAN-order.
 '''
 
 import os, math, numpy as np
+from threading import Lock
 from . import cutil
 
 def getmattype (infile, dim = None, dtype = None):
@@ -54,8 +55,9 @@ def getmattype (infile, dim = None, dtype = None):
 
 		# Grab the number of bytes per record and
 		# check that the record size lines up
-		nbytes = dsize / np.prod(matsize)
-		if nbytes * np.prod(matsize) != dsize: continue
+		nelts = cutil.prod(matsize)
+		nbytes = dsize / nelts
+		if nbytes * nelts != dsize: continue
 
 		# Try to grab the data type of the records
 		try: 
@@ -217,12 +219,15 @@ class Slicer(object):
 		# Copy the backer file
 		self._backer = f
 
-		# The number of elements and bytes per slice
-		self.nelts = cutil.prod(self.shape[:-1])
+		# The shape, number of elements and bytes per slice
+		self.sliceshape = self.shape[:-1]
+		self.nelts = cutil.prod(self.sliceshape)
 		self.slicebytes = self.nelts * self.dtype.type().nbytes
 
 		# Store the start of the data block
-		self.fstart = self._backer.tell()
+		self._hdrlen = self._backer.tell()
+		# Use a lock for thread safety of slice I/O
+		self._lock = Lock()
 
 
 	def __enter__(self):
@@ -251,13 +256,6 @@ class Slicer(object):
 		return clean
 
 
-	def __del__(self):
-		'''
-		Close the open data file on delete.
-		'''
-		self._backer.close()
-
-
 	def __len__(self):
 		'''
 		Return the number of slices.
@@ -270,9 +268,6 @@ class Slicer(object):
 		Create a generator to read each desired slice in succession.
 		Returns a tuple of the slice index and its data values.
 		'''
-		# Point to the first slice in the desired range
-		self.setslice(0)
-
 		# Yield each slice along the last index
 		for idx in range(len(self)):
 			yield (idx, self[idx])
@@ -280,7 +275,7 @@ class Slicer(object):
 		return
 
 
-	def setslice(self, i):
+	def _seek(self, i):
 		'''
 		Point the file to the start of slice i.
 		'''
@@ -292,85 +287,89 @@ class Slicer(object):
 		if i < 0: i = i + self.shape[-1]
 
 		# Point to the start of the desired slice
-		self._backer.seek(self.fstart + i * self.slicebytes)
+		self._backer.seek(self._hdrlen + i * self.slicebytes)
 
 
-	def readslice(self):
+	def _read(self, i):
 		'''
-		Read the slice at the current file position.
+		Read slice i from the file. This is thread safe.
 		'''
-		data = np.fromfile(self._backer, dtype=self.dtype, count=self.nelts)
-		if data.size != self.nelts or data is None:
-			raise ValueError('Failed to read current slice')
-		return data.reshape(self.shape[:-1], order='F')
+		with self._lock:
+			self._seek(i)
+			data = np.fromfile(self._backer, 
+					dtype=self.dtype, count=self.nelts)
+			if data.size != self.nelts or data is None:
+				raise ValueError('Failed to read current slice')
+		return data.reshape(self.sliceshape, order='F')
 
 
-	def writeslice(self, slab):
+	def _write(self, i, slab):
 		'''
-		Write the slab at the current file position, converting the
-		data type to that specified for the file. The array will be
-		reshaped with FORTRAN ordering into the expected slab shape.
-		'''
-		sflat = slab.ravel('F')
+		Write slab to the slice at index i. This is thread safe.
 
-		if sflat.shape[0] != self.nelts:
+		The data type of the input will be converted to match that of
+		the backer file.
+
+		The slab is assumed to be in FORTRAN order and will be reshaped
+		into the expected slice shape.
+		'''
+		if cutil.prod(slab.shape) != self.nelts:
 			raise ValueError('Slice size does not agree with output')
 
 		# Convert the data type if necessary
-		if self.dtype != sflat.dtype:
-			sflat = sflat.astype(self.dtype)
-		sflat.tofile(self._backer)
-		self._backer.flush()
+		if self.dtype != slab.dtype: slab = slab.astype(self.dtype)
+
+		with self._lock:
+			self._seek(i)
+			slab.ravel('F').tofile(self._backer)
+			self._backer.flush()
 
 
 	def __getitem__(self, key):
 		'''
 		Grab slices from the data file using list-style indexing.
 		'''
-		try:
-			# Treat the key as a slice to pull out multiple slabs
-			idx = key.indices(self.shape[-1])
-			# Compute the number of slabs to be read
-			nslab = (idx[1] - idx[0]) / idx[2]
-			if idx[0] + idx[2] * nslab < idx[1]: nslab += 1
-			# Allocate storage for the requested slices
-			data = np.empty(list(self.shape[:-1]) + [nslab], dtype=self.dtype)
-			# Create slice objects corresponding to a single slab
-			sl = [slice(None) for s in self.shape[:-1]]
+		# Build a list of indices from which to read
+		try: idx = range(*key.indices(self.shape[-1]))
+		except AttributeError: idx = [key]
 
-			# Read all of the requested slices
-			for li, i in enumerate(range(*idx)):
-				self.setslice(i)
-				data[sl + [li]] = self.readslice()
-		except AttributeError:
-			# A slice was not provided, grab a single slab
-			self.setslice(key)
-			data = self.readslice()
+		# Compute the number of slabs to be read
+		nslab = len(idx)
+		# Allocate storage for the requested slices
+		data = np.empty(list(self.sliceshape) + [nslab], dtype=self.dtype)
 
-		return data
+		# Create index slices for each slice of data
+		sl = [slice(None) for s in self.sliceshape]
+		# Read each slice in succession
+		for li, i in enumerate(idx): data[sl + [li]] = self._read(i)
+
+		# Use squeeze to flatten the array if one index was desired
+		return data.squeeze()
 
 
 	def __setitem__(self, key, value):
 		'''
 		Write slices to the file using list-style indexing.
+
+		Each slice of value will be reshaped in FORTRAN order to match
+		the backer shape.
 		'''
-		try:
-			# Treat the key as a slice to write multiple slabs
-			idx = key.indices(self.shape[-1])
-			# Compute the number of slabs to be written
-			nslab = (idx[1] - idx[0]) / idx[2]
-			if idx[0] + idx[2] * nslab < idx[1]: nslab += 1
-			# Check that the number of slices matches
-			if value.shape[-1] != nslab:
-				raise IndexError('Numbers of input and output slices do not agree')
-
-			# Create slice objects corresponding to a single slab
-			sl = [slice(None) for s in value.shape[:-1]]
-
-			for li, i in enumerate(range(*idx)):
-				self.setslice(i)
-				self.writeslice(value[sl + [li]])
+		# Build a list of indices for writing
+		try: idx = range(*key.indices(self.shape[-1]))
 		except AttributeError:
-			# A slice was not provided, write a single slab
-			self.setslice(key)
-			self.writeslice(value)
+			# The slice list is the single key
+			idx = [key]
+			# Add a singleton dimension to value
+			sl = [slice(None) for s in value.shape]
+			value = value[sl + [np.newaxis]]
+
+		# Compute the number of slabs to be written
+		nslab = len(idx)
+
+		if value.shape[-1] != nslab:
+			raise IndexError('Input and output have different numbers of slices')
+
+		# Create index slices for each slice of value
+		sl = [slice(None) for s in value.shape[:-1]]
+
+		for li, i in enumerate(idx): self._write(i, value[sl + [li]])
