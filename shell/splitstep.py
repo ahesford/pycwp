@@ -91,6 +91,12 @@ if __name__ == '__main__':
 
 	print 'Computing on expanded grid', dom
 
+	# Determine whether the Hann window encroaches on the domain
+	if any(2 * a + g > d for g, d in zip(inmat.shape, dom)):
+		print
+		print 'CAUTION: Hann window attenuates field in region of interest'
+		print
+
 	# Grab the source location in wavelengths
 	src = tuple(float(s) * f / c for s in args[0].split(','))
 
