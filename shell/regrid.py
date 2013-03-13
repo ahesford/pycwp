@@ -54,7 +54,7 @@ if __name__ == "__main__":
 	output = mio.Slicer(args[2], outsize, input.dtype, True)
 
 	# Make the linear interpolator
-	lint = cltools.LinearInterpolator(dstshape, input.shape[:-1], ctx)
+	lint = cltools.InterpolatingRotator(dstshape, input.shape[:-1], ctx)
 
 	# Interpolate each of the slices successively
 	for idx, slab in input:

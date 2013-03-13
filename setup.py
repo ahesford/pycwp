@@ -29,4 +29,4 @@ if __name__ == '__main__':
 		long_description = "\n".join(DOCLINES[2:]),
 		author = "Andrew J. Hesford", author_email = "ahesford@me.com",
 		platforms = ["any"], license = "BSD", packages = ["pyajh"],
-		package_data={'pyajh': ['*.mako']}, configuration=configuration)
+		configuration=configuration)

@@ -5,7 +5,7 @@ def configuration(parent_package='', top_path=None):
 
 	config = Configuration('cltools', parent_package, top_path)
 
-	config.add_data_dir('mako')
+	config.add_data_dir('clsrc')
 
 	return config
 

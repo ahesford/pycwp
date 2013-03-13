@@ -13,7 +13,7 @@ class FarMatrix:
 	Compile an OpenCL kernel that will populate a far-field matrix.
 	'''
 
-	_kernel = util.srcpath(__file__, 'mako', 'farmat.mako')
+	_kernel = util.srcpath(__file__, 'clsrc', 'farmat.mako')
 
 	def __init__(self, theta, dc = 0.1, n = 4, context = None):
 		'''
@@ -125,7 +125,7 @@ class Helmholtz(fdtd.Helmholtz):
 	passed in, but one will be created if none is provided.
 	'''
 
-	_kernel = util.srcpath(__file__, 'mako', 'helmkern.mako')
+	_kernel = util.srcpath(__file__, 'clsrc', 'helmkern.mako')
 
 	def __init__(self, c, dt, h, srcfunc, srcidx, context=None):
 		'''
@@ -246,7 +246,7 @@ class SplitStep(object):
 	An OpenCL version of the split-step parabolic equation solver.
 	'''
 
-	_kernel = util.srcpath(__file__, 'mako', 'splitstep.mako')
+	_kernel = util.srcpath(__file__, 'clsrc', 'splitstep.mako')
 
 	def __init__(self, k0, nx, ny, h, src, d = None, l = 10,
 			dz = None, w = 0.39, propcorr = None, context = None):

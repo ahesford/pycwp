@@ -11,7 +11,7 @@ class HarmonicSpline(object):
 	sample points on the sphere using cubic b-splines.
 	'''
 
-	_kernel = util.srcpath(__file__, 'mako', 'harmspline.mako')
+	_kernel = util.srcpath(__file__, 'clsrc', 'harmspline.mako')
 
 	def __init__(self, ntheta, nphi, tol = 1e-7, context = None):
 		'''
@@ -123,31 +123,46 @@ class HarmonicSpline(object):
 		return f
 
 
-class LinearInterpolator(object):
+class InterpolatingRotator(object):
 	'''
-	Use OpenCL on a GPU device to linearly interpolate a 2-D or 3-D image
-	of complex float values.
+	Use OpenCL on a GPU device to linearly interpolate or rotate a 2-D
+	image of complex float values.
 	'''
 
-	_kernel = util.srcpath(__file__, 'mako', 'lininterp.mako')
+	_kernel = util.srcpath(__file__, 'clsrc', 'rotinterp.cl')
 
 	def __init__(self, dstshape, srcshape, context=None):
 		'''
 		Build an OpenCL kernel that will interpolate an image with
-		shape srcshape (which should be a tuple with 2 or 3 elements)
-		into an image with shape dstshape.
+		shape srcshape (which should be a tuple with 2 elements) into
+		an image with shape dstshape.
 		'''
-		if len(dstshape) != len(srcshape):
-			raise ValueError('Source and destination shapes must have same length')
-
-		# Copy the source and destination shapes
-		self.srcshape = tuple(srcshape[:])
-		self.dstshape = tuple(dstshape[:])
-
 		# Grab the provided context or create a default
 		self.context = util.grabcontext(context)
 		# Create a command queue for the program execution
 		self.queue = cl.CommandQueue(self.context)
+
+		# Create the OpenCL images
+		self.setshapes(dstshape, srcshape)
+
+		# Build the program
+		src = '\n'.join(open(self._kernel, 'r').readlines())
+		self.prog = cl.Program(self.context, src).build()
+
+
+	def setshapes(self, dstshape, srcshape):
+		'''
+		Set the destination and source image shapes and allocate OpenCL
+		image types for use by the rotating and interpolating kernel.
+		'''
+		if len(dstshape) != len(srcshape):
+			raise ValueError('Source and destination shapes must have same length')
+		if len(dstshape) != 2:
+			raise ValueError('Only 2-D image interpolations are supported')
+
+		# Copy the source and destination shapes
+		self.srcshape = tuple(srcshape[:])
+		self.dstshape = tuple(dstshape[:])
 
 		# Build the image format
 		fmt = cl.ImageFormat(cl.channel_order.RG, cl.channel_type.FLOAT)
@@ -158,16 +173,12 @@ class LinearInterpolator(object):
 		self._srcim = cl.Image(context, mf.READ_ONLY, fmt, shape=self.srcshape)
 		self._dstim = cl.Image(context, mf.WRITE_ONLY, fmt, shape=self.dstshape)
 
-		t = Template(filename=self._kernel, output_encoding='ascii')
-		src = t.render(srcshape=self.srcshape, dstshape=self.dstshape)
-		self.prog = cl.Program(context, src).build()
 
-
-	def interpolate(self, img):
+	def loadimg(self, img):
 		'''
-		Given the image img (which will be interpreted as an image of
-		complex floats), return the linearly interpolated image of the
-		previously configured shape.
+		Enqueue a copy of the image img, interpreted as an array of
+		complex floats, into the OpenCL source image for rotation or
+		interpolation.
 		'''
 		if img.shape != self.srcshape:
 			raise ValueError('Image shape does not match configured shape')
@@ -177,8 +188,24 @@ class LinearInterpolator(object):
 		# Copy the source image into the device storage
 		cl.enqueue_copy(self.queue, self._srcim, img.ravel('F'),
 				origin=(0,0), region=self.srcshape, is_blocking=False)
+
+
+	def interpolate(self, img, rotate=0., contract=(1.,1.)):
+		'''
+		Given the image img (which will be interpreted as an image of
+		complex floats), return the linearly interpolated image of the
+		previously configured shape.
+
+		The source will be contracted by factors contract[0] in x and
+		contract[1] in y and rotated an angle rotate (in radians) about
+		the center.
+		'''
+		self.loadimg(img)
 		# Run the kernel to perform the interpolation
-		self.prog.lininterp(self.queue, self.dstshape, None, self._dstim, self._srcim)
+		cx, cy = [np.float32(c) for c in contract]
+		theta = np.float32(rotate)
+		self.prog.rotinterp(self.queue, self.dstshape, None,
+				self._dstim, self._srcim, theta, cx, cy)
 		# Create a host-side array to store the result
 		res = np.empty(self.dstshape, np.complex64, order='F')
 		cl.enqueue_copy(self.queue, res, self._dstim,
