@@ -6,7 +6,7 @@ from itertools import product, chain
 from mako.template import Template
 
 from . import util
-from .. import fdtd
+from .. import fdtd, cutil
 
 class FarMatrix:
 	'''
