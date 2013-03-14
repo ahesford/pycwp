@@ -301,14 +301,14 @@ class BufferedSlices(Thread):
 		# Create a queue for mapping the device memory
 		if context is not None: queue = cl.CommandQueue(context)
 
-		# Allocate the device and host buffer pairs
+		# Allocate device and host buffer pairs corresponding to slices
 		for b in range(nbufs):
 			if context is not None:
-				dbuf, hbuf = mapbuffer(queue, backer.shape[:-1],
+				dbuf, hbuf = mapbuffer(queue, backer.sliceshape,
 						backer.dtype, dflags, hflags)
 			else:
 				dbuf = None
-				hbuf = np.zeros(backer.shape[:-1], backer.dtype, order='F')
+				hbuf = np.zeros(backer.sliceshape, backer.dtype, order='F')
 			# Store the device and host buffers and a placeholder for an
 			# event that will block until flushes or fills can occur
 			record = (dbuf, hbuf, None)

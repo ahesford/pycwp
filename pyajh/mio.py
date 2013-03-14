@@ -343,7 +343,7 @@ class Slicer(object):
 		# Read each slice in succession
 		for li, i in enumerate(idx): data[sl + [li]] = self._read(i)
 
-		# Use squeeze to flatten the array if one index was desired
+		# Flatten single axes from the returned slice
 		return data.squeeze()
 
 
@@ -373,3 +373,68 @@ class Slicer(object):
 		sl = [slice(None) for s in value.shape[:-1]]
 
 		for li, i in enumerate(idx): self._write(i, value[sl + [li]])
+
+
+class ArraySlicer(object):
+	'''
+	This class represents a sequence object corresponding to slices along a
+	configurable dimension of a Numpy ndarray.
+	'''
+	def __init__(self, backer, axis=-1):
+		'''
+		Associate the sequence of slices with a backer ndarray and take
+		the slices along the specified axis.
+		'''
+		self._backer = backer
+
+		# Copy some parameters to behave like mio.Slicer
+		self.dtype = backer.dtype
+		self.shape = backer.shape
+
+		self.setaxis(axis)
+
+
+	def setaxis(self, axis=-1):
+		'''
+		Set (or reset) the axis across which the array is sliced.
+		'''
+		self.axis = axis
+		# Use shape[axis:][1:] to work properly with negative indices
+		sliceshape = list(self.shape[:axis]) + list(self.shape[axis:][1:])
+		self.sliceshape = tuple(sliceshape)
+		self.nelts = cutil.prod(self.sliceshape)
+		self.slicebytes = self.nelts * self.dtype.type().nbytes
+
+
+	def __len__(self):
+		'''
+		Return the number of slices.
+		'''
+		return self.shape[self.axis]
+
+
+	def __getitem__(self, key):
+		'''
+		Return a view into the backer array corresponding to the
+		desired slice or range of slices.
+		'''
+		# By default, grab all elements from all axes
+		sl = [slice(None) for d in self.shape]
+		# Override the sliced axis with the key
+		sl[self.axis] = key
+
+		# Flatten singleton axes from the returned slice
+		return self._backer[sl].squeeze()
+
+
+	def __setitem__(self, key, value):
+		'''
+		Store the desired values into the backer array corresponding to
+		the desired slice or range of slices.
+		'''
+		# By default, grab all elements from all axes
+		sl = [slice(None) for d in self.shape]
+		# Override the sliced axis with the key
+		sl[self.axis] = key
+
+		self._backer[sl] = value

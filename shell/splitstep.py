@@ -46,8 +46,8 @@ if __name__ == '__main__':
 	execname = sys.argv[0]
 
 	# Store the default parameters
-	a, c, h, f, k0, w = 100, 1.507, 0.05, 3.0, 2 * math.pi, 0.39
-	d, dom, dz = [None]*3
+	c, h, f, k0, w = 1.507, 0.05, 3.0, 2 * math.pi, 0.39
+	a, d, dom, dz = [None]*4
 	# Determine the number of slabs that use high-order corrections
 	hospat, hospec = 0, 2
 
@@ -82,13 +82,16 @@ if __name__ == '__main__':
 
 	print 'Split-step simulation, frequency %g MHz, background %g mm/us' % (f, c)
 	print 'Step size in wavelengths: %g (transverse), %g (propagation)' % (h, dz)
-	print 'Hann window thickness: %d pixels' % a
 
 	# Set up a slice-wise input reader
 	inmat = mio.Slicer(args[1])
 	# Automatically pad the domain, if necessary
 	if dom is None: dom = [cutil.ceilpow2(g) for g in inmat.shape[:-1]]
 
+	# Pick a default Hann window thickness that will not encroach on the domain
+	if a is None: a = max(0, min((d - g) / 2 for d, g in zip(dom, inmat.shape)))
+
+	print 'Hann window thickness: %d pixels' % a
 	print 'Computing on expanded grid', dom
 
 	# Determine whether the Hann window encroaches on the domain
