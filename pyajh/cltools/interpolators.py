@@ -190,15 +190,16 @@ class InterpolatingRotator(object):
 				origin=(0,0), region=self.srcshape, is_blocking=False)
 
 
-	def interpolate(self, img, rotate=0., contract=(1.,1.)):
+	def interpolate(self, img, res=None, rotate=0., contract=(1.,1.)):
 		'''
 		Given the image img (which will be interpreted as an image of
 		complex floats), return the linearly interpolated image of the
 		previously configured shape.
 
 		The source will be contracted by factors contract[0] in x and
-		contract[1] in y and rotated an angle rotate (in radians) about
-		the center.
+		contract[1] in y and rotated an angle rotate (in radians). The
+		destination grid is rotated an angle rotate (in radians) about
+		the center of the grid of the source image.
 		'''
 		self.loadimg(img)
 		# Run the kernel to perform the interpolation
@@ -207,7 +208,8 @@ class InterpolatingRotator(object):
 		self.prog.rotinterp(self.queue, self.dstshape, None,
 				self._dstim, self._srcim, theta, cx, cy)
 		# Create a host-side array to store the result
-		res = np.empty(self.dstshape, np.complex64, order='F')
-		cl.enqueue_copy(self.queue, res, self._dstim,
-				origin=(0,0), region=self.dstshape)
-		return res
+		if res is None:
+			res = np.empty(self.dstshape, np.complex64, order='F')
+		evt = cl.enqueue_copy(self.queue, res, self._dstim, origin=(0,0),
+				region=self.dstshape, is_blocking=False)
+		return res, evt

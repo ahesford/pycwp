@@ -4,7 +4,7 @@ import sys, os, numpy as np, getopt
 
 from pyajh import mio, cltools
 
-def usage (execname = 'gridup.py'):
+def usage (execname = 'regrid.py'):
 	binfile = os.path.basename(execname)
 	print "Usage:", binfile, "[-h] [-g g] Nx,Ny <input> <output>"
 	print '''
@@ -49,13 +49,26 @@ if __name__ == "__main__":
 	if len(input.shape) != 3:
 		raise ValueError('A three-dimensional input is required')
 
+	# Make the linear interpolator
+	lint = cltools.InterpolatingRotator(dstshape, input.shape[:-1], ctx)
+
 	# Create or truncate the output file
 	outsize = tuple(list(dstshape) + [input.shape[-1]])
 	output = mio.Slicer(args[2], outsize, input.dtype, True)
 
-	# Make the linear interpolator
-	lint = cltools.InterpolatingRotator(dstshape, input.shape[:-1], ctx)
+	# Make BufferedSlices objects to read input and write output
+	src = cltools.BufferedSlices(input, 5, context=lint.context)
+	src.start()
+	dst = cltools.BufferedSlices(output, 5, read=False, context=lint.context)
+	dst.start()
 
 	# Interpolate each of the slices successively
-	for idx, slab in input:
-		output[idx] = lint.interpolate(slab)
+	for idx in range(len(input)):
+		# Grab the destination copy event from the interpolator
+		evt = lint.interpolate(src.getslice(), dst.getslice())
+		# Advance the slice buffers
+		src.nextslice()
+		dst.nextslice(evt)
+
+	dst.flush()
+	dst.kill()

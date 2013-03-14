@@ -43,10 +43,10 @@ def getmattype (infile, dim = None, dtype = None):
 	# Loop through each possible dimension, checking data types
 	for dimen in dimrange:
 		# Set the appropriate header size and matrix size
-		if hdr[0] == 0: 
+		if hdr[0] == 0:
 			hdrlen = dimen + 2
 			matsize = np.array([hdr[dimen+1] * hv for hv in hdr[1:dimen+1]])
-		else: 
+		else:
 			hdrlen = dimen
 			matsize = hdr[:dimen]
 
@@ -60,7 +60,7 @@ def getmattype (infile, dim = None, dtype = None):
 		if nbytes * nelts != dsize: continue
 
 		# Try to grab the data type of the records
-		try: 
+		try:
 			dtype = datatypes[nbytes]
 			break
 		except KeyError: continue
@@ -296,7 +296,7 @@ class Slicer(object):
 		'''
 		with self._lock:
 			self._seek(i)
-			data = np.fromfile(self._backer, 
+			data = np.fromfile(self._backer,
 					dtype=self.dtype, count=self.nelts)
 			if data.size != self.nelts or data is None:
 				raise ValueError('Failed to read current slice')
@@ -373,22 +373,22 @@ class Slicer(object):
 		for li, i in enumerate(idx): self._write(i, value[sl + [li]])
 
 
-class ArraySlicer(object):
+class CoordinateShifter(object):
 	'''
 	This class represents a sequence object corresponding to slices along a
-	configurable dimension of a Numpy ndarray.
+	configurable dimension of a Numpy ndarray. The axes of the backer array
+	are cyclically rotated to place the sliced axis in the final position.
 	'''
 	def __init__(self, backer, axis=-1):
 		'''
 		Associate the sequence of slices with a backer ndarray and take
 		the slices along the specified axis.
 		'''
+		# Set the backer array and the data type
 		self._backer = backer
-
-		# Copy some parameters to behave like mio.Slicer
 		self.dtype = backer.dtype
-		self.shape = backer.shape
 
+		# This sets the shape of the rotated array
 		self.setaxis(axis)
 
 
@@ -396,10 +396,18 @@ class ArraySlicer(object):
 		'''
 		Set (or reset) the axis across which the array is sliced.
 		'''
-		self.axis = axis
-		# Use shape[axis:][1:] to work properly with negative indices
-		sliceshape = list(self.shape[:axis]) + list(self.shape[axis:][1:])
-		self.sliceshape = tuple(sliceshape)
+		ndim = len(self._backer.shape)
+		if axis < 0: axis = axis + ndim
+		if axis < 0 or axis > ndim - 1:
+			raise ValueError('Axis must be in range -N:N-1 for arrays of dimension N')
+		nshift = ndim - 1 - axis
+		# Figure out the ordering of axes in the shift
+		self._axes = tuple(np.roll(range(ndim), nshift))
+		# Store the transposed view into the backer
+		self._backtrans = self._backer.transpose(self._axes)
+		# Figure out the total shape and slice shape
+		self.shape = self._backtrans.shape
+		self.sliceshape = self.shape[:-1]
 		self.nelts = cutil.prod(self.sliceshape)
 		self.slicebytes = self.nelts * self.dtype.type().nbytes
 
@@ -408,7 +416,15 @@ class ArraySlicer(object):
 		'''
 		Return the number of slices.
 		'''
-		return self.shape[self.axis]
+		return self.shape[-1]
+
+
+	def __iter__(self):
+		# Yield each slice along the last index
+		for idx in range(len(self)):
+			yield (idx, self[idx])
+
+		return
 
 
 	def __getitem__(self, key):
@@ -416,13 +432,10 @@ class ArraySlicer(object):
 		Return a view into the backer array corresponding to the
 		desired slice or range of slices.
 		'''
-		# By default, grab all elements from all axes
-		sl = [slice(None) for d in self.shape]
-		# Override the sliced axis with the key
-		sl[self.axis] = key
-
+		# Access all elements from all axes except the sliced axis
+		sl = [slice(None) for d in self.sliceshape] + [key]
 		# Flatten singleton axes from the returned slice
-		return self._backer[sl].squeeze()
+		return self._backtrans[sl].squeeze()
 
 
 	def __setitem__(self, key, value):
@@ -430,9 +443,7 @@ class ArraySlicer(object):
 		Store the desired values into the backer array corresponding to
 		the desired slice or range of slices.
 		'''
-		# By default, grab all elements from all axes
-		sl = [slice(None) for d in self.shape]
-		# Override the sliced axis with the key
-		sl[self.axis] = key
-
-		self._backer[sl] = value
+		# Access all elements from all axes except the sliced axis
+		sl = [slice(None) for d in self.sliceshape] + [key]
+		# Write the value to the backer array (in a transposed view)
+		self._backtrans[sl] = value

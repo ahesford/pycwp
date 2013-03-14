@@ -422,7 +422,7 @@ class BufferedSlices(Thread):
 		them to or read them from the associated backer in order.
 		'''
 		# Create a list of slice objects to refer to one backer slice
-		grid = [slice(None) for d in range(len(self._backer.shape) - 1)]
+		grid = [slice(None) for d in range(len(self._backer.sliceshape))]
 
 		# Loop through the desired slices in the associated backer
 		for idx in self._iter:
