@@ -331,7 +331,8 @@ class Slicer(object):
 		'''
 		# Build a list of indices from which to read
 		try: idx = range(*key.indices(self.shape[-1]))
-		except AttributeError: idx = [key]
+		# If idx is a single index, read and return the single slab
+		except AttributeError: return self._read(key)
 
 		# Compute the number of slabs to be read
 		nslab = len(idx)
@@ -343,8 +344,7 @@ class Slicer(object):
 		# Read each slice in succession
 		for li, i in enumerate(idx): data[sl + [li]] = self._read(i)
 
-		# Flatten single axes from the returned slice
-		return data.squeeze()
+		return data
 
 
 	def __setitem__(self, key, value):
@@ -356,12 +356,10 @@ class Slicer(object):
 		'''
 		# Build a list of indices for writing
 		try: idx = range(*key.indices(self.shape[-1]))
+		# If idx is a single index, write the slab and quit
 		except AttributeError:
-			# The slice list is the single key
-			idx = [key]
-			# Add a singleton dimension to value
-			sl = [slice(None) for s in value.shape]
-			value = value[sl + [np.newaxis]]
+			self._write(key, value)
+			return
 
 		# Compute the number of slabs to be written
 		nslab = len(idx)
