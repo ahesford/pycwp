@@ -6,7 +6,7 @@ from pyajh import mio, cltools
 
 def usage (execname = 'regrid.py'):
 	binfile = os.path.basename(execname)
-	print "Usage:", binfile, "[-h] [-g g] Nx,Ny <input> <output>"
+	print "Usage:", binfile, "[-h] [-g g] [-d dx,dy] [-s sx,sy] [-r r] Nx,Ny <input> <output>"
 	print '''
   Use linear interpolation on an OpenCL device to resample each x-y slice in
   the 3-D matrix file input (stored in FORTRAN order) to an (Nx,Ny) grid. The
@@ -17,7 +17,10 @@ def usage (execname = 'regrid.py'):
 
   OPTIONAL ARGUMENTS:
   -h: Display this message and exit
-  -g: Use OpenCL computing device g on the first platform (default: first device)
+  -g: Use OpenCL device g on the first platform (default: first device)
+  -d: Set the output grid spacing (default: 1,1)
+  -s: Set the input grid spacing (default: 1,1)
+  -r: Rotate output grid r radians about the center of the input (default: 0)
 	'''
 
 if __name__ == "__main__":
@@ -26,11 +29,21 @@ if __name__ == "__main__":
 
 	# Set the default device
 	ctx = 0
+	# Set the default grid spacings
+	dgrid, sgrid = (1., 1.), (1., 1.)
+	# Set the default rotation
+	theta = 0.
 
 	# Process optional arguments
-	optlist, args = getopt.getopt(sys.argv[1:], 'hg:')
+	optlist, args = getopt.getopt(sys.argv[1:], 'hg:r:s:d:')
 	for opt in optlist:
 		if opt[0] == '-g': ctx = int(opt[1])
+		elif opt[0] == '-d':
+			dgrid = tuple(float(d) for d in opt[1].split(','))
+		elif opt[0] == '-s':
+			dgrid = tuple(float(s) for s in opt[1].split(','))
+		elif opt[0] == '-r':
+			theta = float(opt[1])
 		else:
 			usage(execname)
 			sys.exit(128)
@@ -64,8 +77,10 @@ if __name__ == "__main__":
 
 	# Interpolate each of the slices successively
 	for idx in range(len(input)):
-		# Grab the destination copy event from the interpolator
-		evt = lint.interpolate(src.getslice(), dst.getslice())
+		s = src.getslice()
+		d = dst.getslice()
+		# Interpolate the slice, grabbing the result and the copy event
+		res, evt = lint.interpolate(s, d, theta=theta, sgrid=sgrid, dgrid=dgrid)
 		# Advance the slice buffers
 		src.nextslice()
 		dst.nextslice(evt)
