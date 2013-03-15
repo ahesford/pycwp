@@ -23,9 +23,11 @@ def getmattype (infile, dim = None, dtype = None):
 	# Record the size of the file
 	fsize = os.fstat(infile.fileno())[6]
 
-	# Read the maximum-length header, which is two more integeris
+	# Read the maximum-length header, which is two more integers
 	# than the max dimension for grouped files
 	hdr = np.fromfile(infile, dtype=np.int32, count=maxdim+2)
+	# Convert the header to a tuple Python integers to avoid overflow
+	hdr = tuple(int(h) for h in hdr)
 
 	# Try to limit the pool of auto-sensed data types, if possible
 	# Ensure that the datatype is a Numpy type
@@ -45,7 +47,7 @@ def getmattype (infile, dim = None, dtype = None):
 		# Set the appropriate header size and matrix size
 		if hdr[0] == 0:
 			hdrlen = dimen + 2
-			matsize = np.array([hdr[dimen+1] * hv for hv in hdr[1:dimen+1]])
+			matsize = tuple(hdr[dimen+1] * hv for hv in hdr[1:dimen+1])
 		else:
 			hdrlen = dimen
 			matsize = hdr[:dimen]
@@ -71,7 +73,6 @@ def getmattype (infile, dim = None, dtype = None):
 
 	# Ensure that the type and shape are compatible with array types
 	dtype = np.dtype(dtype)
-	matsize = tuple(int(d) for d in matsize)
 
 	# Return the matrix size and data type
 	return (matsize, dtype)
