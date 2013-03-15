@@ -5,5 +5,7 @@ data.
 '''
 
 __all__ = [ 'aca', 'cutil', 'fdtd', 'focusing', 'geom', 
-		'harmonic', 'mio', 'f2py', 'cltools', 'segmentation',
+		'harmonic', 'mio', 'ftntools', 'cltools', 'segmentation',
 		'scattering', 'shtransform', 'util', 'wavetools' ]
+
+from . import *

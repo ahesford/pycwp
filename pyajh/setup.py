@@ -5,7 +5,7 @@ def configuration(parent_package='', top_path=None):
 
 	config = Configuration('pyajh', parent_package, top_path)
 	config.add_subpackage('cltools')
-	config.add_subpackage('f2py')
+	config.add_subpackage('ftntools')
 
 	return config
 

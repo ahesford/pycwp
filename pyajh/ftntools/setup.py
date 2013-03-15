@@ -13,8 +13,9 @@ def configuration(parent_package='', top_path=None):
 	include_dirs = [os.path.join(p, 'include') for p in prefixes]
 	library_dirs = [os.path.join(p, 'lib') for p in prefixes]
 
-	config = Configuration('f2py', parent_package, top_path)
+	config = Configuration('ftntools', parent_package, top_path)
 	config.add_extension('pade', sources=['pade.f'],)
+	config.add_extension('rotinterp', sources=['rotinterp.f'],)
 	config.add_extension('splitstep', sources=['splitstep.f90'],
 			include_dirs=include_dirs, library_dirs=library_dirs,
 			libraries=['fftw3f_threads', 'fftw3f'],)

@@ -10,7 +10,7 @@ import scipy.special as spec, scipy.sparse.linalg as la, scipy.sparse as sparse
 from itertools import izip, product, repeat
 
 from . import mio, cutil
-from .f2py import pade, splitstep
+from .ftntools import pade, splitstep
 
 
 def gencompress(c, rho, atn):
