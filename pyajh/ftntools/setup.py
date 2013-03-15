@@ -15,7 +15,6 @@ def configuration(parent_package='', top_path=None):
 
 	config = Configuration('ftntools', parent_package, top_path)
 	config.add_extension('pade', sources=['pade.f'],)
-	config.add_extension('rotinterp', sources=['rotinterp.f'],)
 	config.add_extension('splitstep', sources=['splitstep.f90'],
 			include_dirs=include_dirs, library_dirs=library_dirs,
 			libraries=['fftw3f_threads', 'fftw3f'],)

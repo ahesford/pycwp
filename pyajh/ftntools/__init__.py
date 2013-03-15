@@ -1,5 +1,5 @@
 "FORTRAN routines with Python wrappers for fast calculation."
 
-__all__ = [ 'pade', 'splitstep', 'rotinterp', ]
+__all__ = [ 'pade', 'splitstep', ]
 
 from . import *
