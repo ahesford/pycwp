@@ -6,6 +6,48 @@ import numpy, math, operator
 from scipy import special as spec, ndimage
 from itertools import izip
 
+def givens(crd, theta, axes=(0,1)):
+	'''
+	Perform a Givens rotation of angle theta in the specified axes of the
+	coordinate vector crd.
+	'''
+	c = math.cos(theta)
+	s = math.sin(theta)
+	ncrd = list(crd)
+	x, y = crd[axes[0]], crd[axes[1]]
+	ncrd[axes[0]] = x * c - s * y
+	ncrd[axes[1]] = x * s + c * y
+	return tuple(ncrd)
+
+
+def matchdim(*args):
+	'''
+	For a list of scalars and sequences, ensure that all provided sequences
+	have the same length. For each scalar argument, produce a tuple with
+	the value repeated as many times as the length of the sequence
+	arguments.
+
+	Copies of all input sequences (converted to tuples) and the repeated
+	scalar sequences are returned in the order they were provided.
+
+	A ValueError will be raised if some sequences have disparate lengths.
+	'''
+	# Check the maximum dimensionality
+	def safedim(x):
+		try: return len(x)
+		except TypeError: return 1
+	maxdim = max(safedim(a) for a in args)
+	output = []
+	for a in args:
+		try:
+			if len(a) != maxdim:
+				raise ValueError('Input arguments must be scalar or have same length')
+			else: output.append(tuple(a))
+		except TypeError: output.append(tuple([a] * maxdim))
+
+	return tuple(output)
+
+
 def fuzzyimg(img, nbr):
 	'''
 	Randomize boundaries in the image represented in the matrix img by

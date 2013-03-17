@@ -12,6 +12,51 @@ from itertools import izip, product, repeat
 from . import mio, cutil
 from .ftntools import pade, splitstep
 
+def crdtogrid(x, nx, dx=1.):
+	'''
+	Given physical coordinates x inside a grid with dimensions nx and
+	spacing dx (maybe multidimensional), return the (possibly fractional)
+	pixel coordinates assuming that the physical origin resides at the
+	center of the grid.
+
+	If any parameter is scalar, it is assumed to apply isotropically.
+	'''
+	# Check whether the coordinates are scalar
+	try:
+		len(x)
+		scalar = False
+	except TypeError: scalar = True
+
+	# Check dimensionality of arguments and convert scalars
+	x, nx, dx = cutil.matchdim(x, nx, dx)
+
+	crd = tuple(xv / dxv + 0.5 * (nxv - 1) for xv, nxv, dxv in zip(x, nx, dx))
+	if scalar: return crd[0]
+	else: return crd
+
+
+def gridtocrd(x, nx, dx=1.):
+	'''
+	Given pixel coordinates x (possibly fractional) inside a grid with
+	dimensions nx and spacing dx (all of which may be multidimensional),
+	return the physical coordinates assuming that the coordinate origin
+	resides in the center of the grid.
+
+	If any parameter is scalar, it is assumed to apply isotropically.
+	'''
+	# Check whether the coordinates are scalar
+	try:
+		len(x)
+		scalar = False
+	except TypeError: scalar = True
+
+	# Check dimensionality of arguments and convert scalars
+	x, nx, dx = cutil.matchdim(x, nx, dx)
+
+	crd = tuple(dxv * (xv - 0.5 * (nxv - 1)) for xv, nxv, dxv in zip(x, nx, dx))
+	if scalar: return crd[0]
+	else: return crd
+
 
 def gencompress(c, rho, atn):
 	'''

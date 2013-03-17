@@ -110,9 +110,6 @@ if __name__ == '__main__':
 	# Restrict device transfers to the object grid
 	sse.setroi(inmat.shape[:-1])
 
-	# Compute the z height of a specified slab
-	zoff = lambda i: sse.dz * (float(i) - 0.5 * float(inmat.shape[-1] - 1.))
-
 	# Augment the grid with the third (extended) dimension
 	# An extra slice is required to turn around the field
 	dom = list(inmat.shape[:-1]) + [inmat.shape[-1] + 1]
@@ -121,7 +118,8 @@ if __name__ == '__main__':
 	bar = util.ProgressBar([0, dom[-1]], width=50)
 
 	# Compute the initial forward-traveling field
-	sse.setincident(zoff(inmat.shape[-1] + 0.5))
+	zoff = wavetools.gridtocrd(inmat.shape[-1] + 0.5, inmat.shape[-1], sse.dz)
+	sse.setincident(zoff)
 
 	# Reset and print the progress bar
 	bar.reset()
