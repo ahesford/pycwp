@@ -6,6 +6,13 @@ import numpy, math, operator
 from scipy import special as spec, ndimage
 from itertools import izip
 
+def roundn(x, n):
+	'''
+	Round x up to the next multiple of n.
+	'''
+	return x + (n - x) % n
+
+
 def givens(crd, theta, axes=(0,1)):
 	'''
 	Perform a Givens rotation of angle theta in the specified axes of the
