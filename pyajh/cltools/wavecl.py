@@ -300,7 +300,8 @@ class SplitStep(object):
 		self.sendque = cl.CommandQueue(self.context)
 
 		# Create an FFT plan in the OpenCL propagation queue
-		self.fftplan = Plan((nx, ny), queue=self.fwdque)
+		# Reorder the axes to conform with row-major ordering
+		self.fftplan = Plan((ny, nx), queue=self.fwdque)
 
 		grid = self.grid
 		def newbuffer():
