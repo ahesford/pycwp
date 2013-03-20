@@ -67,16 +67,12 @@ if __name__ == '__main__':
 	# Truncate any existing output file
 	output = mio.Slicer(args[2], [nsamp, inmat.shape[-1]], inmat.dtype, True)
 	
+	# Interpolate to the finer grid
 	if not gpu:
-		for row in inmat:
-			# Interpolate to the finer grid
-			irow = a.interpolate(row[1])
-			# Write the finer grid to output
-			output.writeslice(irow)
+		for i, row in enumerate(inmat): output[i] = a.interpolate(row)
 	else:
-		for row in inmat:
+		for i, row in enumerate(inmat):
 			# Build the spline coefficients for the row
-			a.buildcoeff(row[1])
+			a.buildcoeff(row)
 			# Interpolate to the finer grid and write to output
-			irow = a.interpolate(ntf, 2 * (ntf - 2))
-			output.writeslice(irow)
+			output[i] = a.interpolate(ntf, 2 * (ntf - 2))

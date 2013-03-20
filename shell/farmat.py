@@ -60,4 +60,4 @@ if __name__ == '__main__':
 	output = mio.Slicer(args[1], [f.nsamp, n**3], np.complex64, True)
 
 	# Build the matrix row-by-row and write it to output
-	for c in coords: output.writeslice(f.fillrow(c))
+	for i,c in enumerate(coords): output[i] = f.fillrow(c)

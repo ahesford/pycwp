@@ -250,8 +250,7 @@ class Slicer(object):
 		Returns a tuple of the slice index and its data values.
 		'''
 		# Yield each slice along the last index
-		for idx in range(len(self)):
-			yield (idx, self[idx])
+		for idx in range(len(self)): yield self[idx]
 
 		return
 
@@ -402,8 +401,7 @@ class CoordinateShifter(object):
 
 	def __iter__(self):
 		# Yield each slice along the last index
-		for idx in range(len(self)):
-			yield (idx, self[idx])
+		for idx in range(len(self)): yield self[idx]
 
 		return
 
