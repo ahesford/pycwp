@@ -246,8 +246,7 @@ class Slicer(object):
 
 	def __iter__(self):
 		'''
-		Create a generator to read each desired slice in succession.
-		Returns a tuple of the slice index and its data values.
+		Creates a generator to return slices of the array in sequence.
 		'''
 		# Yield each slice along the last index
 		for idx in range(len(self)): yield self[idx]
@@ -400,6 +399,9 @@ class CoordinateShifter(object):
 
 
 	def __iter__(self):
+		'''
+		Creates a generator to return slices of the array in sequence.
+		'''
 		# Yield each slice along the last index
 		for idx in range(len(self)): yield self[idx]
 

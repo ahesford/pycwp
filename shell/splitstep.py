@@ -7,7 +7,7 @@ from pyajh.cltools import SplitStep, BufferedSlices, mapbuffer
 
 def usage(execname):
 	binfile = os.path.basename(execname)
-	print 'USAGE:', binfile, '[-h] [-q q] [-p p] [-a a] [-g g] [-f f] [-z z] [-s s] [-c c] [-e nx,ny] [-w w] [-d x,y,z,w]', '<src> <infile> <outfile>'
+	print 'USAGE:', binfile, '[-h] [-q q] [-p p] [-a a] [-g g] [-f f] [-z z] [-s s] [-S S] [-c c] [-e nx,ny] [-w w] [-d x,y,z,w]', '<src> <infile> <outfile>'
 	print '''
   Using the split-step method, compute the field induced in a contrast
   medium specified in infile by a point source at location src = x,y,z.
@@ -15,7 +15,7 @@ def usage(execname):
   Propagation happens downward; the topmost slab (the last in the file)
   first receives the incident field. A configurable attenuation profile
   is applied to each edge of each slice.
-  
+
   The solution is written to outfile.
 
   The computational domain is padded to the next larger power of 2 for
@@ -25,15 +25,16 @@ def usage(execname):
   backward pass to pick up backward scatter, and a third pass (computed along
   with the second pass) to shift the fields in each slice to the center for
   comparison to reference methods.
-  
+
   OPTIONAL ARGUMENTS:
   -h: Display this message and exit
   -q: Use high-order spatial terms in the first q passes (default: 0)
   -p: Use high-order spectral terms in the first p passes (default: 2)
   -a: Specify the width of the Hann attenuating window at each edge (default: 100)
   -f: Specify the incident frequency, f, in MHz (default: 3.0)
-  -s: Specify the transverse grid spacing, s, in mm (default: 0.05)
   -z: Specify the propagation step, z, in mm (default: transverse grid spacing)
+  -s: Specify the transverse grid spacing, s, in mm (default: 0.05)
+  -S: Skip first S slices of medium (last S slices of file) (default: 0)
   -c: Specify the sound speed, c, in mm/us (default: 1.507)
   -e: Pad the domain to [nx,ny] pixels (default: next power of two)
   -w: Specify the high-order spectral correction weight (default: 0.39)
@@ -50,10 +51,12 @@ if __name__ == '__main__':
 	a, d, dom, dz = [None]*4
 	# Determine the number of slabs that use high-order corrections
 	hospat, hospec = 0, 2
+	# Skip no slices in the input
+	skip = 0
 
 	ctx = 0
 
-	optlist, args = getopt.getopt(sys.argv[1:], 'hq:a:f:s:z:c:d:p:g:w:e:')
+	optlist, args = getopt.getopt(sys.argv[1:], 'hq:a:f:s:z:S:c:d:p:g:w:e:')
 
 	for opt in optlist:
 		if opt[0] == '-a': a = int(opt[1])
@@ -67,6 +70,7 @@ if __name__ == '__main__':
 		elif opt[0] == '-w': w = float(opt[1])
 		elif opt[0] == '-q': hospat = int(opt[1])
 		elif opt[0] == '-p': hospec = int(opt[1])
+		elif opt[0] == '-S': skip = int(opt[1])
 		else:
 			usage(execname)
 			sys.exit(128)
@@ -86,16 +90,22 @@ if __name__ == '__main__':
 	# Set up a slice-wise input reader
 	inmat = mio.Slicer(args[1])
 	# Automatically pad the domain, if necessary
-	if dom is None: dom = [cutil.ceilpow2(g) for g in inmat.shape[:-1]]
+	if dom is None: dom = [cutil.ceilpow2(g) for g in inmat.sliceshape]
+
+	# Ensure that we aren't skipping the entire medium
+	if skip < 0 or skip >= len(inmat) - 1:
+		print 'Too many slices skipped'
+		sys.exit(128)
 
 	# Pick a default Hann window thickness that will not encroach on the domain
-	if a is None: a = max(0, min((d - g) / 2 for d, g in zip(dom, inmat.shape)))
+	if a is None:
+		a = max(0, min((d - g) / 2 for d, g in zip(dom, inmat.sliceshape)))
 
 	print 'Hann window thickness: %d pixels' % a
 	print 'Computing on expanded grid', dom
 
 	# Determine whether the Hann window encroaches on the domain
-	if any(2 * a + g > d for g, d in zip(inmat.shape, dom)):
+	if any(2 * a + g > d for d, g in zip(dom, inmat.sliceshape)):
 		print
 		print 'CAUTION: Hann window attenuates field in region of interest'
 		print
@@ -104,21 +114,23 @@ if __name__ == '__main__':
 	src = tuple(float(s) * f / c for s in args[0].split(','))
 
 	print 'Creating split-step engine... '
-	sse = SplitStep(k0, dom[0], dom[1], h, src=src, d=d, l=a, w=w, 
+	sse = SplitStep(k0, dom[0], dom[1], h, src=src, d=d, l=a, w=w,
 			dz=dz, propcorr=(hospec > 0, hospat > 0), context=ctx)
 
 	# Restrict device transfers to the object grid
-	sse.setroi(inmat.shape[:-1])
+	sse.setroi(inmat.sliceshape)
 
 	# Augment the grid with the third (extended) dimension
 	# An extra slice is required to turn around the field
-	dom = list(inmat.shape[:-1]) + [inmat.shape[-1] + 1]
+	dom = list(inmat.sliceshape) + [len(inmat) - skip + 1]
+	print 'Propagating through %d slices' % dom[-1]
 
 	# Create a progress bar to display computation progress
 	bar = util.ProgressBar([0, dom[-1]], width=50)
 
-	# Compute the initial forward-traveling field
-	zoff = wavetools.gridtocrd(inmat.shape[-1] + 0.5, inmat.shape[-1], sse.dz)
+	# Compute the forward-traveling field half a slab before the start
+	# Remember that dom[-1] is already a full slab before start
+	zoff = wavetools.gridtocrd(dom[-1] - 0.5, len(inmat), sse.dz)
 	sse.setincident(zoff)
 
 	# Reset and print the progress bar
@@ -129,12 +141,13 @@ if __name__ == '__main__':
 	fmat = mio.Slicer(TemporaryFile(dir='.'), dom, inmat.dtype, True)
 
 	# An empty slab is needed for propagation beyond the medium
-	zeroslab = mapbuffer(sse.context, inmat.shape[:-1], inmat.dtype,
+	zeroslab = mapbuffer(sse.context, inmat.sliceshape, inmat.dtype,
 			cl.mem_flags.READ_ONLY, cl.map_flags.WRITE)[1]
 	zeroslab.fill(0.)
-	# Read the contrast in reverse
+	# Create a buffered slice object to read the contrast
 	obj = BufferedSlices(inmat, 5, context=sse.context)
-	obj.setiter(reversed(range(len(inmat))))
+	# Skip last slabs of the contrast (nearest the source) as desired
+	obj.setiter(reversed(range(len(inmat) - skip)))
 	obj.start()
 
 	# Create a buffered slice object to write the forward field
@@ -180,8 +193,9 @@ if __name__ == '__main__':
 	# Create a buffered slice object to write the output
 	outmat = mio.Slicer(args[2], inmat.shape, inmat.dtype, True)
 	obuf = BufferedSlices(outmat, 5, read=False, context=sse.context)
-	# Store the first result (don't care) in the last slice, which will
-	# be overwritten by the real last slice after full propagation
+	# Store the first result (don't care) in the last slice
+	# This will be overwritten by the real last slice after full
+	# propagation, but will persist if a nonzero skip was specified
 	obuf.setiter(range(-1, len(outmat)))
 	obuf.start()
 
