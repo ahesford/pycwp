@@ -162,7 +162,7 @@ if __name__ == "__main__":
 		elif opt[0] == '-p': phi = float(opt[1])
 		elif opt[0] == '-r': reversed = True
 		elif opt[0] == '-n':
-			dsize = tuple(float(s) for s in opt[1].split(','))
+			dsize = tuple(int(s) for s in opt[1].split(','))
 		else:
 			usage(execname)
 			sys.exit(128)
