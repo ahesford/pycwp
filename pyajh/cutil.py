@@ -6,6 +6,17 @@ import numpy, math, operator
 from scipy import special as spec, ndimage
 from itertools import izip
 
+def grouplist(lst, n):
+	'''
+	Create a generator that returns a sequence of n-tuples taken from
+	successive groups of n values from the iterable lst.
+
+	The final tuple may have a dimensionality less than n if the length of
+	the iterable is not evenly divided by n.
+	'''
+	for i in range(0, len(lst), n): yield tuple(lst[i:i+n])
+
+
 def roundn(x, n):
 	'''
 	Round x up to the next multiple of n.
