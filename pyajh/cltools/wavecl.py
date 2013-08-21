@@ -248,8 +248,8 @@ class SplitStep(object):
 
 	_kernel = util.srcpath(__file__, 'clsrc', 'splitstep.mako')
 
-	def __init__(self, k0, nx, ny, h, src, d = None, l = 10,
-			dz = None, w = 0.39, propcorr = None, context = None):
+	def __init__(self, k0, nx, ny, h, src, d=None, l=10, dz=None,
+			w=0.39, propcorr=None, spdbin=None, context=None):
 		'''
 		Initialize a split-step engine over an nx-by-ny grid with
 		isotropic step size h. The unitless wave number is k0. The wave
@@ -272,11 +272,17 @@ class SplitStep(object):
 		involving high-order spectral or spatial terms, respectively,
 		are used in the propagator by default. If propcorr is
 		unspecified, both corrections are used.
+
+		The parameter spdbin, if specified, will add an additional
+		propagation through each slab for each increment of spdbin that
+		the maximum relative sound speed in the slab exceeds the
+		background (1.0). Otherwise, one step per slab is always used.
 		'''
 		# Copy the parameters
 		self.grid = nx, ny
 		self.h, self.k0, self.l = h, k0, l
 		self.w = np.float32(1. / w**2)
+		self.spdbin = spdbin
 		# Specify the use of corrective terms
 		if propcorr is not None:
 			self.propcorr = tuple(propcorr)
@@ -314,6 +320,8 @@ class SplitStep(object):
 		self.scratch = [newbuffer() for i in range(3)]
 		# The index of refraction gets two buffers for transmission
 		self.obj = [newbuffer() for i in range(2)]
+		# The peak sound speed for the current slab gets stored here
+		self.peakspd = 1.
 		# Initialize buffer to hold results of advance()
 		self.result = newbuffer()
 
@@ -348,6 +356,7 @@ class SplitStep(object):
 		z = np.zeros(grid, dtype=np.complex64)
 		for a in self.fld + self.obj:
 			cl.enqueue_copy(self.fwdque, a, z, is_blocking=False)
+		self.peakspd = 1.
 
 
 	def setroi(self, rgrid):
@@ -381,6 +390,14 @@ class SplitStep(object):
 		# Roll the buffer so the next slab is second
 		nxt, cur = self.obj
 		self.obj = [cur, nxt]
+
+		# Figure the peak effective sound speed in the upcoming slab
+		# Assuming that the imaginary part of the wave number is
+		# negligible compared to the real part, the maximum sound speed
+		# corresponds to the minimum contrast
+		if self.spdbin:
+			peakct = np.min(obj.real)
+			self.peakspd = 1 / np.sqrt(peakct + 1)
 
 		# Ensure buffer is not used by prior calculations
 		nxt.sync(queue)
@@ -498,6 +515,7 @@ class SplitStep(object):
 		The argument shcorr is interpreted exactly as corr, but is used
 		instead of corr for the propagation used to shift the field to
 		the center of the slab.
+
 		'''
 		prog, grid = self.prog, self.grid
 		fwdque, recvque, sendque = self.fwdque, self.recvque, self.sendque
@@ -511,7 +529,9 @@ class SplitStep(object):
 			# Copy the forward field for shifting if necessary
 			cl.enqueue_copy(fwdque, buf, fwd)
 
-		# Push the next slab to its buffer
+		# Copy the peak sound speed for the current slab
+		peakspd = self.peakspd
+		# Push the next slab to its buffer (overwrites peak speed)
 		ocur, onxt, obevt = self.objupdate(obj)
 
 		if bfld is not None:
@@ -522,10 +542,16 @@ class SplitStep(object):
 			# Attach the copy event to the backward buffer
 			bck.attachevent(bfevt)
 
+		# Figure the number of propagation steps to take in this slab
+		if self.spdbin: nsteps = max(1, int((peakspd - 1.) / self.spdbin))
+		else: nsteps = 1
+		dz = self.dz / nsteps
+
 		# Ensure that no prior copy is using the field buffer
 		fwd.sync(fwdque)
-		# Propagate the forward field a whole step on fwdque
-		self.propagate(fwd, corr=corr)
+
+		# Propagate the forward field through the slab on the fwdque
+		for i in range(nsteps): self.propagate(fwd, dz, corr=corr)
 
 		if shift:
 			if bfld is not None:
@@ -536,7 +562,10 @@ class SplitStep(object):
 						np.float32(1.), buf, bck)
 			# Propagate the combined field a half step
 			# Save the propagation event for delaying result copies
-			pevt = self.propagate(buf, 0.5 * self.dz, corr=shcorr)
+			nsteps = max(1, nsteps / 2)
+			dz = 0.5 * self.dz / nsteps
+			for i in range(nsteps):
+				pevt = self.propagate(buf, dz, corr=shcorr)
 			# Copy the shifted field into the result buffer
 			# No result sync necessary, all mods occur on sendque
 			evt = cl.enqueue_copy(sendque, self.result, buf, wait_for=[pevt])

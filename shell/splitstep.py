@@ -7,7 +7,7 @@ from pyajh.cltools import SplitStep, BufferedSlices, mapbuffer
 
 def usage(execname):
 	binfile = os.path.basename(execname)
-	print 'USAGE:', binfile, '[-h] [-q q] [-p p] [-a a] [-g g] [-f f] [-z z] [-s s] [-S S] [-c c] [-e nx,ny] [-w w] [-d x,y,z,w]', '<src> <infile> <outfile>'
+	print 'USAGE:', binfile, '[-h] [-q q] [-p p] [-a a] [-g g] [-f f] [-z z] [-s s] [-S S] [-c c] [-e nx,ny] [-w w] [-b b] [-d x,y,z,w]', '<src> <infile> <outfile>'
 	print '''
   Using the split-step method, compute the field induced in a contrast
   medium specified in infile by a point source at location src = x,y,z.
@@ -39,6 +39,8 @@ def usage(execname):
   -e: Pad the domain to [nx,ny] pixels (default: next power of two)
   -w: Specify the high-order spectral correction weight (default: 0.39)
   -d: Specify a directivity axis x,y,z with width parameter w (default: none)
+  -b: Specify sound speed bin width governing additional steps per slab (default: none)
+  Set increment b of relative sound speed to govern additional steps per slab (default: none)
   -g: Use OpenCL computing device g on the first platform (default: first device)
 	'''
 
@@ -53,10 +55,12 @@ if __name__ == '__main__':
 	hospat, hospec = 0, 2
 	# Skip no slices in the input
 	skip = 0
+	# By default, always take one step per slab
+	spdbin = None
 
 	ctx = 0
 
-	optlist, args = getopt.getopt(sys.argv[1:], 'hq:a:f:s:z:S:c:d:p:g:w:e:')
+	optlist, args = getopt.getopt(sys.argv[1:], 'hq:a:f:s:z:S:c:d:p:g:w:e:b:')
 
 	for opt in optlist:
 		if opt[0] == '-a': a = int(opt[1])
@@ -71,6 +75,7 @@ if __name__ == '__main__':
 		elif opt[0] == '-q': hospat = int(opt[1])
 		elif opt[0] == '-p': hospec = int(opt[1])
 		elif opt[0] == '-S': skip = int(opt[1])
+		elif opt[0] == '-b': spdbin = float(opt[1])
 		else:
 			usage(execname)
 			sys.exit(128)
@@ -114,8 +119,8 @@ if __name__ == '__main__':
 	src = tuple(float(s) * f / c for s in args[0].split(','))
 
 	print 'Creating split-step engine... '
-	sse = SplitStep(k0, dom[0], dom[1], h, src=src, d=d, l=a, w=w,
-			dz=dz, propcorr=(hospec > 0, hospat > 0), context=ctx)
+	sse = SplitStep(k0, dom[0], dom[1], h, src=src, d=d, l=a, w=w, dz=dz,
+			propcorr=(hospec > 0, hospat > 0), spdbin=spdbin, context=ctx)
 
 	# Restrict device transfers to the object grid
 	sse.setroi(inmat.sliceshape)
