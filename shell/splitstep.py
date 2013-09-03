@@ -119,7 +119,7 @@ if __name__ == '__main__':
 	src = tuple(float(s) * f / c for s in args[0].split(','))
 
 	print 'Creating split-step engine... '
-	sse = SplitStep(k0, dom[0], dom[1], h, src=src, d=d, l=a, w=w, dz=dz,
+	sse = SplitStep(k0, dom[0], dom[1], h, d=d, l=a, w=w, dz=dz,
 			propcorr=(hospec > 0, hospat > 0), spdbin=spdbin, context=ctx)
 
 	# Restrict device transfers to the object grid
@@ -136,7 +136,7 @@ if __name__ == '__main__':
 	# Compute the forward-traveling field half a slab before the start
 	# Remember that dom[-1] is already a full slab before start
 	zoff = wavetools.gridtocrd(dom[-1] - 0.5, len(inmat), sse.dz)
-	sse.setincident(zoff)
+	sse.setincident((src[0], src[1], src[2] - zoff))
 
 	# Reset and print the progress bar
 	bar.reset()

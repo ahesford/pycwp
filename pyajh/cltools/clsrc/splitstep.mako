@@ -5,6 +5,7 @@
 <%
 	nx, ny = grid
 	gfc = '__global float2 * const'
+	cfl = 'const float'
 
 	if d:
 		dn = reduce(op.add, [dv**2 for dv in d[:-1]])
@@ -248,14 +249,15 @@ __kernel void corrfld(${gfc} f, ${gfc} u, ${gfc} v, ${gfc} x, const float dz) {
 	f[idx] += imulr(${k0}f * dz, uval + vval + xval);
 }
 
-/* Compute the value of the Green's function at a slab with height zoff. */
-__kernel void green3d(${gfc} fld, const float zoff) {
+/* Compute the value of the Green's function throughout a slab. The source has
+ * transverse coordinates (sx, sy) and has a height dz above the slab. */
+__kernel void green3d(${gfc} fld, ${cfl} sx, ${cfl} sy, ${cfl} dz) {
 	${getindices('i', 'j', 'idx')}
 
-	/* Compute the position of the observer. */
-	const float3 obs = (float3) (${crd(nx, 'i')}, ${crd(ny, 'j')}, zoff);
+	/* Compute the position of the observer, assumed to be z = 0. */
+	const float3 obs = (float3) (${crd(nx, 'i')}, ${crd(ny, 'j')}, 0.0f);
 	/* Compute the vector separation between source and observer. */
-	const float3 rv = obs - (float3) ${prtuple(src)};
+	const float3 rv = obs - (float3) (sx, sy, dz);
 	/* Compute the scalar distance between source and observer. */
 	const float r = length(rv);
 	const float kr = ${k0}f * r;

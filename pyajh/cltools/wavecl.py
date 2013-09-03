@@ -248,18 +248,17 @@ class SplitStep(object):
 
 	_kernel = util.srcpath(__file__, 'clsrc', 'splitstep.mako')
 
-	def __init__(self, k0, nx, ny, h, src, d=None, l=10, dz=None,
+	def __init__(self, k0, nx, ny, h, d=None, l=10, dz=None,
 			w=0.39, propcorr=None, spdbin=None, context=None):
 		'''
 		Initialize a split-step engine over an nx-by-ny grid with
 		isotropic step size h. The unitless wave number is k0. The wave
 		is advanced in steps of dz or (if dz is not provided) h.
 
-		The source location is specified in a three-tuple src with
-		units of wavelengths. If d is provided, it is a 4-tuple that
-		describes the directivity of the source as d = (dx, dy, dz, w),
-		where (dx, dy, dz) is the directivity axis and w is the beam
-		width parameter.
+		If d is provided, it is a 4-tuple that describes the
+		directivity of any source as d = (dx, dy, dz, w), where (dx,
+		dy, dz) is the directivity axis and w is the beam width
+		parameter. Otherwise, all sources are treated as point sources.
 
 		If l is specified and greater than zero, it is the width of a
 		Hann window used to attenuate the field along each edge.
@@ -296,7 +295,7 @@ class SplitStep(object):
 
 		# Build the program for the context
 		t = Template(filename=self._kernel, output_encoding='ascii')
-		src = t.render(grid = self.grid, k0=k0, h=h, src=src, d=d, l=l)
+		src = t.render(grid = self.grid, k0=k0, h=h, d=d, l=l)
 		self.prog = cl.Program(self.context, src).build()
 
 		# Create a command queue for forward propagation calculations
@@ -367,14 +366,19 @@ class SplitStep(object):
 		self.rectxfer = util.RectangularTransfer(self.grid, rgrid, np.complex64, alloc_host=False)
 
 
-	def setincident(self, zoff, idx = 0):
+	def setincident(self, srcloc, idx = 0):
 		'''
 		Set the value of the CL field buffer at index idx to the
-		incident field at a height zoff.
+		incident field at a location srcloc represented as a 3-tuple.
+
+		The field plane is always assumed to have a z-height of 0; the
+		z coordinate of srcloc is therefore the height of the source
+		above the field plane. The transverse origin (x, y) = (0, 0)
+		corresponds to the midpoint of the field plane.
 		'''
 		inc = self.fld[idx]
-		zoff = np.float32(zoff)
-		self.prog.green3d(self.fwdque, self.grid, None, inc, zoff)
+		sx, sy, dz = [np.float32(s) for s in srcloc]
+		self.prog.green3d(self.fwdque, self.grid, None, inc, sx, sy, dz)
 
 
 	def objupdate(self, obj):
