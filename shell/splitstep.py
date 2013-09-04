@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import numpy as np, math, sys, getopt, os, pyopencl as cl
+from numpy.linalg import norm
 from tempfile import TemporaryFile
 from pyajh import mio, wavetools, util, cutil
 from pyajh.cltools import SplitStep, BufferedSlices, mapbuffer
@@ -43,6 +44,30 @@ def usage(execname):
   Set increment b of relative sound speed to govern additional steps per slab (default: none)
   -g: Use OpenCL computing device g on the first platform (default: first device)
 	'''
+
+def facetnormal(f):
+	'''
+	For an N x 3 array of coordinates of transducer elements on a planar
+	facet, in which the i-th row represents the coordinates (x, y, z)
+	coordinates (across the columns) of the i-th element, find the outward
+	facet normal. Outward, in this case, means pointing to the side of the
+	plane opposite the origin.
+	'''
+	# This reference vector should point from one corner to another
+	ref = f[-1] - f[0]
+	nref = norm(ref)
+	# Enumerate local coordinates of all other elements
+	vecs = [fv - f[0] for fv in f[1:-1]]
+	# Find the vector most orthogonal to the reference
+	v = min(vecs, key = lambda x: abs(np.dot(x, ref)) / norm(x) / nref)
+	# Compute and normalize the normal
+	n = np.cross(v, ref)
+	n /= np.norm(n)
+	# Find length of normal segment connecting origin to facet plane
+	d = np.dot(f[0], n)
+	# If d is positive, the normal already points outward
+	return n if (d > 0) else -n
+
 
 if __name__ == '__main__':
 	# Grab the executable name

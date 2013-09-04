@@ -15,6 +15,8 @@ def rotate3d(pt, theta, phi, inverse=False):
 	ctheta = math.cos(theta)
 	stheta = math.sin(theta)
 
+	x, y, z = pt
+
 	if not inverse:
 		# First perform the azimuthal rotation
 		nx = x * cphi - y * sphi
