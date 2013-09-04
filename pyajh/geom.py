@@ -1,5 +1,38 @@
 import math, numpy as np
 
+
+def rotate3d(pt, theta, phi, inverse=False):
+	'''
+	Rotate a 3-D point pt (represented as a sequence x, y, z) by first
+	rotating by an azimuthal angle phi about the z axis, then rotating by a
+	polar angle theta about the new y axis.
+
+	If inverse is True, first rotate the polar angle about the y axis and
+	then rotate the azimuthal angle about the new z axis.
+	'''
+	cphi = math.cos(phi)
+	sphi = math.sin(phi)
+	ctheta = math.cos(theta)
+	stheta = math.sin(theta)
+
+	if not inverse:
+		# First perform the azimuthal rotation
+		nx = x * cphi - y * sphi
+		ny = x * sphi + y * cphi
+		# Next perform the polar rotation
+		nz = z * ctheta - nx * stheta
+		nx = z * stheta + nx * ctheta
+	else:
+		# First perform the polar rotation
+		nz = z * ctheta - x * stheta
+		nx = z * stheta + x * ctheta
+		# Next perform the azimuthal rotation
+		ny = nx * sphi + y * cphi
+		nx = nx * cphi - y * sphi
+
+	return nx, ny, nz
+
+
 def gridcoords(i, nc, dc, dim=3):
 	'''
 	Return the Cartesian coordinates of the center of cell i in a grid of
