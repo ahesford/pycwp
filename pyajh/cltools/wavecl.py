@@ -319,10 +319,15 @@ class SplitStep(object):
 		self.scratch = [newbuffer() for i in range(3)]
 		# The index of refraction gets two buffers for transmission
 		self.obj = [newbuffer() for i in range(2)]
+		# Two buffers are used for the Goertzel FFT of the contrast source
+		self.goertzbuf = [newbuffer() for i in range(2)]
 		# The peak sound speed for the current slab gets stored here
-		self.peakspd = 1.
+		self._peakspd = 1.
 		# Initialize buffer to hold results of advance()
 		self.result = newbuffer()
+
+		# By default, volume fields will be transfered from the device
+		self._goertzel = False
 
 		# Initialize refractive index and fields
 		self.reset()
@@ -341,7 +346,7 @@ class SplitStep(object):
 		return [(c - 0.5 * (n - 1.)) * self.h for c, n in zip(cg, g)]
 
 
-	def reset(self, propcorr = None):
+	def reset(self, propcorr = None, goertzel = False):
 		'''
 		Reset the propagating and backward fields to zero and the prior
 		refractive index buffer to unity.
@@ -349,13 +354,20 @@ class SplitStep(object):
 		If propcorr is provided, it should be tuple as described in the
 		docstring for __init__(). This will change the default behavior
 		of corrective terms in the propagator.
+
+		If goertzel is True, calls to advance() with shift=True will
+		not copy the shifted, combined field from the device. Instead,
+		the field will be used in a Goertzel algorithm to compute
+		(slice by slice) the Fourier transform, restricted to the unit
+		sphere, of induced scattering sources.
 		'''
 		if propcorr is not None: self.propcorr = tuple(propcorr)
 		grid = self.grid
 		z = np.zeros(grid, dtype=np.complex64)
-		for a in self.fld + self.obj:
+		for a in self.fld + self.obj + self.goertzbuf:
 			cl.enqueue_copy(self.fwdque, a, z, is_blocking=False)
-		self.peakspd = 1.
+		self._peakspd = 1.
+		self._goertzel = goertzel
 
 
 	def setroi(self, rgrid):
@@ -401,7 +413,7 @@ class SplitStep(object):
 		# corresponds to the minimum contrast
 		if self.spdbin:
 			peakct = np.min(obj.real)
-			self.peakspd = 1 / np.sqrt(peakct + 1)
+			self._peakspd = 1 / np.sqrt(peakct + 1)
 
 		# Ensure buffer is not used by prior calculations
 		nxt.sync(queue)
@@ -519,7 +531,6 @@ class SplitStep(object):
 		The argument shcorr is interpreted exactly as corr, but is used
 		instead of corr for the propagation used to shift the field to
 		the center of the slab.
-
 		'''
 		prog, grid = self.prog, self.grid
 		fwdque, recvque, sendque = self.fwdque, self.recvque, self.sendque
@@ -534,7 +545,7 @@ class SplitStep(object):
 			cl.enqueue_copy(fwdque, buf, fwd)
 
 		# Copy the peak sound speed for the current slab
-		peakspd = self.peakspd
+		peakspd = self._peakspd
 		# Push the next slab to its buffer (overwrites peak speed)
 		ocur, onxt, obevt = self.objupdate(obj)
 
@@ -570,11 +581,26 @@ class SplitStep(object):
 			dz = 0.5 * self.dz / nsteps
 			for i in range(nsteps):
 				pevt = self.propagate(buf, dz, corr=shcorr)
-			# Copy the shifted field into the result buffer
-			# No result sync necessary, all mods occur on sendque
-			evt = cl.enqueue_copy(sendque, self.result, buf, wait_for=[pevt])
-			# Attach the copy event to the source buffer
-			buf.attachevent(evt)
+
+			# Handle Goertzel iterations to compute the Fourier
+			# transform of the contrast source on the unit sphere
+			if self._goertzel:
+				# Compute the FFT of the source in the XY plane
+				crt = self.scratch[0]
+				prog.ctmul(fwdque, grid, None, crt, ocur, buf)
+				self.fftplan.execute(crt)
+				# Compute the next Goertzel iteration
+				pn1, pn2 = self.goertzbuf
+				dz = np.float32(self.dz)
+				prog.goertzelfft(fwdque, grid, None, pn1, pn2, crt, dz)
+				# Cycle the Goertzel buffers
+				self.goertzbuf = [pn2, pn1]
+			else:
+				# Copy the shifted field into the result buffer
+				# No result sync necessary, all mods occur on sendque
+				evt = cl.enqueue_copy(sendque, self.result, buf, wait_for=[pevt])
+				# Attach the copy event to the source buffer
+				buf.attachevent(evt)
 
 		# Ensure the next slab has been received
 		cl.enqueue_barrier(fwdque, wait_for=[obevt])
@@ -617,3 +643,30 @@ class SplitStep(object):
 		# Attach the copy event to the result buffer
 		self.result.attachevent(evt)
 		return evt
+
+
+	def goertzelfft(self):
+		'''
+		Finish Goertzel iterations carried out in repeated calls to
+		advance() and copy the positive and negative hemispheres of the
+		Fourier transform of the contrast source to successive planes
+		of a Numpy array.
+
+		Copies are synchronous and are done on the forward propagation
+		queue.
+		'''
+		prog, grid = self.prog, self.grid
+		fwdque = self.fwdque
+		hemispheres = np.zeros(list(grid) + [2], dtype=np.complex64, order='F')
+		# If the spectral field hasn't been computed, just return zeros
+		if not self._goertzel: return hemispheres
+		# Finalize the Goertzel iteration
+		pn1, pn2 = self.goertzbuf
+		dz = np.float32(self.dz)
+		# Pass None as the contrast current to signal final iteration
+		# After this, pn1 is the positive hemisphere, pn2 is the negative
+		prog.goertzelfft(fwdque, grid, None, pn1, pn2, None, dz)
+		# Copy the two hemispheres into planes of an array
+		cl.enqueue_copy(fwdque, hemispheres[:,:,0:1], pn1, is_blocking=False)
+		cl.enqueue_copy(fwdque, hemispheres[:,:,1:2], pn2, is_blocking=True)
+		return hemispheres

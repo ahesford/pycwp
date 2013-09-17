@@ -301,3 +301,59 @@ __kernel void txreflect(${gfc} fwd, ${gfc} bck, ${gfc} ocur, ${gfc} onxt) {
 	const float2 cor = cmul(cdiv(rval, (float2) (1.0f, 0.0f) - rval), bval);
 	fwd[idx] = fval + cmul(rval, fval) - cor;
 }
+
+/* Perform a Goertzel iteration to effect a Fourier transform along the
+ * propagation (z) direction, with k_z restricted to the unit sphere. The step
+ * N inputs are the previous two iterations (N - 1 in pn1 and N - 2 in pn2) of
+ * the Goertzel algorithm and the induced current source crt, already Fourier
+ * transformed in x and y. On return, pn2 is replaced with the N-th iteration.
+ *
+ * When crt is NULL, a final iteration is performed. In this case, the values
+ * in pn1 are replaced with the upper hemisphere, and the values of pn2 are
+ * replaced with the lower hemisphere, of the Fourier transform of the induced
+ * volume current, restricted to the unit sphere. Each plane has k_x and k_y
+ * values according to the standard FFT ordering, with the value of k_z implied
+ * such that
+ *
+ *      k0**2 = k_x**2 + k_y**2 + k_z**2.
+ *
+ * For evanescent values of k_z, the value of the Fourier transform is zero. */
+__kernel void goertzelfft(${gfc} pn1, ${gfc} pn2, ${gfc} crt, const float dz) {
+	/* Grab the recursion values for the work item. */
+	${getindices('i', 'j', 'idx')}
+	const float2 pn1v = pn1[idx];
+	const float2 pn2v = pn2[idx];
+
+	const float2 zero = (float2) (0.0f);
+
+	/* The field might be NULL in the last step. */
+	const float2 crtv = crt ? crt[idx] : zero;
+
+	/* Compute the transverse and axial wave numbers. */
+	${getkxy('i', 'j')}
+	/* This is either pure real or pure imaginary. */
+	const float2 kz = csqrtr(${k0**2}f - kxy);
+
+	/* The weight w = exp(-i * kz * dz); recursion uses weight
+	 * h = (w + w*) = 2 cos(kz * dz). Only real kz is of interest. */
+	const float h = (${k0**2}f >= kxy) ? (2.0f * cos(kz.x * dz)) : 0.0f;
+
+	/* Compute the next value of the Goertzel iteration. */
+	const float2 nv = (${k0**2}f >= kxy) ? (h * pn1v - pn2v + crtv) : zero;
+
+	if (crt) {
+		/* Overwrite the earliest step with the next iteration. */
+		pn2[idx] = nv;
+	} else if (${k0**2}f >= kxy) {
+		/* Compute final non-evanescent Fourier transform values. */
+		const float2 w = cexp(imulr(dz, kz));
+		const float2 pfft = nv - cmul(w, pn1v);
+		const float2 nfft = nv - cmul((float2)(w.x, -w.y), pn1v);
+		pn1[idx] = pfft;
+		pn2[idx] = nfft;
+	} else {
+		/* For evanescent waves, just fill with zeros. */
+		pn1[idx] = zero;
+		pn2[idx] = zero;
+	}
+}
