@@ -4,20 +4,37 @@ import numpy as np, math, sys, getopt, os, pyopencl as cl
 from numpy.linalg import norm
 from tempfile import TemporaryFile
 from multiprocessing import Process
+from subprocess import check_call
 
-from pyajh import mio, wavetools, util, cutil
+from pyajh import mio, wavetools, util, cutil, geom
 from pyajh.cltools import SplitStep, BufferedSlices, mapbuffer
 
 def usage(execname):
 	binfile = os.path.basename(execname)
-	print 'USAGE:', binfile, '[-h] [-q q] [-p p] [-a a] [-g g0,g1,...] [-v] [-f f] [-z z] [-s s] [-c c] [-e nx,ny] [-w w] [-b b] [-d x,y,z,w]', '<srcs> <infile> <outfile>'
+	print 'USAGE:', binfile, '[-h] [-q q] [-p p] [-a a] [-r regrid.py] [-g g0,g1,...] [-v] [-f f] [-s s] [-c c] [-e nx,ny] [-w w] [-b b] [-d [x,y,z,]w]', '<srclist> <infile> <outfile>'
 	print '''
-  Using the split-step method, compute the fields induced in a contrast
-  medium specified in infile by each of a collection of point sources at
-  locations srcs = x0,y0,z0,x1,y1,z1,...,xN,yN,zN. The coordinate origin is at
-  the center of the contrast file. Propagation happens downward; the topmost
-  slab (the last in the file) first receives the incident field. A configurable
-  attenuation profile is applied to each edge of each slice.
+  Using the split-step method, compute the fields induced in a contrast medium
+  specified in infile by each of a collection of sources listed in the file
+  srclist. The file describes each source on a separate line and, because
+  numpy.loadtxt is used to parse the file, supports hash comments. Each source
+  is described by four columns; the x, y, and z coordinates of the source (in
+  that order) followed by a facet identifier integer. The identifier is
+  arbitrary, but sources sharing an identifier are assumed to belong to the
+  same planar facet.
+
+  If a path to regrid.py is specified, the medium will be rotated so that the z
+  axis is parallel to a reference direction unless the z axis is already within
+  5 degrees of that direction. If a directivity axis is specified, this is
+  always the negative of the reference direction. Otherwise, if there are at
+  least three non-collinear elements in a facet, the reference direction is the
+  normal of the facet pointing away from the origin. If the facet is degenerate
+  (with only one or two elements, or any number of collinear elements), the
+  reference direction is toward the midpoint of the sources.
+
+  The coordinate origin is at the center of the contrast file. Propagation
+  happens downward; the topmost slab (the last in the file) first receives the
+  incident field. A configurable attenuation profile is applied to each edge of
+  each slice.
 
   Each solution is written to outfile with a unique identifier appended.
 
@@ -33,17 +50,17 @@ def usage(execname):
   -h: Display this message and exit
   -q: Use high-order spatial terms in the first q passes (default: 0)
   -p: Use high-order spectral terms in the first p passes (default: 2)
-  -a: Specify the width of the Hann attenuating window at each edge (default: 100)
-  -f: Specify the incident frequency, f, in MHz (default: 3.0)
-  -z: Specify the propagation step, z, in mm (default: transverse grid spacing)
-  -s: Specify the transverse grid spacing, s, in mm (default: 0.05)
-  -c: Specify the sound speed, c, in mm/us (default: 1.507)
-  -e: Pad the domain to [nx,ny] pixels (default: next power of two)
-  -w: Specify the high-order spectral correction weight (default: 0.39)
-  -d: Specify a directivity axis x,y,z with width parameter w (default: none)
-  -b: Specify sound speed bin width governing additional steps per slab (default: none)
+  -a: Width of the Hann attenuating window at each edge (default: 100)
+  -r: Specify the full path to regrid.py for rotation (default: no rotation)
   -g: Use OpenCL devices g0,g1,... on the first platform (default: first device)
   -v: Output volume field instead of Fourier transform of contrast source
+  -f: Incident frequency, f, in MHz (default: 3.0)
+  -s: Isotropic grid spacing, s, in mm (default: 0.05)
+  -c: Sound speed, c, in mm/us (default: 1.507)
+  -e: Pad domain to [nx,ny] pixels (default: next power of two)
+  -w: High-order spectral correction weight (default: 0.39)
+  -b: Incremental speed threshold for additional propagation steps (default: none)
+  -d: Directivity width parameter w and optional axis (x,y,z) (default: none)
 	'''
 
 def facetnormal(f):
@@ -54,16 +71,31 @@ def facetnormal(f):
 	facet normal. Outward, in this case, means pointing to the side of the
 	plane opposite the origin.
 	'''
-	# This reference vector should point from one corner to another
+	# If there aren't enough points on the facet, pick the midpoint
+	if len(f) < 3:
+		n = np.mean(f, axis=0)
+		n /= norm(n)
+		return n
+
+	# The first reference vector should point from one corner to another
 	ref = f[-1] - f[0]
 	nref = norm(ref)
 	# Enumerate local coordinates of all other elements
 	vecs = [fv - f[0] for fv in f[1:-1]]
 	# Find the vector most orthogonal to the reference
 	v = min(vecs, key = lambda x: abs(np.dot(x, ref)) / norm(x) / nref)
-	# Compute and normalize the normal
+	# Compute the normal and its length
 	n = np.cross(v, ref)
-	n /= np.norm(n)
+	nnrm = norm(n)
+
+	# If the cross product is very small, treat the elements as collinear
+	if nnrm < 1.0e-6:
+		n = np.mean(f, axis=0)
+		n /= norm(n)
+		return n
+
+	# Otherwise, normalize the vector and pick the right direction
+	n /= nnrm
 	# Find length of normal segment connecting origin to facet plane
 	d = np.dot(f[0], n)
 	# If d is positive, the normal already points outward
@@ -71,7 +103,7 @@ def facetnormal(f):
 
 
 def propagator(srclist, contrast, output, c=1.507, f=3.0, s=0.05, w=0.39,
-		p=2, q=0, a=None, d=None, e=None, z=None, b=None, v=False, g=0):
+		p=2, q=0, a=None, d=None, e=None, b=None, v=False, g=0):
 	'''
 	For each source in a sequence of sources (each specified as a
 	three-element sequence), propagate its field through the specified
@@ -91,7 +123,6 @@ def propagator(srclist, contrast, output, c=1.507, f=3.0, s=0.05, w=0.39,
 	a: Width of Hann attenuating window at each edge
 	d: Sequence [x,y,z,w] specifying directivity axis (x,y,z) and width w
 	e: 2-D sequence specifying the extended transverse domain dimensions
-	z: Axial grid spacing, mm
 	b: "Speed bin" width, governs number of steps through high-speed slabs
 	v: When True, write volume fields instead of spectral field
 	g: GPU device to use for computations
@@ -104,9 +135,6 @@ def propagator(srclist, contrast, output, c=1.507, f=3.0, s=0.05, w=0.39,
 
 	# Convert distance units to wavelengths
 	s *= f / float(c)
-	# Convert or copy the axial step
-	if z is not None: z *= f / float(c)
-	else: z = s
 
 	# Set up a slice-wise input reader
 	ctmat = mio.Slicer(contrast)
@@ -125,7 +153,7 @@ def propagator(srclist, contrast, output, c=1.507, f=3.0, s=0.05, w=0.39,
 	# Convert source locations to wavelengths
 	srclist = [tuple(crd * f / float(c) for crd in src) for src in srclist]
 
-	sse = SplitStep(k0, e[0], e[1], s, d=d, l=a, w=w, dz=z,
+	sse = SplitStep(k0, e[0], e[1], s, d=d, l=a, w=w,
 			propcorr=(p > 0, q > 0), spdbin=b, context=g)
 
 	# Restrict device transfers to the object grid
@@ -148,7 +176,7 @@ def propagator(srclist, contrast, output, c=1.507, f=3.0, s=0.05, w=0.39,
 
 		# Compute the forward-traveling field half a slab before the start
 		# Remember that dom[-1] is already a full slab before start
-		zoff = wavetools.gridtocrd(dom[-1] - 0.5, len(ctmat), z)
+		zoff = wavetools.gridtocrd(dom[-1] - 0.5, len(ctmat), s)
 		sse.setincident((src[0], src[1], src[2] - zoff))
 
 		# Reset and print the progress bar
@@ -258,12 +286,17 @@ if __name__ == '__main__':
 	# Grab the executable name
 	execname = sys.argv[0]
 
+	# By default, the rotation program, regrid.py, is unspecified
+	rotprog = None
+	# Rotate the medium if the reference direction deviates from z by five degrees
+	rottol = 5. * math.pi / 180.
+
 	# These arguments will be passed to each propagator
 	propargs = {}
 	# By default, use only the first GPU for calculations
 	gpuctx = [0]
 
-	optlist, args = getopt.getopt(sys.argv[1:], 'hq:a:f:s:z:c:d:p:g:w:e:b:v')
+	optlist, args = getopt.getopt(sys.argv[1:], 'hq:a:f:s:c:d:p:g:w:e:b:vr:')
 
 	for opt in optlist:
 		if opt[0] == '-a':
@@ -276,8 +309,6 @@ if __name__ == '__main__':
 			propargs['f'] = float(opt[1])
 		elif opt[0] == '-s':
 			propargs['s'] = float(opt[1])
-		elif opt[0] == '-z':
-			propargs['z'] = float(opt[1])
 		elif opt[0] == '-c':
 			propargs['c'] = float(opt[1])
 		elif opt[0] == '-g':
@@ -292,6 +323,8 @@ if __name__ == '__main__':
 			propargs['b'] = float(opt[1])
 		elif opt[0] == '-v':
 			propargs['v'] = True
+		elif opt[0] == '-r':
+			rotprog = opt[1]
 		else:
 			usage(execname)
 			sys.exit(128)
@@ -301,41 +334,95 @@ if __name__ == '__main__':
 		usage(execname)
 		sys.exit(128)
 
-	# Group comma-separated source coordinates into (x,y,z) triples
-	srclist = list(cutil.grouplist([float(s) for s in args[0].split(',')], 3))
+	# Read elements coordinates and facet indices from facet file
+	elements = np.loadtxt(args[0])
+	# Pull out a list of unique facet indices
+	facets = np.unique(elements[:,-1].astype(int)).tolist()
+
 	# Grab the file names for input and output
 	contrast = args[1]
 	output = args[2]
 
-	# If fewer sources than GPUs, truncate the GPU list
-	nsrc, ngpu = len(srclist), len(gpuctx)
-	if nsrc < ngpu:
-		gpuctx = gpuctx[:nsrc]
-		ngpu = nsrc
+	# Loop over all facet indices
+	for fidx in facets:
+		# Pull all elements belonging to the current facet
+		srclist = [el[:-1] for el in elements.tolist() if int(el[-1]) == fidx]
 
-	# Divide the source list into groups for each GPU context
-	srcgroups = []
-	share = nsrc / ngpu
-	remainder = nsrc % ngpu
-	for i in range(ngpu):
-		start = i * share + min(remainder, i)
-		srcgroups.append(srclist[start:start+share+(1 if i < remainder else 0)])
+		# Determine if rotation is necessary
+		try:
+			# If a directivity axis was specified, use its negative
+			directivity = propargs['d']
+			if len(directivity) < 4:
+				raise KeyError('Directivity axis was not specified')
+			propax = -np.array(directivity[:-1])
+			r, theta, phi = geom.cart2sph(*propax)
+		except KeyError:
+			# If no directivity axis was specified, determine the axis
+			propax = facetnormal(np.array(srclist))
+			r, theta, phi = geom.cart2sph(*propax)
 
-	try:
-		# Spawn processes to handle GPU computations
-		procs = []
-		for srcgrp, g in zip(srcgroups, gpuctx):
-			# Set the function arguments
-			args = (srcgrp, contrast, output)
-			kwargs = dict(propargs)
-			# Establish the GPU context argument
-			kwargs['g'] = g
-			p = Process(target=propagator, args=args, kwargs=kwargs)
-			p.start()
-			procs.append(p)
-		for p in procs: p.join()
-	except:
-		for p in procs:
-			p.terminate()
-			p.join()
-		raise
+		if (rotprog is None) or (theta < rottol):
+			rotcontrast = contrast
+			rotoutput = output
+		else:
+			degangles = tuple(cutil.rad2deg(a) for a in [theta, phi])
+			appendage = '.(%07.2f,%07.2f)' % degangles
+			# Rotated contrast file is stored in current directory
+			rotcontrast = os.path.join('.', os.path.basename(contrast) + appendage)
+			rotoutput = output + appendage
+
+			# Determine the input grid, which is also the output grid
+			grid = mio.Slicer(contrast).shape
+			gridstr = ','.join('%d' % gv for gv in grid)
+
+			# Rotate the axes of the contrast grid parallel to normal
+			check_call([rotprog, '-g', '%d' % gpuctx[0],
+				'-t', '%g' % -theta, '-p', '%g' % -phi,
+				'-n', gridstr, contrast, rotcontrast])
+
+			# Rotate the element coordinates to the new system
+			srclist = [geom.rotate3d(src, -theta, -phi) for src in srclist]
+			print srclist
+
+			try:
+				# Attempt to replace the directivity axis
+				beamwidth = propargs['d'][-1]
+				propargs['d'] = (-propax).tolist() + [beamwidth]
+			except KeyError: pass
+
+		# If fewer sources than GPUs, truncate the GPU list
+		nsrc, ngpu = len(srclist), len(gpuctx)
+		if nsrc < ngpu:
+			gpuctx = gpuctx[:nsrc]
+			ngpu = nsrc
+
+		# Divide the source list into groups for each GPU context
+		srcgroups = []
+		share = nsrc / ngpu
+		remainder = nsrc % ngpu
+		for i in range(ngpu):
+			start = i * share + min(remainder, i)
+			endval = start + share + (1 if i < remainder else 0)
+			srcgroups.append(srclist[start:endval])
+
+		try:
+			# Spawn processes to handle GPU computations
+			procs = []
+			for srcgrp, g in zip(srcgroups, gpuctx):
+				# Set the function arguments
+				args = (srcgrp, rotcontrast, rotoutput)
+				kwargs = dict(propargs)
+				# Establish the GPU context argument
+				kwargs['g'] = g
+				p = Process(target=propagator, args=args, kwargs=kwargs)
+				p.start()
+				procs.append(p)
+			for p in procs: p.join()
+		except:
+			for p in procs:
+				p.terminate()
+				p.join()
+			raise
+		finally:
+			# Remove the rotated contrast if necessary
+			if rotcontrast != contrast: os.remove(rotcontrast)

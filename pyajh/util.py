@@ -2,6 +2,17 @@
 General-purpose, non-numerical routines.
 '''
 
+def grouplist(lst, n):
+	'''
+	Create a generator that returns a sequence of n-tuples taken from
+	successive groups of n values from the iterable lst.
+
+	The final tuple may have a dimensionality less than n if the length of
+	the iterable is not evenly divided by n.
+	'''
+	for i in range(0, len(lst), n): yield tuple(lst[i:i+n])
+
+
 def printflush(string):
 	'''
 	Print a string, without a newline, and flush stdout.
@@ -9,6 +20,7 @@ def printflush(string):
 	from sys import stdout
 	print string,
 	stdout.flush()
+
 
 class ProgressBar:
 	'''
@@ -27,7 +39,6 @@ class ProgressBar:
 		# Initialize the string and the counter
 		self.string = ''
 		self.reset()
-
 
 
 	def increment(self, amount = 1):

@@ -6,15 +6,17 @@ import numpy, math, operator
 from scipy import special as spec, ndimage
 from itertools import izip
 
-def grouplist(lst, n):
+def deg2rad(t):
 	'''
-	Create a generator that returns a sequence of n-tuples taken from
-	successive groups of n values from the iterable lst.
+	Convert the angle t in degrees to radians.
+	'''
+	return t * math.pi / 180.
 
-	The final tuple may have a dimensionality less than n if the length of
-	the iterable is not evenly divided by n.
+def rad2deg(t):
 	'''
-	for i in range(0, len(lst), n): yield tuple(lst[i:i+n])
+	Convert the angle t in radians to degrees.
+	'''
+	return t * 180. / math.pi
 
 
 def roundn(x, n):
