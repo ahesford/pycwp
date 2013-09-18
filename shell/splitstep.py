@@ -102,14 +102,19 @@ def facetnormal(f):
 	return n if (d > 0) else -n
 
 
-def propagator(srclist, contrast, output, c=1.507, f=3.0, s=0.05, w=0.39,
-		p=2, q=0, a=None, d=None, e=None, b=None, v=False, g=0):
+def propagator(contrast, output, srclist, start=0, share=-1, c=1.507, f=3.0,
+		s=0.05, w=0.39, p=2, q=0, a=None, d=None, e=None, b=None, v=False, g=0):
 	'''
-	For each source in a sequence of sources (each specified as a
+	For a subset of sources in a sequence of sources (each specified as a
 	three-element sequence), propagate its field through the specified
 	contrast file, storing the result in output (which may either be a
 	volume field or the spectral field on the unit sphere, computed with
 	the Goertzel algorithm).
+
+	The subset of sources is specified by the arguments start and share,
+	which specify the starting index and number of subsequent contiguous
+	sources to use. If share is less than 0, all sources following and
+	including start are used.
 
 	The remaining arguments have the same meanings as command-line
 	arguments and defined in usage():
@@ -130,8 +135,14 @@ def propagator(srclist, contrast, output, c=1.507, f=3.0, s=0.05, w=0.39,
 	k0 = 2 * math.pi
 	goertzel = not v
 
-	# There is no work to be done if there are no sources
-	if len(srclist) < 1: return
+	# Ensure that the starting index is valid or else do no work
+	if start < 0 or start >= len(srclist): return
+
+	# Adjust negative share values
+	if share < 0: share = len(srclist) - start
+
+	# There is no work to be done if there is no share
+	if share < 1: return
 
 	# Convert distance units to wavelengths
 	s *= f / float(c)
@@ -167,12 +178,15 @@ def propagator(srclist, contrast, output, c=1.507, f=3.0, s=0.05, w=0.39,
 	# Create a progress bar to display computation progress
 	bar = util.ProgressBar([0, dom[-1]], width=50)
 
-	for srcidx, src in enumerate(srclist):
+	for srcidx in range(start, start + share):
+		# Convert the current source to wavelengths
+		src = tuple(crd * f / float(c) for crd in srclist[srcidx])
+		# Create a unique output name
+		srcstring = util.zeropad(srcidx, len(srclist))
+		outname = '{:s}.src{:s}'.format(output, srcstring)
+
 		# Ensure that the split-step engine is consistent
 		sse.reset((p > 0, q > 0), goertzel=goertzel)
-
-		# Create a unique output name
-		outname = output + '.src%d.ctx%d' % (srcidx, g)
 
 		# Compute the forward-traveling field half a slab before the start
 		# Remember that dom[-1] is already a full slab before start
@@ -365,8 +379,7 @@ if __name__ == '__main__':
 			rotcontrast = contrast
 			rotoutput = output
 		else:
-			degangles = tuple(cutil.rad2deg(a) for a in [theta, phi])
-			appendage = '.(%07.2f,%07.2f)' % degangles
+			appendage = '.facet{:s}'.format(util.zeropad(fidx, max(facets)))
 			# Rotated contrast file is stored in current directory
 			rotcontrast = os.path.join('.', os.path.basename(contrast) + appendage)
 			rotoutput = output + appendage
@@ -382,7 +395,6 @@ if __name__ == '__main__':
 
 			# Rotate the element coordinates to the new system
 			srclist = [geom.rotate3d(src, -theta, -phi) for src in srclist]
-			print srclist
 
 			try:
 				# Attempt to replace the directivity axis
@@ -396,21 +408,17 @@ if __name__ == '__main__':
 			gpuctx = gpuctx[:nsrc]
 			ngpu = nsrc
 
-		# Divide the source list into groups for each GPU context
-		srcgroups = []
-		share = nsrc / ngpu
-		remainder = nsrc % ngpu
-		for i in range(ngpu):
-			start = i * share + min(remainder, i)
-			endval = start + share + (1 if i < remainder else 0)
-			srcgroups.append(srclist[start:endval])
-
 		try:
 			# Spawn processes to handle GPU computations
 			procs = []
-			for srcgrp, g in zip(srcgroups, gpuctx):
+			for i, g in enumerate(gpuctx):
+				# Figure the work load
+				share = nsrc / ngpu
+				remainder = nsrc % ngpu
+				start = i * share + min(remainder, i)
+				if i < remainder: share += 1
 				# Set the function arguments
-				args = (srcgrp, rotcontrast, rotoutput)
+				args = (rotcontrast, rotoutput, srclist, start, share)
 				kwargs = dict(propargs)
 				# Establish the GPU context argument
 				kwargs['g'] = g
