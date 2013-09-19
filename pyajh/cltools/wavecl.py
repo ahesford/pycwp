@@ -249,7 +249,7 @@ class SplitStep(object):
 	_kernel = util.srcpath(__file__, 'clsrc', 'splitstep.mako')
 
 	def __init__(self, k0, nx, ny, h, d=None, l=10, dz=None,
-			w=0.39, propcorr=None, spdbin=None, context=None):
+			w=0.39, propcorr=None, phasetol=None, context=None):
 		'''
 		Initialize a split-step engine over an nx-by-ny grid with
 		isotropic step size h. The unitless wave number is k0. The wave
@@ -272,16 +272,24 @@ class SplitStep(object):
 		are used in the propagator by default. If propcorr is
 		unspecified, both corrections are used.
 
-		The parameter spdbin, if specified, will add an additional
-		propagation through each slab for each increment of spdbin that
-		the maximum relative sound speed in the slab exceeds the
-		background (1.0). Otherwise, one step per slab is always used.
+		The parameter phasetol specifies the maximum permissible phase
+		deviation (in fractions of pi), relative to propagation through
+		the homogeneous background, incurred by propagating through the
+		inhomogeneous medium. The number of steps per slab will be
+		adjusted so that the phase shift incurred by propagating
+		through materials with the most extreme sound speeds will never
+		exceed phasetol.
 		'''
+		# Ensure that the phase tolerance is not too small
+		# Otherwise, number of propagation steps will blow up uncontrollably
+		if phasetol is not None and abs(phasetol) < 1e-6:
+			raise ValueError('Phase tolerance must be greater than 1e-6')
+
 		# Copy the parameters
 		self.grid = nx, ny
 		self.h, self.k0, self.l = h, k0, l
 		self.w = np.float32(1. / w**2)
-		self.spdbin = spdbin
+		self.phasetol = phasetol
 		# Specify the use of corrective terms
 		if propcorr is not None:
 			self.propcorr = tuple(propcorr)
@@ -321,8 +329,8 @@ class SplitStep(object):
 		self.obj = [newbuffer() for i in range(2)]
 		# Two buffers are used for the Goertzel FFT of the contrast source
 		self.goertzbuf = [newbuffer() for i in range(2)]
-		# The peak sound speed for the current slab gets stored here
-		self._peakspd = 1.
+		# The sound speed extrema for the current slab are stored here
+		self.speedlim = [1., 1.]
 		# Initialize buffer to hold results of advance()
 		self.result = newbuffer()
 
@@ -366,7 +374,7 @@ class SplitStep(object):
 		z = np.zeros(grid, dtype=np.complex64)
 		for a in self.fld + self.obj + self.goertzbuf:
 			cl.enqueue_copy(self.fwdque, a, z, is_blocking=False)
-		self._peakspd = 1.
+		self.speedlim = [1., 1.]
 		self._goertzel = goertzel
 
 
@@ -407,13 +415,13 @@ class SplitStep(object):
 		nxt, cur = self.obj
 		self.obj = [cur, nxt]
 
-		# Figure the peak effective sound speed in the upcoming slab
-		# Assuming that the imaginary part of the wave number is
-		# negligible compared to the real part, the maximum sound speed
-		# corresponds to the minimum contrast
-		if self.spdbin:
-			peakct = np.min(obj.real)
-			self._peakspd = 1 / np.sqrt(peakct + 1)
+		# Figure approximate sound speed extrema in the upcoming slab
+		# If the imaginary part of the wave number is negligible
+		# compared to the real, maximum sound speed corresponds to the
+		# minimum contrast and vice versa
+		if self.phasetol:
+			ctextrema = [np.max(obj.real), np.min(obj.real)]
+			self.speedlim = [1 / np.sqrt(ctv + 1.) for ctv in ctextrema]
 
 		# Ensure buffer is not used by prior calculations
 		nxt.sync(queue)
@@ -544,9 +552,9 @@ class SplitStep(object):
 			# Copy the forward field for shifting if necessary
 			cl.enqueue_copy(fwdque, buf, fwd)
 
-		# Copy the peak sound speed for the current slab
-		peakspd = self._peakspd
-		# Push the next slab to its buffer (overwrites peak speed)
+		# Copy the sound speed extrema for the current slab
+		speedlim = list(self.speedlim)
+		# Push the next slab to its buffer (overwrites speed extrema)
 		ocur, onxt, obevt = self.objupdate(obj)
 
 		if bfld is not None:
@@ -557,8 +565,18 @@ class SplitStep(object):
 			# Attach the copy event to the backward buffer
 			bck.attachevent(bfevt)
 
-		# Figure the number of propagation steps to take in this slab
-		if self.spdbin: nsteps = max(1, int((peakspd - 1.) / self.spdbin))
+		if self.phasetol is not None:
+			# Figure maximum propagation distance to not
+			# exceed maximum permissible phase deviation
+			dzl = []
+			for spd in speedlim:
+				ctdiff = 2. - 2. / spd
+				# If spd is the background, step size is infinite
+				# Clip the step size to slab thickness in this case
+				if abs(ctdiff) < 1e-6: dzl.append(self.dz)
+				else: dzl.append(abs(self.phasetol / ctdiff))
+			# Subdivide the slab into maximum propagation distance
+			nsteps = max(1, int(np.round(self.dz / min(dzl))))
 		else: nsteps = 1
 		dz = self.dz / nsteps
 

@@ -12,7 +12,8 @@ def pullitems(seq, axes):
 	return tuple(seq[a] for a in axes)
 
 
-def rotslices(outmat, inmat, theta, lint, ogrid=(1.,1.,1.), igrid=(1.,1.,1.)):
+def rotslices(outmat, inmat, theta, lint,
+		ogrid=(1.,1.,1.), igrid=(1.,1.,1.), verbose=False):
 	'''
 	Linearly interpolate each slice of inmat into the slices of outmat
 	rotated an angle theta relative to the center of the input slice. The
@@ -41,13 +42,14 @@ def rotslices(outmat, inmat, theta, lint, ogrid=(1.,1.,1.), igrid=(1.,1.,1.)):
 	# Set the input and output shapes for the interpolator
 	lint.setshapes(outmat.sliceshape, inmat.sliceshape)
 
-	# Make a progress bar for display
 	nslice = len(inmat)
-	bar = util.ProgressBar([0, nslice], width=50)
 
-	# Reset and print the progress bar
-	bar.reset()
-	util.printflush(str(bar) + '\r')
+	if verbose:
+		# Make a progress bar for display if the user desires
+		bar = util.ProgressBar([0, nslice], width=50)
+		# Reset and print the progress bar
+		bar.reset()
+		util.printflush(str(bar) + '\r')
 
 	# Interpolate each of the slices successively
 	for idx in range(nslice):
@@ -58,10 +60,11 @@ def rotslices(outmat, inmat, theta, lint, ogrid=(1.,1.,1.), igrid=(1.,1.,1.)):
 		src.nextslice()
 		dst.nextslice(evt)
 		# Increment and print the progress bar
-		bar.increment()
-		util.printflush(str(bar) + '\r')
+		if verbose:
+			bar.increment()
+			util.printflush(str(bar) + '\r')
 
-	print
+	if verbose: print
 
 	# Ensure that all output has finished
 	dst.flush()
@@ -106,7 +109,7 @@ def rectbounds(n, h, theta, phi, hd=None):
 
 def usage (execname = 'regrid.py'):
 	binfile = os.path.basename(execname)
-	print "Usage:", binfile, "[-h] [-g g] [-d dx,dy,dz] [-s sx,sy,dz] [-n nx,ny,nz] [-r] [-t t] [-p p] <input> <output>"
+	print "Usage:", binfile, "[-h] [-g g] [-v] [-d dx,dy,dz] [-s sx,sy,dz] [-n nx,ny,nz] [-r] [-t t] [-p p] <input> <output>"
 	print '''
   Use linear interpolation on an OpenCL device to resample and rotate the 3-D
   matrix file input (stored in FORTRAN order) into the matrix file output. The
@@ -126,6 +129,7 @@ def usage (execname = 'regrid.py'):
   OPTIONAL ARGUMENTS:
   -h: Display this message and exit
   -g: Use OpenCL device g on the first platform (default: first device)
+  -v: Display a progress bar to track regrid status
   -d: Set the output grid spacing (default: 1,1,1)
   -s: Set the input grid spacing (default: 1,1,1)
   -n: Set the output grid dimensions (default: minimum necessary)
@@ -149,20 +153,28 @@ if __name__ == "__main__":
 	reversed = False
 	# The shape is determined by default
 	dsize = None
+	# By default, supress the progress bar
+	verbose = False
 
 	# Process optional arguments
-	optlist, args = getopt.getopt(sys.argv[1:], 'hn:g:rs:d:t:p:')
+	optlist, args = getopt.getopt(sys.argv[1:], 'hn:g:rs:d:t:p:v')
 	for opt in optlist:
-		if opt[0] == '-g': ctx = int(opt[1])
+		if opt[0] == '-g':
+			ctx = int(opt[1])
 		elif opt[0] == '-d':
 			dgrid = tuple(float(d) for d in opt[1].split(','))
 		elif opt[0] == '-s':
 			sgrid = tuple(float(s) for s in opt[1].split(','))
-		elif opt[0] == '-t': theta = float(opt[1])
-		elif opt[0] == '-p': phi = float(opt[1])
-		elif opt[0] == '-r': reversed = True
+		elif opt[0] == '-t':
+			theta = float(opt[1])
+		elif opt[0] == '-p':
+			phi = float(opt[1])
+		elif opt[0] == '-r':
+			reversed = True
 		elif opt[0] == '-n':
 			dsize = tuple(int(s) for s in opt[1].split(','))
+		elif opt[0] == '-v':
+			verbose = True
 		else:
 			usage(execname)
 			sys.exit(128)
@@ -190,8 +202,10 @@ if __name__ == "__main__":
 		print >> sys.stderr, 'Output file is just a copy of input'
 		sys.exit(128)
 
-	print 'Input grid has size', input.shape, 'with spacing', sgrid
-	print 'Output grid has size', dsize, 'with spacing', dgrid
+	# Format and print the dimensions of the rotation
+	def gridprint(x): return ' x '.join(str(xv) for xv in x)
+	message = 'Regrid: ({:s}, {:s}) -> ({:s}, {:s})'
+	print message.format(*[gridprint(x) for x in [input.shape, sgrid, dsize, dgrid]])
 
 	# Make the linear interpolator
 	# The shapes aren't important because they will be set when called
@@ -238,9 +252,12 @@ if __name__ == "__main__":
 	inslicer = mio.CoordinateShifter(input, axis=slax)
 	outslicer = mio.CoordinateShifter(intermed, axis=slax)
 
+	if verbose:
+		message = 'First rotation to grid {:s}, spacing {:s}'
+		print message.format(gridprint(isize), gridprint(igrid))
+
 	# Perform the first slicewise rotation
-	print 'Performing first rotation to grid', isize, 'with spacing', igrid
-	rotslices(outslicer, inslicer, angle, lint, igrid, sgrid)
+	rotslices(outslicer, inslicer, angle, lint, igrid, sgrid, verbose)
 
 	# The input file can be closed
 	del input
@@ -255,6 +272,9 @@ if __name__ == "__main__":
 	output = mio.writemmap(args[1], dsize, inslicer.dtype)
 	outslicer = mio.CoordinateShifter(output, axis=slax)
 
+	if verbose:
+		message = 'Second rotation to grid {:s}, spacing {:s}'
+		print message.format(gridprint(dsize), gridprint(dgrid))
+
 	# Perform the final slicewise rotation
-	print 'Performing second rotation to grid', dsize, 'with spacing', dgrid
-	rotslices(outslicer, inslicer, angle, lint, dgrid, igrid)
+	rotslices(outslicer, inslicer, angle, lint, dgrid, igrid, verbose)
