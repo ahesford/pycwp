@@ -449,11 +449,13 @@ if __name__ == '__main__':
 
 			# Rotate the element coordinates to the new system
 			srclist = [geom.rotate3d(src, -theta, -phi) for src in srclist]
+			# Rotate the propagation axis (it should become 0,0,1)
+			propax = np.array(geom.rotate3d(propax, -theta, -phi))
 
 			try:
 				# Attempt to replace the directivity axis
 				beamwidth = propargs['d'][-1]
-				propargs['d'] = (-propax).tolist() + [beamwidth]
+				propargs['d'] = list(-propax) + [beamwidth]
 			except KeyError: pass
 
 		# If fewer sources than GPUs, truncate the GPU list
