@@ -63,7 +63,6 @@ def usage(execname):
   -e: Pad domain to [nx,ny] pixels (default: next power of two)
   -w: High-order spectral correction weight (default: 0.39)
   -P: Use extra steps to avoid phase deviations greater than (P * pi) per slab
-  Incremental speed threshold for additional propagation steps (default: none)
   -d: Directivity width parameter w and optional axis (x,y,z) (default: none)
 	'''
 

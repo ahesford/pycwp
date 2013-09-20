@@ -20,7 +20,7 @@
 
 ## Print the tuple as a floating-point number
 <%def name="prtuple(p)">
-	${'(' + ', '.join(str(pv) + 'f' for pv in p) + ')'}
+	${'(' + ', '.join('%0.8f' % pv for pv in p) + ')'}
 </%def>
 
 ## Compute the coordinates for grid indices
