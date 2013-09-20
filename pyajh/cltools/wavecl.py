@@ -570,11 +570,12 @@ class SplitStep(object):
 			# exceed maximum permissible phase deviation
 			dzl = []
 			for spd in speedlim:
-				ctdiff = 2. - 2. / spd
-				# If spd is the background, step size is infinite
-				# Clip the step size to slab thickness in this case
-				if abs(ctdiff) < 1e-6: dzl.append(self.dz)
-				else: dzl.append(abs(self.phasetol / ctdiff))
+				# Sign governs the sign of the phase deviation,
+				# which is irrelevant, so ignore it here
+				spdiff = max(abs(spd - 1.), 1e-8)
+				# Preventing spdiff from reaching zero limits
+				# maximum permissible propagation distance
+				dzl.append(abs(0.5 * self.phasetol * spd / spdiff))
 			# Subdivide the slab into maximum propagation distance
 			nsteps = max(1, int(np.round(self.dz / min(dzl))))
 		else: nsteps = 1
