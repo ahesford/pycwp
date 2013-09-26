@@ -438,8 +438,11 @@ if __name__ == '__main__':
 			grid = mio.Slicer(contrast).shape
 			gridstr = ','.join('%d' % gv for gv in grid)
 
+			# Assign every requested GPU to the rotation
+			gpustr = ','.join('%d' % gv for gv in gpuctx)
+
 			# Rotate the axes of the contrast grid parallel to normal
-			rotargs = ['-g', '%d' % gpuctx[0], '-n', gridstr,
+			rotargs = ['-g', gpustr, '-n', gridstr,
 					'-t', '%g' % -theta, '-p', '%g' % -phi,
 					contrast, rotcontrast]
 			# If verbosity is desired, make regridding verbose too

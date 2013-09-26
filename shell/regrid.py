@@ -12,7 +12,7 @@ def pullitems(seq, axes):
 	return tuple(seq[a] for a in axes)
 
 
-def rotslices(outmat, inmat, theta, lint,
+def rotslices(outmat, inmat, theta, lints,
 		ogrid=(1.,1.,1.), igrid=(1.,1.,1.), verbose=False):
 	'''
 	Linearly interpolate each slice of inmat into the slices of outmat
@@ -20,29 +20,34 @@ def rotslices(outmat, inmat, theta, lint,
 	grid spacing of outmat is specified in ogrid, while the grid spacing of
 	inmat is specified in igrid.
 
-	An instance of cltools.InterpolatingRotator must be provided in lint to
-	perform the rotation and interpolation.
+	A list of instances of cltools.InterpolatingRotator must be provided in
+	lints to perform the rotation and interpolation. Slices of outmat and
+	inmat will be approximately evenly divided among the instances.
 	'''
 	if len(inmat) != len(outmat):
 		raise ValueError('Number of slices of input and output must agree')
 
 	# Make BufferedSlices objects to read input and write output
 	nbuf = 10
-	src = cltools.BufferedSlices(inmat, nbuf, context=lint.context)
-	dst = cltools.BufferedSlices(outmat, nbuf, read=False, context=lint.context)
+	srcs = [cltools.BufferedSlices(inmat, nbuf, context=lint.context) for lint in lints]
+	dsts = [cltools.BufferedSlices(outmat, nbuf, read=False, context=lint.context) for lint in lints]
 
-	# Start the buffer processing
-	src.start()
-	dst.start()
+	# Divide workload of rotators, start buffer processing and configure slices
+	nlints = len(lints)
+	nslice = len(inmat)
+	for i, (src, dst, lint) in enumerate(zip(srcs, dsts, lints)):
+		# Set the slice shapes
+		lint.setshapes(outmat.sliceshape, inmat.sliceshape)
+		# Alternate slices between each interpolator
+		src.setiter(range(i, nslice, nlints))
+		dst.setiter(range(i, nslice, nlints))
+		# Start the slicer buffering
+		src.start()
+		dst.start()
 
 	# Compute the grid spacings for the input and output slices
 	dgrid = pullitems(ogrid, inmat.axes[:-1])
 	sgrid = pullitems(igrid, outmat.axes[:-1])
-
-	# Set the input and output shapes for the interpolator
-	lint.setshapes(outmat.sliceshape, inmat.sliceshape)
-
-	nslice = len(inmat)
 
 	if verbose:
 		# Make a progress bar for display if the user desires
@@ -52,23 +57,31 @@ def rotslices(outmat, inmat, theta, lint,
 		util.printflush(str(bar) + '\r')
 
 	# Interpolate each of the slices successively
-	for idx in range(nslice):
-		s, d = src.getslice(), dst.getslice()
-		# Interpolate the slice, grabbing the result and the copy event
-		res, evt = lint.interpolate(s, d, theta=theta, sgrid=sgrid, dgrid=dgrid)
-		# Advance the slice buffers
-		src.nextslice()
-		dst.nextslice(evt)
-		# Increment and print the progress bar
-		if verbose:
-			bar.increment()
-			util.printflush(str(bar) + '\r')
+	# This aligns with the slicing previously configured
+	for idx in range(0, nslice, nlints):
+		# Figure out the workload of the current iteration
+		# Take into account remainder slices at the end of the iteration
+		wload = min(nlints, nslice - idx)
+		# Limit this loop to the workload size
+		for src, dst, lint, g in zip(srcs, dsts, lints, range(wload)):
+			s, d = src.getslice(), dst.getslice()
+			# Interpolate the slice, grabbing the result and the copy event
+			res, evt = lint.interpolate(s, d, theta=theta, sgrid=sgrid, dgrid=dgrid)
+			# Advance the slice buffers
+			src.nextslice()
+			dst.nextslice(evt)
+			
+			# Increment and print the progress bar
+			if verbose:
+				bar.increment()
+				util.printflush(str(bar) + '\r')
 
 	if verbose: print
 
 	# Ensure that all output has finished
-	dst.flush()
-	dst.kill()
+	for dst in dsts:
+		dst.flush()
+		dst.kill()
 
 
 def rectbounds(n, h, theta, phi, hd=None):
@@ -144,7 +157,7 @@ if __name__ == "__main__":
 	execname = sys.argv[0]
 
 	# Set the default device
-	ctx = 0
+	ctx = [0]
 	# Set the default grid spacings
 	dgrid, sgrid = (1., 1., 1.), (1., 1., 1.)
 	# There is no default rotation
@@ -160,7 +173,7 @@ if __name__ == "__main__":
 	optlist, args = getopt.getopt(sys.argv[1:], 'hn:g:rs:d:t:p:v')
 	for opt in optlist:
 		if opt[0] == '-g':
-			ctx = int(opt[1])
+			ctx = tuple(int(g) for g in opt[1].split(','))
 		elif opt[0] == '-d':
 			dgrid = tuple(float(d) for d in opt[1].split(','))
 		elif opt[0] == '-s':
@@ -207,9 +220,9 @@ if __name__ == "__main__":
 	message = 'Regrid: ({:s}, {:s}) -> ({:s}, {:s})'
 	print message.format(*[gridprint(x) for x in [input.shape, sgrid, dsize, dgrid]])
 
-	# Make the linear interpolator
+	# Make the linear interpolators
 	# The shapes aren't important because they will be set when called
-	lint = cltools.InterpolatingRotator(input.shape[:-1], input.shape[:-1], ctx)
+	lints = [cltools.InterpolatingRotator(input.shape[:-1], input.shape[:-1], g) for g in ctx]
 
 	# The intermediate grid spacing is the minimum of input and output
 	igrid = map(min, sgrid, dgrid)
@@ -257,7 +270,7 @@ if __name__ == "__main__":
 		print message.format(gridprint(isize), gridprint(igrid))
 
 	# Perform the first slicewise rotation
-	rotslices(outslicer, inslicer, angle, lint, igrid, sgrid, verbose)
+	rotslices(outslicer, inslicer, angle, lints, igrid, sgrid, verbose)
 
 	# The input file can be closed
 	del input
@@ -277,4 +290,4 @@ if __name__ == "__main__":
 		print message.format(gridprint(dsize), gridprint(dgrid))
 
 	# Perform the final slicewise rotation
-	rotslices(outslicer, inslicer, angle, lint, dgrid, igrid, verbose)
+	rotslices(outslicer, inslicer, angle, lints, dgrid, igrid, verbose)
