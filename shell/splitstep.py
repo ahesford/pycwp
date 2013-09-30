@@ -105,7 +105,7 @@ def facetnormal(f):
 	return n if (d > 0) else -n
 
 
-def propagator(contrast, output, srclist, start=0, share=-1, c=1.507, f=3.0,
+def propagator(contrast, output, srclist, start=0, stride=1, c=1.507, f=3.0,
 		s=0.05, w=0.39, p=2, q=0, a=None, d=None, e=None, g=0, V=False,
 		phasetol=None, tmpdir=None, verbose=False):
 	'''
@@ -115,10 +115,9 @@ def propagator(contrast, output, srclist, start=0, share=-1, c=1.507, f=3.0,
 	volume field or the spectral field on the unit sphere, computed with
 	the Goertzel algorithm).
 
-	The subset of sources is specified by the arguments start and share,
-	which specify the starting index and number of subsequent contiguous
-	sources to use. If share is less than 0, all sources following and
-	including start are used.
+	The subset of sources is specified by the arguments start and stride,
+	which specify the starting index in the source list and the number of
+	sources to skip between propagations.
 
 	The remaining arguments have the same meanings as command-line
 	arguments and defined in usage():
@@ -141,14 +140,10 @@ def propagator(contrast, output, srclist, start=0, share=-1, c=1.507, f=3.0,
 	k0 = 2 * math.pi
 	goertzel = not V
 
-	# Ensure that the starting index is valid or else do no work
-	if start < 0 or start >= len(srclist): return
+	nsrcs = len(srclist)
 
-	# Adjust negative share values
-	if share < 0: share = len(srclist) - start
-
-	# There is no work to be done if there is no share
-	if share < 1: return
+	# Ensure that the starting index and stride are valid or else do no work
+	if start < 0 or start >= nsrcs or stride < 1: return
 
 	# If no temporary directory was specified, use the current directory
 	if tmpdir is None: tmpdir = '.'
@@ -192,7 +187,7 @@ def propagator(contrast, output, srclist, start=0, share=-1, c=1.507, f=3.0,
 		# Create a progress bar to track propagation status
 		bar = util.ProgressBar([0, dom[-1]], width=50)
 
-	for srcidx in range(start, start + share):
+	for srcidx in range(start, nsrcs, stride):
 		print '{:s}: Propagating source {:d}'.format(procid, srcidx)
 
 		if verbose:
@@ -203,7 +198,7 @@ def propagator(contrast, output, srclist, start=0, share=-1, c=1.507, f=3.0,
 		# Convert the current source to wavelengths
 		src = tuple(crd * f / float(c) for crd in srclist[srcidx])
 		# Create a unique output name
-		srcstring = util.zeropad(srcidx, len(srclist))
+		srcstring = util.zeropad(srcidx, nsrcs)
 		outname = '{:s}.src{:s}'.format(output, srcstring)
 
 		# Ensure that the split-step engine is consistent
@@ -328,6 +323,8 @@ if __name__ == '__main__':
 
 	# These arguments will be passed to each propagator
 	propargs = {}
+	# The directivity must be handled specially
+	directivity = None
 	# By default, use only the first GPU for calculations
 	gpuctx = [0]
 
@@ -340,7 +337,7 @@ if __name__ == '__main__':
 		if opt[0] == '-a':
 			propargs['a'] = int(opt[1])
 		elif opt[0] == '-d':
-			propargs['d'] = [float(ds) for ds in opt[1].split(',')]
+			directivity = [float(ds) for ds in opt[1].split(',')]
 		elif opt[0] == '-e':
 			propargs['e'] = [int(ps) for ps in opt[1].split(',')]
 		elif opt[0] == '-f':
@@ -403,20 +400,20 @@ if __name__ == '__main__':
 	contrast = args[1]
 	output = args[2]
 
+	# Note any rotation that will occur
+	rotmsg = 'MPI rank {:d}: Will rotate z axis to ({:g}, {:g})'
+
 	# Loop over all facet indices
 	for fidx in facets:
 		# Pull all elements belonging to the current facet
 		srclist = [el[:-1] for el in elements.tolist() if int(el[-1]) == fidx]
 
 		# Determine if rotation is necessary
-		try:
-			# If a directivity axis was specified, use its negative
-			directivity = propargs['d']
-			if len(directivity) < 4:
-				raise KeyError('Directivity axis was not specified')
+		if directivity is not None and len(directivity) > 1:
+			# A directivity axis was specified
 			propax = -np.array(directivity[:-1])
 			r, theta, phi = geom.cart2sph(*propax)
-		except KeyError:
+		else:
 			# If no directivity axis was specified, determine the axis
 			propax = facetnormal(np.array(srclist))
 			r, theta, phi = geom.cart2sph(*propax)
@@ -427,6 +424,7 @@ if __name__ == '__main__':
 
 		if (rotprog is None) or (theta < rottol): rotcontrast = contrast
 		else:
+			print rotmsg.format(rank, theta, phi)
 			# Create the rotated contrast and output filenames
 			rotcontrast = contrast + appendage
 			# Put rotated contrast in desired temporary directory
@@ -454,11 +452,10 @@ if __name__ == '__main__':
 			# Rotate the propagation axis (it should become 0,0,1)
 			propax = np.array(geom.rotate3d(propax, -theta, -phi))
 
-			try:
-				# Attempt to replace the directivity axis
-				beamwidth = propargs['d'][-1]
-				propargs['d'] = list(-propax) + [beamwidth]
-			except KeyError: pass
+		# If directivity was specified, set argument to propagator
+		if directivity is not None:
+			beamwidth = directivity[-1]
+			propargs['d'] = list(-propax) + [beamwidth]
 
 		# If fewer sources than GPUs, truncate the GPU list
 		nsrc, ngpu = len(srclist), len(gpuctx)
@@ -470,13 +467,8 @@ if __name__ == '__main__':
 			# Spawn processes to handle GPU computations
 			procs = []
 			for i, g in enumerate(gpuctx):
-				# Figure the work load
-				share = nsrc / ngpu
-				remainder = nsrc % ngpu
-				start = i * share + min(remainder, i)
-				if i < remainder: share += 1
 				# Set the function arguments
-				args = (rotcontrast, outunique, srclist, start, share)
+				args = (rotcontrast, outunique, srclist, i, ngpu)
 				kwargs = dict(propargs)
 				# Establish the GPU context argument
 				kwargs['g'] = g
