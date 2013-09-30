@@ -310,7 +310,7 @@ def propagator(contrast, output, srclist, start=0, stride=1, c=1.507, f=3.0,
 			obuf.kill()
 		else:
 			# Fetch and store spectral fields if desired
-			mio.writebmat(sse.goertzelfft(), outname)
+			mio.writebmat(sse.goertzelfft(nz = len(ctmat)), outname)
 
 if __name__ == '__main__':
 	# Grab the executable name
@@ -392,9 +392,9 @@ if __name__ == '__main__':
 	if rank < remainder: share += 1
 
 	# Pull out the elements handled by this process
-	elements = elements[start:start+share,:]
+	locelts = elements[start:start+share,:]
 	# Pull out a list of unique facet indices
-	facets = np.unique(elements[:,-1].astype(int)).tolist()
+	facets = np.unique(locelts[:,-1].astype(int)).tolist()
 
 	# Grab the file names for input and output
 	contrast = args[1]
@@ -405,8 +405,10 @@ if __name__ == '__main__':
 
 	# Loop over all facet indices
 	for fidx in facets:
-		# Pull all elements belonging to the current facet
-		srclist = [el[:-1] for el in elements.tolist() if int(el[-1]) == fidx]
+		# Pull all local elements belonging to the current facet
+		srclist = [el[:-1] for el in locelts.tolist() if int(el[-1]) == fidx]
+		# Pull all elements (local or not) belonging to the current facet
+		facelts = [el[:-1] for el in elements.tolist() if int(el[-1]) == fidx]
 
 		# Determine if rotation is necessary
 		if directivity is not None and len(directivity) > 1:
@@ -414,8 +416,9 @@ if __name__ == '__main__':
 			propax = -np.array(directivity[:-1])
 			r, theta, phi = geom.cart2sph(*propax)
 		else:
-			# If no directivity axis was specified, determine the axis
-			propax = facetnormal(np.array(srclist))
+			# If no directivity axis was specified, determine axis from facet
+			# Use non-local elements too for most accurate normal
+			propax = facetnormal(np.array(facelts))
 			r, theta, phi = geom.cart2sph(*propax)
 
 		# The output file always gets a unique identifier

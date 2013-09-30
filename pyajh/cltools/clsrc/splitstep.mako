@@ -317,8 +317,12 @@ __kernel void txreflect(${gfc} fwd, ${gfc} bck, ${gfc} ocur, ${gfc} onxt) {
  *
  *      k0**2 = k_x**2 + k_y**2 + k_z**2.
  *
- * For evanescent values of k_z, the value of the Fourier transform is zero. */
-__kernel void goertzelfft(${gfc} pn1, ${gfc} pn2, ${gfc} crt, const float dz) {
+ * For evanescent values of k_z, the value of the Fourier transform is zero.
+ *
+ * The integer n specifies the number of points involved in the FFT and is used
+ * only in the final iteration (when crt is NULL) to properly scale the
+ * results. */
+__kernel void goertzelfft(${gfc} pn1, ${gfc} pn2, ${gfc} crt, const float dz, int n) {
 	/* Grab the recursion values for the work item. */
 	${getindices('i', 'j', 'idx')}
 	const float2 pn1v = pn1[idx];
@@ -345,12 +349,16 @@ __kernel void goertzelfft(${gfc} pn1, ${gfc} pn2, ${gfc} crt, const float dz) {
 		/* Overwrite the earliest step with the next iteration. */
 		pn2[idx] = nv;
 	} else if (${k0**2}f >= kxy) {
+		const float2 ikz = imulr(dz, kz);
+		const float n2 = (float) (n / 2);
 		/* Compute final non-evanescent Fourier transform values. */
-		const float2 w = cexp(imulr(dz, kz));
+		const float2 w = cexp(ikz);
+		const float2 wn = cexp((float2) (n2) * ikz);
 		const float2 pfft = nv - cmul(w, pn1v);
 		const float2 nfft = nv - cmul((float2)(w.x, -w.y), pn1v);
-		pn1[idx] = pfft;
-		pn2[idx] = nfft;
+		/* Scale the FFT values appropriately. */
+		pn1[idx] = cmul(wn, pfft);
+		pn2[idx] = cmul((float2)(wn.x, -wn.y), nfft);
 	} else {
 		/* For evanescent waves, just fill with zeros. */
 		pn1[idx] = zero;

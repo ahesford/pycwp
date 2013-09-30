@@ -611,7 +611,9 @@ class SplitStep(object):
 				# Compute the next Goertzel iteration
 				pn1, pn2 = self.goertzbuf
 				dz = np.float32(self.dz)
-				prog.goertzelfft(fwdque, grid, None, pn1, pn2, crt, dz)
+				# The final argument (slab count) is not yet used
+				nz = np.int32(0)
+				prog.goertzelfft(fwdque, grid, None, pn1, pn2, crt, dz, nz)
 				# Cycle the Goertzel buffers
 				self.goertzbuf = [pn2, pn1]
 			else:
@@ -664,12 +666,16 @@ class SplitStep(object):
 		return evt
 
 
-	def goertzelfft(self):
+	def goertzelfft(self, nz = 0):
 		'''
 		Finish Goertzel iterations carried out in repeated calls to
 		advance() and copy the positive and negative hemispheres of the
 		Fourier transform of the contrast source to successive planes
 		of a Numpy array.
+
+		If nz is specified, it is the number of slabs involved in the
+		Fourier transform and is used to properly scale the output of
+		the Goertzel algorithm. When nz = 0, no scaling is performed.
 
 		Copies are synchronous and are done on the forward propagation
 		queue.
@@ -682,9 +688,10 @@ class SplitStep(object):
 		# Finalize the Goertzel iteration
 		pn1, pn2 = self.goertzbuf
 		dz = np.float32(self.dz)
+		nz = np.int32(nz)
 		# Pass None as the contrast current to signal final iteration
 		# After this, pn1 is the positive hemisphere, pn2 is the negative
-		prog.goertzelfft(fwdque, grid, None, pn1, pn2, None, dz)
+		prog.goertzelfft(fwdque, grid, None, pn1, pn2, None, dz, nz)
 		# Copy the two hemispheres into planes of an array
 		cl.enqueue_copy(fwdque, hemispheres[:,:,0:1], pn1, is_blocking=False)
 		cl.enqueue_copy(fwdque, hemispheres[:,:,1:2], pn2, is_blocking=True)
