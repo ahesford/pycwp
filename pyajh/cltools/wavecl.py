@@ -596,10 +596,7 @@ class SplitStep(object):
 						np.float32(1.), buf, bck)
 			# Propagate the combined field a half step
 			# Save the propagation event for delaying result copies
-			nsteps = max(1, nsteps / 2)
-			dz = 0.5 * self.dz / nsteps
-			for i in range(nsteps):
-				pevt = self.propagate(buf, dz, corr=shcorr)
+			pevt = self.propagate(buf, 0.5 * self.dz, corr=shcorr)
 
 			# Handle Goertzel iterations to compute the Fourier
 			# transform of the contrast source on the unit sphere
