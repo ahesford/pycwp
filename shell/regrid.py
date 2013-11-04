@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-import sys, os, numpy as np, getopt
+import sys, os, socket, numpy as np, getopt
 
 from pyajh import mio, cltools, wavetools, cutil, util
 
@@ -121,8 +121,7 @@ def rectbounds(n, h, theta, phi, hd=None):
 
 
 def usage (execname = 'regrid.py'):
-	binfile = os.path.basename(execname)
-	print "Usage:", binfile, "[-h] [-g g] [-v] [-d dx,dy,dz] [-s sx,sy,dz] [-n nx,ny,nz] [-r] [-t t] [-p p] <input> <output>"
+	print "Usage:", execname, "[-h] [-g g] [-v] [-d dx,dy,dz] [-s sx,sy,dz] [-n nx,ny,nz] [-r] [-t t] [-p p] <input> <output>"
 	print '''
   Use linear interpolation on an OpenCL device to resample and rotate the 3-D
   matrix file input (stored in FORTRAN order) into the matrix file output. The
@@ -154,7 +153,7 @@ def usage (execname = 'regrid.py'):
 
 if __name__ == "__main__":
 	# Grab the executable name
-	execname = sys.argv[0]
+	execname = os.path.basename(sys.argv[0])
 
 	# Set the default device
 	ctx = [0]

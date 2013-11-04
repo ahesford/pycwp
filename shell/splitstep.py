@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-import numpy as np, math, sys, getopt, os, pyopencl as cl
+import numpy as np, math, sys, getopt, os, socket, pyopencl as cl
 from numpy.linalg import norm
 from tempfile import TemporaryFile
 from multiprocessing import Process
@@ -314,7 +314,9 @@ def propagator(contrast, output, srclist, start=0, stride=1, c=1.507, f=3.0,
 
 if __name__ == '__main__':
 	# Grab the executable name
-	execname = sys.argv[0]
+	execname = os.path.basename(sys.argv[0])
+	# The hostname will be used in unique process names
+	hostname = socket.gethostname()
 
 	# By default, the rotation program, regrid.py, is unspecified
 	rotprog = None
@@ -475,7 +477,9 @@ if __name__ == '__main__':
 				kwargs = dict(propargs)
 				# Establish the GPU context argument
 				kwargs['g'] = g
-				p = Process(target=propagator, args=args, kwargs=kwargs)
+				# Pick a more useful name for the process
+				procname = '{:s}-{:s}-Rank{:d}-GPU{:d}'.format(hostname, execname, rank, g)
+				p = Process(target=propagator, name=procname, args=args, kwargs=kwargs)
 				p.start()
 				procs.append(p)
 			for p in procs: p.join()
