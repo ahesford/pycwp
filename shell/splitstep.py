@@ -2,7 +2,6 @@
 
 import numpy as np, math, sys, getopt, os, socket, pyopencl as cl
 from numpy.linalg import norm
-from tempfile import TemporaryFile
 from multiprocessing import Process
 from subprocess import check_call
 from mpi4py import MPI
@@ -193,7 +192,7 @@ def propagator(contrast, output, srclist, start=0, stride=1, c=1.507, f=3.0,
 		if verbose:
 			# Reinitialize the progress bar
 			bar.reset()
-			util.printflush(str(bar) + ' (forward) \r')
+			util.printflush(str(bar) + '\r')
 
 		# Convert the current source to wavelengths
 		src = tuple(crd * f / float(c) for crd in srclist[srcidx])
@@ -209,8 +208,6 @@ def propagator(contrast, output, srclist, start=0, stride=1, c=1.507, f=3.0,
 		zoff = wavetools.gridtocrd(dom[-1] - 0.5, len(ctmat), s)
 		sse.setincident((src[0], src[1], src[2] - zoff))
 
-		fmat = mio.Slicer(TemporaryFile(dir=tmpdir), dom, ctmat.dtype, True)
-
 		# An empty slab is needed for propagation beyond the medium
 		zeroslab = mapbuffer(sse.context, ctmat.sliceshape, ctmat.dtype,
 				cl.mem_flags.READ_ONLY, cl.map_flags.WRITE)[1]
@@ -221,88 +218,43 @@ def propagator(contrast, output, srclist, start=0, stride=1, c=1.507, f=3.0,
 		obj.setiter(reversed(range(len(ctmat))))
 		obj.start()
 
-		# Create a buffered slice object to write the forward field
-		fbuf = BufferedSlices(fmat, 5, read=False, context=sse.context)
-		fbuf.start()
-
-		# Propagate the forward field through each slice
-		for idx in reversed(range(dom[-1])):
-			# Try to grab the next contrast, or default to zero
-			try: obval = obj.getslice()
-			except IndexError: obval = zeroslab
-			# Advance and write the forward-traveling field
-			sse.advance(obval)
-			# Copy the device result buffer to the host queue
-			resevt = sse.getresult(fbuf.getslice())
-			# Advance the slice buffers
-			obj.nextslice()
-			# Tell the buffer to wait until the copy is finished
-			fbuf.nextslice(resevt)
-
-			if verbose:
-				bar.increment()
-				util.printflush(str(bar) + ' (forward) \r')
-
-		if verbose:
-			# Finalize forward printing and reset the bar
-			print
-			bar.reset()
-			util.printflush(str(bar) + ' (backward)\r')
-
-		# Recreate the object buffers for backward propagation
-		obj.kill()
-		obj = BufferedSlices(ctmat, 5, context=sse.context)
-		obj.start()
-
-		# Flush the forward field buffers to ensure consistency
-		fbuf.flush()
-		fbuf.kill()
-
-		# Read the forward fields in reverse
-		fbuf = BufferedSlices(fmat, 5, context=sse.context)
-		fbuf.setiter(reversed(range(len(fmat))))
-		fbuf.start()
-
-		# Reset the split-step state and change the default corrective terms
-		sse.reset((p > 1, q > 1), goertzel=goertzel)
-
 		if V:
 			# Only store volume output if volume fields are desired
 			# Create a buffered slice object to write the output
 			outmat = mio.Slicer(outname, ctmat.shape, ctmat.dtype, True)
 			obuf = BufferedSlices(outmat, 5, read=False, context=sse.context)
 			# Store first result (don't care) in last slice to be overwritten
-			obuf.setiter(range(-1, len(outmat)))
+			obuf.setiter([-1] + list(reversed(range(len(outmat)))))
 			obuf.start()
 
 		# Determine the propagator terms to include in the shifting pass
-		shcorr = (p > 2, q > 2)
+		shcorr = (p > 1, q > 1)
 
-		# Propagate the reverse field through each slice
-		for idx in range(dom[-1]):
+		# Propagate the forward field through each slice
+		for idx in reversed(range(dom[-1])):
 			# Try to grab the next contrast, or default to zero
 			try: obval = obj.getslice()
 			except IndexError: obval = zeroslab
-			# Advance the backward traveling field and reflect forward field
-			# Also compute half-shifted, combined field in result buffer
-			sse.advance(obval, fbuf.getslice(), True, shcorr=shcorr)
-			# Copy the device result buffer to the host queue if desired
-			if V: resevt = sse.getresult(obuf.getslice())
-			# Advance the slice buffers
+			# Advance the forward-traveling field
+			sse.advance(obval, shift=True, shcorr=shcorr)
+
+			if V: 
+				# Copy the device result to the host queue
+				resevt = sse.getresult(obuf.getslice())
+				obuf.nextslice(resevt)
+
+			# Advance the object buffer
 			obj.nextslice()
-			fbuf.nextslice()
-			# Tell the buffer to wait until the copy is finished
-			if V: obuf.nextslice(resevt)
 
 			if verbose:
 				bar.increment()
-				util.printflush(str(bar) + ' (backward)\r')
+				util.printflush(str(bar) + ' (forward) \r')
 
+		# Finalize forward bar printing
 		if verbose: print
 
-		# Kill the I/O buffers
+		# Kill the object buffer
 		obj.kill()
-		fbuf.kill()
 
 		if V:
 			# Flush and kill the output buffers for volume writes

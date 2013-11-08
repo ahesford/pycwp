@@ -277,29 +277,18 @@ __kernel void green3d(${gfc} fld, ${cfl} sx, ${cfl} sy, ${cfl} dz) {
 	fld[idx] = ${'' if d is None else '(float2) mag *'} grf;
 }
 
-/* Transmit a field through an interface with reflection coefficients rc. */
-__kernel void transmit(${gfc} fwd, ${gfc} ocur, ${gfc} onxt) {
-	${getindices('i', 'j', 'idx')}
-
-	const float2 cval = ocur[idx];
-	const float2 nval = onxt[idx];
-	const float2 fval = fwd[idx];
-	const float2 rval = rcoeff(cval, nval);
-	fwd[idx] = fval + cmul(rval, fval);
-}
-
 /* Transmit a field through an interface with reflection coefficients rc.
- * Also reflect the backward-traveling wave bck and add to the field. */
+ * Also store the reflected field in bck (if the pointer is not NULL). */
 __kernel void txreflect(${gfc} fwd, ${gfc} bck, ${gfc} ocur, ${gfc} onxt) {
 	${getindices('i', 'j', 'idx')}
 
 	const float2 cval = ocur[idx];
 	const float2 nval = onxt[idx];
 	const float2 fval = fwd[idx];
-	const float2 bval = bck[idx];
 	const float2 rval = rcoeff(cval, nval);
-	const float2 cor = cmul(cdiv(rval, (float2) (1.0f, 0.0f) - rval), bval);
-	fwd[idx] = fval + cmul(rval, fval) - cor;
+	const float2 reflect = cmul(rval, fval);
+	fwd[idx] = fval + reflect;
+	if (bck) bck[idx] = reflect;
 }
 
 /* Perform a Goertzel iteration to effect a Fourier transform along the

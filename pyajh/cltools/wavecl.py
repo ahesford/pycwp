@@ -514,19 +514,17 @@ class SplitStep(object):
 		return prog.screen(fwdque, grid, None, fld, obj, dz)
 
 
-	def advance(self, obj, bfld=None, shift=False, corr=None, shcorr=None):
+	def advance(self, obj, shift=False, corr=None, shcorr=None):
 		'''
 		Propagate a field through the current slab and transmit it
 		through an interface with the next slab characterized by object
 		contrast obj. The transmission overwrites the refractive index
 		of the current slab with the interface reflection coefficients.
 
-		The field bfld, if provided, runs opposite the direction of
-		propagation that will be reflected and added to the propagated
-		field after transmission across the interface.
-
-		If shift is True, the forward and backward field are also
-		shifted by half a slab to agree with full-wave solutions.
+		If shift is True, the forward is shifted by half a slab to
+		agree with full-wave solutions and includes a
+		backward-traveling contribution caused by reflection from the
+		interface with the next slab.
 
 		The relevant result (either the forward field or the
 		half-shifted combined field) is copied into a device-side
@@ -557,14 +555,6 @@ class SplitStep(object):
 		# Push the next slab to its buffer (overwrites speed extrema)
 		ocur, onxt, obevt = self.objupdate(obj)
 
-		if bfld is not None:
-			# Ensure that the buffer is free from prior calculations
-			bck.sync(recvque)
-			# Copy the backward-traveling field
-			bfevt = self.rectxfer.todevice(recvque, bck, bfld)
-			# Attach the copy event to the backward buffer
-			bck.attachevent(bfevt)
-
 		if self.phasetol is not None:
 			# Figure maximum propagation distance to not
 			# exceed maximum permissible phase deviation
@@ -587,13 +577,19 @@ class SplitStep(object):
 		# Propagate the forward field through the slab on the fwdque
 		for i in range(nsteps): self.propagate(fwd, dz, corr=corr)
 
+		# Ensure next slab has been received before handling interface
+		cl.enqueue_barrier(fwdque, wait_for=[obevt])
+
+		# Compute transmission through the interface
+		# The reflected field is only of interest if a shift is desired
+		transevt = prog.txreflect(fwdque, grid, None,
+				fwd, bck if shift else None, ocur, onxt)
+		# Hold the current contrast slab until the transmission is done
+		ocur.attachevent(transevt)
+
 		if shift:
-			if bfld is not None:
-				# Ensure copy has finished before fwdque resumes
-				bck.sync(fwdque)
-				# Add the forward and backward fields
-				prog.caxpy(fwdque, grid, None, buf,
-						np.float32(1.), buf, bck)
+			# Add the forward and backward fields
+			prog.caxpy(fwdque, grid, None, buf, np.float32(1.), buf, bck)
 			# Propagate the combined field a half step
 			# Save the propagation event for delaying result copies
 			pevt = self.propagate(buf, 0.5 * self.dz, corr=shcorr)
@@ -619,31 +615,12 @@ class SplitStep(object):
 				evt = cl.enqueue_copy(sendque, self.result, buf, wait_for=[pevt])
 				# Attach the copy event to the source buffer
 				buf.attachevent(evt)
-
-		# Ensure the next slab has been received
-		cl.enqueue_barrier(fwdque, wait_for=[obevt])
-		# Compute transmission through the interface
-		if bfld is None:
-			evt = prog.transmit(fwdque, grid, None, fwd, ocur, onxt)
-		# Include reflection of backward field if appropriate
-		else:
-			# Ensure the backward field has been received
-			bck.sync(fwdque)
-			evt = prog.txreflect(fwdque, grid, None, fwd, bck, ocur, onxt)
-
-		# Attach the transmission event to the current slab contrast
-		ocur.attachevent(evt)
-		# Also attach the event to the backward field buffer
-		bck.attachevent(evt)
-
-		# If shifted fields were desired, the result copy has already begun
-		if shift: return
-
-		# Copy the forward field into the result buffer
-		# Wait for transmissions to finish for consistency
-		evt = cl.enqueue_copy(sendque, self.result, fwd, wait_for=[evt])
-		# Attach the copy event to the field buffer
-		fwd.attachevent(evt)
+		else: 
+			# Copy the forward field into the result buffer
+			# Wait for transmissions to finish for consistency
+			evt = cl.enqueue_copy(sendque, self.result, fwd, wait_for=[transevt])
+			# Attach the copy event to the field buffer
+			fwd.attachevent(evt)
 
 
 	def getresult(self, hbuf):

@@ -7,7 +7,7 @@ from pyajh import mio, cutil
 
 def usage(progname = 'caxpy.py'):
 	binfile = os.path.basename(progname)
-	print "Usage:", binfile, "[-h] [-a a] [-b b] <z> <x> <y>"
+	print "Usage:", binfile, "[-h] [-p nproc] [-a a] [-b b] <z> <x> <y>"
 	print "  Compute z = a * x + b * y for matrices in files z, x, and y"
 	print "  Both a and b are complex constants specified in the form c+dj"
 	print "  By default, a = b = 1"
@@ -40,12 +40,13 @@ def main (argv = None):
 	try: nproc = multiprocessing.cpu_count()
 	except NotImplementedError: nproc = 1
 
-	optlist, args = getopt.getopt (argv, 'a:b:h')
+	optlist, args = getopt.getopt (argv, 'p:a:b:h')
 
 	# Parse the options list
 	for opt in optlist:
 		if opt[0] == '-a': a = complex(opt[1])
 		elif opt[0] == '-b': b = complex(opt[1])
+		elif opt[0] == '-p': nproc = int(opt[1])
 		else:
 			usage (progname)
 			return 128
