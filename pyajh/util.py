@@ -2,23 +2,21 @@
 General-purpose, non-numerical routines.
 '''
 import math
+from . import cutil
 
 def zeropad(d, m):
 	'''
 	Given a nonnegative integer d less than an integer m, return a string
 	representation s of d with enough leading zeros prepended such that all
-	integers less than m can be displayed in strings of length(s).
+	integers not more than m can be displayed in strings of length(s).
 
 	Examples:
-	  zeropad(3, 1000) -> '003'
-	  zeropad(12, 1000) -> '012'
-	  zeropad(999, 1000) -> '999'
+	  zeropad(3, 999) -> '003'
+	  zeropad(999, 999) -> '999'
+	  zeropad(12, 1000) -> '0012'
 	'''
-	if d < 0: raise ValueError('Integer d must be nonnegative')
-	if m <= d: raise ValueError('Integer m must be greater than d')
-	digits = int(math.log10(m))
-	if 10**digits < m: digits += 1
-	return '{0:0{digits}d}'.format(d, digits=digits)
+	digs = max(d, m)
+	return '{0:0{digits}d}'.format(d, digits=cutil.numdigits(digs))
 
 
 def grouplist(lst, n):

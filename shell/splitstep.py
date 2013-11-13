@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-import numpy as np, math, sys, getopt, os, socket, pyopencl as cl
+import numpy as np, math, sys, getopt, os, socket, operator, pyopencl as cl
 from numpy.linalg import norm
 from multiprocessing import Process
 from subprocess import check_call
@@ -104,15 +104,20 @@ def facetnormal(f):
 	return n if (d > 0) else -n
 
 
-def propagator(contrast, output, srclist, start=0, stride=1, c=1.507, f=3.0,
+def propagator(contrast, outfmt, srclist, start=0, stride=1, c=1.507, f=3.0,
 		s=0.05, w=0.39, p=2, q=0, a=None, d=None, e=None, g=0, V=False,
 		phasetol=None, tmpdir=None, verbose=False):
 	'''
 	For a subset of sources in a sequence of sources (each specified as a
-	three-element sequence), propagate its field through the specified
-	contrast file, storing the result in output (which may either be a
-	volume field or the spectral field on the unit sphere, computed with
-	the Goertzel algorithm).
+	record in a Numpy ndarray with three-float position field 'position',
+	an integer facet index field 'facet', and an integer facet-local source
+	index field 'source'), propagate its field through the specified
+	contrast file, storing the result (which may either be a volume field
+	or the spectral field on the unit sphere, computed with
+	the Goertzel algorithm) in an output file whose name is governed by the
+	Python format string outfmt. The name is determined by calling
+	outfmt.format(src), where src is the record corresponding to the
+	propagating source.
 
 	The subset of sources is specified by the arguments start and stride,
 	which specify the starting index in the source list and the number of
@@ -147,8 +152,9 @@ def propagator(contrast, output, srclist, start=0, stride=1, c=1.507, f=3.0,
 	# If no temporary directory was specified, use the current directory
 	if tmpdir is None: tmpdir = '.'
 
-	# Convert distance units to wavelengths
+	# Convert distance units and source positions to wavelengths
 	s *= f / float(c)
+	srclist['position'] *= f / float(c)
 
 	# Set up a slice-wise input reader
 	ctmat = mio.Slicer(contrast)
@@ -165,9 +171,6 @@ def propagator(contrast, output, srclist, start=0, stride=1, c=1.507, f=3.0,
 	mpirank = MPI.COMM_WORLD.Get_rank()
 	# Construct a unique identifier for this rank and context
 	procid = 'MPI rank {:d}({:d})'.format(mpirank, g)
-
-	# Convert source locations to wavelengths
-	srclist = [tuple(crd * f / float(c) for crd in src) for src in srclist]
 
 	sse = SplitStep(k0, e[0], e[1], s, d=d, l=a, w=w,
 			propcorr=(p > 0, q > 0), phasetol=phasetol, context=g)
@@ -187,18 +190,19 @@ def propagator(contrast, output, srclist, start=0, stride=1, c=1.507, f=3.0,
 		bar = util.ProgressBar([0, dom[-1]], width=50)
 
 	for srcidx in range(start, nsrcs, stride):
-		print '{:s}: Propagating source {:d}'.format(procid, srcidx)
+		# Grab the source record and print useful information
+		src = srclist[srcidx]
+		srcstring = '({0[facet]:d}, {0[source]:d})'.format(src)
+		posstring = '({0[0]:0.2f}, {0[1]:0.2f}, {0[2]:0.2f})'.format(src['position'])
+		print '{0:s}: Propagating source {1:s} at {2:s}'.format(procid, srcstring, posstring)
 
 		if verbose:
 			# Reinitialize the progress bar
 			bar.reset()
 			util.printflush(str(bar) + '\r')
 
-		# Convert the current source to wavelengths
-		src = tuple(crd * f / float(c) for crd in srclist[srcidx])
-		# Create a unique output name
-		srcstring = util.zeropad(srcidx, nsrcs)
-		outname = '{:s}.src{:s}'.format(output, srcstring)
+		# Create a unique name for the output file
+		outname = outfmt.format(src)
 
 		# Ensure that the split-step engine is consistent
 		sse.reset((p > 0, q > 0), goertzel=goertzel)
@@ -206,7 +210,7 @@ def propagator(contrast, output, srclist, start=0, stride=1, c=1.507, f=3.0,
 		# Compute the forward-traveling field half a slab before the start
 		# Remember that dom[-1] is already a full slab before start
 		zoff = wavetools.gridtocrd(dom[-1] - 0.5, len(ctmat), s)
-		sse.setincident((src[0], src[1], src[2] - zoff))
+		sse.setincident(src['position'] - [0, 0, zoff])
 
 		# An empty slab is needed for propagation beyond the medium
 		zeroslab = mapbuffer(sse.context, ctmat.sliceshape, ctmat.dtype,
@@ -214,7 +218,7 @@ def propagator(contrast, output, srclist, start=0, stride=1, c=1.507, f=3.0,
 		zeroslab.fill(0.)
 
 		# Create buffered slice objects to read the contrast
-		obj = BufferedSlices(ctmat, 5, context=sse.context)
+		obj = BufferedSlices(ctmat, 10, context=sse.context)
 		obj.setiter(reversed(range(len(ctmat))))
 		obj.start()
 
@@ -222,7 +226,7 @@ def propagator(contrast, output, srclist, start=0, stride=1, c=1.507, f=3.0,
 			# Only store volume output if volume fields are desired
 			# Create a buffered slice object to write the output
 			outmat = mio.Slicer(outname, ctmat.shape, ctmat.dtype, True)
-			obuf = BufferedSlices(outmat, 5, read=False, context=sse.context)
+			obuf = BufferedSlices(outmat, 10, read=False, context=sse.context)
 			# Store first result (don't care) in last slice to be overwritten
 			obuf.setiter([-1] + list(reversed(range(len(outmat)))))
 			obuf.start()
@@ -331,12 +335,28 @@ if __name__ == '__main__':
 	# Find MPI task parameters
 	rank, size = MPI.COMM_WORLD.Get_rank(), MPI.COMM_WORLD.Get_size()
 
-	# Read elements coordinates and facet indices from facet file
-	elements = np.loadtxt(args[0])
-	# Ensure that the array has at least two dimensions
-	if len(elements.shape) < 2: elements = elements[np.newaxis,:]
-	# Find the total number of facets for labeling purposes
-	numfacets = max(elements[:,-1].astype(int)) + 1
+	# The source array has a 3-float position, a facet index and a source index
+	facrec = [('position', '3f4'), ('facet', 'i4'), ('source', 'i4')]
+	# The data file does not index the source so ignore the source index
+	eltdata = np.loadtxt(args[0], dtype=facrec[:-1])
+	# Copy the data into an array with positions for source indices
+	elements = np.zeros_like(eltdata, dtype=facrec)
+	elements[:] = eltdata
+	# Simultaneously enumerate and index all sources within each facet
+	eltcounts = {}
+	for el in elements:
+		facidx = el['facet']
+		try:
+			el['source'] = eltcounts[facidx]
+			eltcounts[facidx] += 1
+		except KeyError:
+			el['source'] = 0
+			eltcounts[facidx] = 1
+	# Sort the elements first by facet, then by source
+	elements.sort(order=('facet', 'source'))
+
+	# Find the number of digits required to hold all facet indices
+	facdigits = cutil.numdigits(max(elements['facet']))
 
 	# Figure the share of elements for this MPI task
 	nelts = len(elements)
@@ -346,9 +366,9 @@ if __name__ == '__main__':
 	if rank < remainder: share += 1
 
 	# Pull out the elements handled by this process
-	locelts = elements[start:start+share,:]
-	# Pull out a list of unique facet indices
-	facets = np.unique(locelts[:,-1].astype(int)).tolist()
+	locelts = elements[start:start+share]
+	# Pull out a list of unique, local facet indices
+	facets = np.unique(locelts['facet'])
 
 	# Grab the file names for input and output
 	contrast = args[1]
@@ -360,9 +380,14 @@ if __name__ == '__main__':
 	# Loop over all facet indices
 	for fidx in facets:
 		# Pull all local elements belonging to the current facet
-		srclist = [el[:-1] for el in locelts.tolist() if int(el[-1]) == fidx]
+		srclist = np.array([el for el in locelts if el['facet'] == fidx])
 		# Pull all elements (local or not) belonging to the current facet
-		facelts = [el[:-1] for el in elements.tolist() if int(el[-1]) == fidx]
+		facelts = np.array([el for el in elements if el['facet'] == fidx])
+
+		# Find the number of digits required to hold all source indices
+		srcdigits = cutil.numdigits(max(facelts['source']))
+		# Make the unique file name template
+		outfmt = output + '.facet{{0[facet]:0{facdig}d}}.src{{0[source]:0{srcdig}d}}'.format(facdig=facdigits, srcdig=srcdigits)
 
 		# Determine if rotation is necessary
 		if directivity is not None and len(directivity) > 1:
@@ -372,18 +397,14 @@ if __name__ == '__main__':
 		else:
 			# If no directivity axis was specified, determine axis from facet
 			# Use non-local elements too for most accurate normal
-			propax = facetnormal(np.array(facelts))
+			propax = facetnormal(facelts['position'])
 			r, theta, phi = geom.cart2sph(*propax)
-
-		# The output file always gets a unique identifier
-		appendage = '.facet{:s}'.format(util.zeropad(fidx, numfacets))
-		outunique = output + appendage
 
 		if (rotprog is None) or (theta < rottol): rotcontrast = contrast
 		else:
 			print rotmsg.format(rank, theta, phi)
 			# Create the rotated contrast and output filenames
-			rotcontrast = contrast + appendage
+			rotcontrast = contrast + '.facet{0:0{facdig}d}'.format(fidx, facdig=facdigits)
 			# Put rotated contrast in desired temporary directory
 			try: tmpdir = propargs['tmpdir']
 			except KeyError: tmpdir = '.'
@@ -405,7 +426,7 @@ if __name__ == '__main__':
 			check_call([rotprog] + rotargs)
 
 			# Rotate the element coordinates to the new system
-			srclist = [geom.rotate3d(src, -theta, -phi) for src in srclist]
+			srclist['position'] = [geom.rotate3d(src['position'], -theta, -phi) for src in srclist]
 			# Rotate the propagation axis (it should become 0,0,1)
 			propax = np.array(geom.rotate3d(propax, -theta, -phi))
 
@@ -414,18 +435,14 @@ if __name__ == '__main__':
 			beamwidth = directivity[-1]
 			propargs['d'] = list(-propax) + [beamwidth]
 
-		# If fewer sources than GPUs, truncate the GPU list
-		nsrc, ngpu = len(srclist), len(gpuctx)
-		if nsrc < ngpu:
-			gpuctx = gpuctx[:nsrc]
-			ngpu = nsrc
-
 		try:
 			# Spawn processes to handle GPU computations
 			procs = []
-			for i, g in enumerate(gpuctx):
+			# Don't use more GPUs than there are sources
+			stride = min(len(srclist), len(gpuctx))
+			for i, g in enumerate(gpuctx[:stride]):
 				# Set the function arguments
-				args = (rotcontrast, outunique, srclist, i, ngpu)
+				args = (rotcontrast, outfmt, srclist, i, stride)
 				kwargs = dict(propargs)
 				# Establish the GPU context argument
 				kwargs['g'] = g

@@ -6,11 +6,23 @@ import numpy, math, operator
 from scipy import special as spec, ndimage
 from itertools import izip
 
+def numdigits(m):
+	'''
+	Return the number of digits required to represent int(m).
+	'''
+	if m < 0: raise ValueError('Integer m must be nonnegative')
+	digits = int(math.log10(m))
+	# Watch for boundary cases (e.g., m = 1000)
+	if 10**digits <= m: digits += 1
+	return digits
+
+
 def deg2rad(t):
 	'''
 	Convert the angle t in degrees to radians.
 	'''
 	return t * math.pi / 180.
+
 
 def rad2deg(t):
 	'''
