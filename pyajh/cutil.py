@@ -11,6 +11,8 @@ def numdigits(m):
 	Return the number of digits required to represent int(m).
 	'''
 	if m < 0: raise ValueError('Integer m must be nonnegative')
+	elif m == 0: return 1
+
 	digits = int(math.log10(m))
 	# Watch for boundary cases (e.g., m = 1000)
 	if 10**digits <= m: digits += 1
