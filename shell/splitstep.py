@@ -339,6 +339,8 @@ if __name__ == '__main__':
 	facrec = [('position', '3f4'), ('facet', 'i4'), ('source', 'i4')]
 	# The data file does not index the source so ignore the source index
 	eltdata = np.loadtxt(args[0], dtype=facrec[:-1])
+	# If the element data is a single source, ensure it is a 1-D array
+	if len(eltdata.shape) < 1: eltdata = eltdata[np.newaxis]
 	# Copy the data into an array with positions for source indices
 	elements = np.zeros_like(eltdata, dtype=facrec)
 	elements[:] = eltdata
