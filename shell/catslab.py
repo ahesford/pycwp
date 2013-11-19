@@ -8,22 +8,25 @@ from pyajh import mio
 
 def usage (progname = 'catslab.py'):
 	binfile = os.path.basename(progname)
-	print >> sys.stderr, "Usage:", binfile, "[-h] [-t xl,xh,yl,yh] <slab1> [...] <slabN>"
+	print >> sys.stderr, "Usage:", binfile, "[-h] [-t xl,xh,yl,yh] [-o output] <slab1> [...] <slabN>"
 
 def main (argv = None):
 	if argv is None:
 		argv = sys.argv[1:]
 		progname = sys.argv[0]
 
-	optlist, args = getopt.getopt (argv, 'ht:')
+	optlist, args = getopt.getopt (argv, 'ht:o:')
 	trunc = False
+	# By default, use stdout
+	output = None
 
 	# Parse the option list
 	for opt in optlist:
 		if opt[0] == '-t':
 			trunc = True
-			xmin, xmax, ymin, ymax = tuple([int(l) 
-				for l in opt[1].split(',')])
+			xmin, xmax, ymin, ymax = [int(l) for l in opt[1].split(',')]
+		if opt[0] == '-o':
+			output = opt[1]
 		else:
 			usage(progname)
 			return 128
@@ -46,19 +49,24 @@ def main (argv = None):
 	shape = list(slab.shape)
 	shape.append(nslabs)
 
+	# If an output file was specified, create it
+	if output: output = open(output, 'wb')
+	# Otherwise, just use stdout
+	else: output = sys.stdout
+
 	# Write the matrix size to the output
-	np.array(shape, dtype=np.int32).tofile(sys.stdout)
+	np.array(shape, dtype=np.int32).tofile(output)
 
 	# Write the first slab to the output
-	slab.flatten('F').tofile(sys.stdout)
+	slab.flatten('F').tofile(output)
 
 	# Loop through all remaining slabs, converting data types along the way
 	for name in args:
 		slab = np.array(mio.readbmat(name), dtype=dtype)
 		if trunc: slab = slab[xmin:xmax,ymin:ymax]
-		slab.flatten('F').tofile(sys.stdout)
+		slab.flatten('F').tofile(output)
 
-	sys.stdout.close()
+	output.close()
 	return 0
 
 if __name__ == "__main__":

@@ -11,16 +11,18 @@ from pyajh.cltools import SplitStep, BufferedSlices, mapbuffer
 
 def usage(execname):
 	binfile = os.path.basename(execname)
-	print 'USAGE:', binfile, '[-h] [-q q] [-p p] [-a a] [-r regrid.py] [-t tmpdir] [-g g0,g1,...] [-v] [-V] [-f f] [-s s] [-c c] [-e nx,ny] [-w w] [-P P] [-d [x,y,z,]w]', '<srclist> <infile> <outfile>'
+	print 'USAGE:', binfile, '[-h] [-q q] [-p p] [-a a] [-r regrid.py] [-t tmpdir] [-g g0,g1,...] [-v] [-V] [-f f] [-s s] [-c c] [-e nx,ny] [-w w] [-P P] [-d [x,y,z,]w]', '<srclist> <infile> <outfmt>'
 	print '''
   Using the split-step method, compute the fields induced in a contrast medium
   specified in infile by each of a collection of sources listed in the file
-  srclist. The file describes each source on a separate line and, because
-  numpy.loadtxt is used to parse the file, supports hash comments. Each source
-  is described by four columns; the x, y, and z coordinates of the source (in
-  that order) followed by a facet identifier integer. The identifier is
-  arbitrary, but sources sharing an identifier are assumed to belong to the
-  same planar facet.
+  srclist. The file describes each source on a separate line and is parsed with
+  numpy.loadtxt as a 1-D structured array of records with fields 'position',
+  'facet', and 'source'. The 'position' entry corresponds to the first three
+  columns in the file and contains a three-float sequence of x, y, and z
+  coordinates of the source. The 'facet' entry corresponds to the fourth column
+  and specifies a nonnegative integer index for the facet containing the
+  source. The 'source' entry corresponds to the fifth column and specifies a
+  nonnegative integer index for the source within its facet.
 
   If a path to regrid.py is specified, the contrast will be rotated so that the
   z axis is parallel to a reference direction unless the z axis is already
@@ -36,7 +38,11 @@ def usage(execname):
   incident field. A configurable attenuation profile is applied to each edge of
   each slice.
 
-  Each solution is written to outfile with a unique identifier appended.
+  Each solution is written to a file whose name is prescribed by the Python
+  format string outfmt. Each source record src in the provided srclist is
+  passed to outfmt.format(src) to produce an output file name for that source.
+  Accordingly, outfmt should reference the records '0[position]', '0[facet]'
+  and '0[source]' as desired to create unique names.
 
   The computational domain is padded to the next larger power of 2 for
   artificial attenuation.
@@ -108,14 +114,16 @@ def propagator(contrast, outfmt, srclist, start=0, stride=1, c=1.507, f=3.0,
 		s=0.05, w=0.39, p=2, q=0, a=None, d=None, e=None, g=0, V=False,
 		phasetol=None, tmpdir=None, verbose=False):
 	'''
-	For a subset of sources in a sequence of sources (each specified as a
-	record in a Numpy ndarray with three-float position field 'position',
-	an integer facet index field 'facet', and an integer facet-local source
-	index field 'source'), propagate its field through the specified
-	contrast file, storing the result (which may either be a volume field
-	or the spectral field on the unit sphere, computed with
-	the Goertzel algorithm) in an output file whose name is governed by the
-	Python format string outfmt. The name is determined by calling
+	For a subset of sources in a 1-D Numpy structured array of sources
+	(each specified as a record ['position', 'facet', 'source'] in which
+	'position' is a three-float sequence indicating the source location,
+	'facet' is a nonnegative integer numbering the facet that contains the
+	source, and 'source' is a nonnegative integer numbering the source
+	within its facet), propagate its field through the specified contrast
+	file, storing the result (which may either be a volume field or the
+	spectral field on the unit sphere, computed with the Goertzel
+	algorithm) in an output file whose name is governed by the Python
+	format string outfmt. The name is determined by calling
 	outfmt.format(src), where src is the record corresponding to the
 	propagating source.
 
@@ -337,28 +345,9 @@ if __name__ == '__main__':
 
 	# The source array has a 3-float position, a facet index and a source index
 	facrec = [('position', '3f4'), ('facet', 'i4'), ('source', 'i4')]
-	# The data file does not index the source so ignore the source index
-	eltdata = np.loadtxt(args[0], dtype=facrec[:-1])
-	# If the element data is a single source, ensure it is a 1-D array
-	if len(eltdata.shape) < 1: eltdata = eltdata[np.newaxis]
-	# Copy the data into an array with positions for source indices
-	elements = np.zeros_like(eltdata, dtype=facrec)
-	elements[:] = eltdata
-	# Simultaneously enumerate and index all sources within each facet
-	eltcounts = {}
-	for el in elements:
-		facidx = el['facet']
-		try:
-			el['source'] = eltcounts[facidx]
-			eltcounts[facidx] += 1
-		except KeyError:
-			el['source'] = 0
-			eltcounts[facidx] = 1
+	elements = np.loadtxt(args[0], dtype=facrec)
 	# Sort the elements first by facet, then by source
 	elements.sort(order=('facet', 'source'))
-
-	# Find the number of digits required to hold all facet indices
-	facdigits = cutil.numdigits(max(elements['facet']))
 
 	# Figure the share of elements for this MPI task
 	nelts = len(elements)
@@ -369,27 +358,20 @@ if __name__ == '__main__':
 
 	# Pull out the elements handled by this process
 	locelts = elements[start:start+share]
-	# Pull out a list of unique, local facet indices
-	facets = np.unique(locelts['facet'])
 
-	# Grab the file names for input and output
+	# Grab the input file name and the output filename template
 	contrast = args[1]
-	output = args[2]
+	outfmt = args[2]
 
 	# Note any rotation that will occur
 	rotmsg = 'MPI rank {:d}: Will rotate z axis to ({:g}, {:g})'
 
-	# Loop over all facet indices
-	for fidx in facets:
+	# Loop over all facet indices locally computed
+	for fidx in set(locelts['facet']):
 		# Pull all local elements belonging to the current facet
-		srclist = np.array([el for el in locelts if el['facet'] == fidx])
+		srclist = locelts[locelts['facet'] == fidx]
 		# Pull all elements (local or not) belonging to the current facet
-		facelts = np.array([el for el in elements if el['facet'] == fidx])
-
-		# Find the number of digits required to hold all source indices
-		srcdigits = cutil.numdigits(max(facelts['source']))
-		# Make the unique file name template
-		outfmt = output + '.facet{{0[facet]:0{facdig}d}}.src{{0[source]:0{srcdig}d}}'.format(facdig=facdigits, srcdig=srcdigits)
+		facelts = elements[elements['facet'] == fidx]
 
 		# Determine if rotation is necessary
 		if directivity is not None and len(directivity) > 1:
@@ -406,7 +388,7 @@ if __name__ == '__main__':
 		else:
 			print rotmsg.format(rank, theta, phi)
 			# Create the rotated contrast and output filenames
-			rotcontrast = contrast + '.facet{0:0{facdig}d}'.format(fidx, facdig=facdigits)
+			rotcontrast = contrast + '.facet{0:d}'.format(fidx)
 			# Put rotated contrast in desired temporary directory
 			try: tmpdir = propargs['tmpdir']
 			except KeyError: tmpdir = '.'
