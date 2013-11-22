@@ -5,20 +5,6 @@ from mpi4py import MPI
 
 from pyajh import mio
 
-def fctsrcidx(fname):
-	'''
-	For files of the form <Name>.facet<fidx>.src<sidx>.<ext> for an
-	arbitrary <Name> and an arbitrary <ext> which does not contain a
-	period, return a tuple corresponding to the integers <fidx> and <sidx>.
-	'''
-	# Grab the facet and source strings
-	facet, source = fname.split('.')[-3:-1]
-	fidx = int(facet.replace('facet', ''), base=10)
-	sidx = int(source.replace('src', ''), base=10)
-
-	return fidx, sidx
-
-
 def localfiles(dir):
 	'''
 	Return a list of tuples corresponding to all files in the directory dir
@@ -27,13 +13,9 @@ def localfiles(dir):
 	the full path to the file.
 	'''
 	# Build the regexp and filter the list of files in the directory
-	regexp = re.compile(r'^.*facet[0-9]+\.src[0-9]+\.ScattMeas$')
-	filelist = filter(regexp.match, os.listdir(dir))
-	# Normalize the paths
-	filelist = [os.path.abspath(os.path.join(dir, f)) for f in filelist]
-	# Find the facet and source indices of each file
-	indices = [fctsrcidx(f) for f in filelist]
-	return [(idx[0], idx[1], f) for idx, f in zip(indices, filelist)]
+	regexp = re.compile(r'^.*facet([0-9]+)\.src([0-9]+)\.ScattMeas$')
+	return [(int(m.group(1)), int(m.group(2)), os.path.join(dir, f))
+			for f in os.listdir(dir) for m in [regexp.match(f)] if m]
 
 
 if __name__ == "__main__":
@@ -63,6 +45,5 @@ if __name__ == "__main__":
 		# Concatenate the local matrices to build a scattering map
 		# Use the sorted indices to reorder the columns
 		fullmat = np.concatenate(fullmat, axis=-1)[:,idx]
-
-	# The head node should write the full matrix
-	if not MPI.COMM_WORLD.rank: mio.writebmat(fullmat, output)
+		# Write the matrix
+		mio.writebmat(fullmat, output)
