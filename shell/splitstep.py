@@ -346,6 +346,9 @@ if __name__ == '__main__':
 	# The source array has a 3-float position, a facet index and a source index
 	facrec = [('position', '3f4'), ('facet', 'i4'), ('source', 'i4')]
 	elements = np.loadtxt(args[0], dtype=facrec)
+	if len(elements.shape) < 1:
+		# If a single source was specified, convert it to a length-1 array
+		elements = np.array([elements], dtype=facrec)
 	# Sort the elements first by facet, then by source
 	elements.sort(order=('facet', 'source'))
 
