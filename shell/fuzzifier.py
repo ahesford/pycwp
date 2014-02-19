@@ -1,8 +1,7 @@
 #!/usr/bin/env python
 
 import sys, os, numpy as np, getopt
-from multiprocessing import Process, cpu_count
-from pyajh import mio, cutil
+from pyajh import mio, cutil, process
 
 def usage(progname = 'fuzzifier.py'):
 	binfile = os.path.basename(progname)
@@ -51,8 +50,7 @@ def main (argv = None):
 		progname = sys.argv[0]
 
 	# Default values
-	try: nproc = cpu_count()
-	except NotImplementedError: nproc = 1
+	nrpoc = process.preferred_process_count()
 	chunk, nbr = 8, 5
 
 	optlist, args = getopt.getopt (argv, 'p:c:n:h')
@@ -77,18 +75,14 @@ def main (argv = None):
 	outfile = mio.Slicer(args[1], infile.shape, infile.dtype, True)
 
 	try:
-		procs = []
-		for n in range(nproc):
-			args = (args[0], args[1], nbr, n, nproc, chunk)
-			p = Process(target=fuzzyblks, args=args)
-			p.start()
-			procs.append(p)
-		for p in procs: p.join()
+		with process.ProcessPool() as pool:
+			for n in range(nproc):
+				args = (args[0], args[1], nbr, n, nproc, chunk)
+				pool.addtask(target=fuzzyblks, args=args)
+			pool.start()
+			pool.wait()
 	except:
 		outfile._backer.truncate(0)
-		for p in procs:
-			p.terminate()
-			p.join()
 		raise
 
 	return 0

@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 
 import sys, os, numpy as np, getopt
-from multiprocessing import Process, cpu_count
 from pyajh import mio, segmentation
 
 def usage(progname = 'segmentation.py'):
@@ -51,8 +50,7 @@ def main (argv = None):
 
 	# Default values
 	random = True
-	try: nproc = cpu_count()
-	except NotImplementedError: nproc = 1
+	nproc = process.preferred_process_count()
 	chunk = 8
 
 	optlist, args = getopt.getopt (argv, 'p:nd:s:c:g:h')
@@ -93,18 +91,14 @@ def main (argv = None):
 	outfiles = [mio.Slicer(o, segfile.shape, segfile.dtype, True) for o in outputs]
 
 	try:
-		procs = []
-		for n in range(nproc):
-			args = (args[0], outputs, params, n, nproc, chunk)
-			p = Process(target=mapblks, args=args, kwargs=kwargs)
-			p.start()
-			procs.append(p)
-		for p in procs: p.join()
+		with process.ProcessPool() as pool:
+			for n in range(nproc):
+				args = (args[0], outputs, params, n, nproc, chunk)
+				pool.addtask(target=mapblks, args=args, kwargs=kwargs)
+			pool.start()
+			pool.wait()
 	except:
 		for f in outfiles: f._backer.truncate(0)
-		for p in procs:
-			p.terminate()
-			p.join()
 		raise
 
 	return 0

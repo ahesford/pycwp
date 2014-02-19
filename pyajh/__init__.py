@@ -6,6 +6,6 @@ data.
 
 __all__ = [ 'aca', 'cutil', 'fdtd', 'focusing', 'geom', 
 		'harmonic', 'mio', 'ftntools', 'cltools', 'segmentation',
-		'scattering', 'shtransform', 'util', 'wavetools' ]
+		'scattering', 'shtransform', 'util', 'wavetools', 'process' ]
 
 from . import *

@@ -2,8 +2,7 @@
 
 import sys, os, numpy as np, getopt
 from scipy.ndimage.filters import gaussian_filter1d
-from multiprocessing import Process, cpu_count
-from pyajh import mio
+from pyajh import mio, process
 
 def usage(progname = 'gaussfilt.py'):
 	binfile = os.path.basename(progname)
@@ -58,8 +57,7 @@ def main (argv = None):
 		progname = sys.argv[0]
 
 	# Default values
-	try: nproc = cpu_count()
-	except NotImplementedError: nproc = 1
+	nrpoc = process.preferred_process_count()
 	chunk, stdev, pad, bgval = 8, 8, 24, 0.
 
 	optlist, args = getopt.getopt (argv, 'p:c:g:b:h')
@@ -88,18 +86,15 @@ def main (argv = None):
 	outfile = mio.Slicer(args[1], infile.shape, infile.dtype, True)
 
 	try:
-		procs = []
-		for n in range(nproc):
-			args = (args[0], args[1], stdev, pad, bgval, n, nproc, chunk)
-			p = Process(target=filtblks, args=args)
-			p.start()
-			procs.append(p)
-		for p in procs: p.join()
+		with process.ProcessPool() as pool:
+			for n in range(nproc):
+				args = (args[0], args[1], stdev,
+						pad, bgval, n, nproc, chunk)
+				pool.addtask(target=filtblks, args=args)
+			pool.start()
+			pool.wait()
 	except:
 		outfile._backer.truncate(0)
-		for p in procs:
-			p.terminate()
-			p.join()
 		raise
 
 	return 0

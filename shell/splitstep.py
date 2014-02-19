@@ -2,11 +2,10 @@
 
 import numpy as np, math, sys, getopt, os, socket, operator, pyopencl as cl
 from numpy.linalg import norm
-from multiprocessing import Process
 from subprocess import check_call
 from mpi4py import MPI
 
-from pyajh import mio, wavetools, util, cutil, geom
+from pyajh import mio, wavetools, util, cutil, geom, process
 from pyajh.cltools import SplitStep, BufferedSlices, mapbuffer
 
 def usage(execname):
@@ -423,27 +422,20 @@ if __name__ == '__main__':
 			propargs['d'] = list(-propax) + [beamwidth]
 
 		try:
-			# Spawn processes to handle GPU computations
-			procs = []
-			# Don't use more GPUs than there are sources
-			stride = min(len(srclist), len(gpuctx))
-			for i, g in enumerate(gpuctx[:stride]):
-				# Set the function arguments
-				args = (rotcontrast, outfmt, srclist, i, stride)
-				kwargs = dict(propargs)
-				# Establish the GPU context argument
-				kwargs['g'] = g
-				# Pick a more useful name for the process
-				procname = '{:s}-{:s}-Rank{:d}-GPU{:d}'.format(hostname, execname, rank, g)
-				p = Process(target=propagator, name=procname, args=args, kwargs=kwargs)
-				p.start()
-				procs.append(p)
-			for p in procs: p.join()
-		except:
-			for p in procs:
-				p.terminate()
-				p.join()
-			raise
+			with process.ProcessPool() as pool:
+				# Don't use more GPUs than there are sources
+				stride = min(len(srclist), len(gpuctx))
+				for i, g in enumerate(gpuctx[:stride]):
+					# Set the function arguments
+					args = (rotcontrast, outfmt, srclist, i, stride)
+					kwargs = dict(propargs)
+					# Establish the GPU context argument
+					kwargs['g'] = g
+					# Pick a more useful name for the process
+					procname = '{:s}-{:s}-Rank{:d}-GPU{:d}'.format(hostname, execname, rank, g)
+					pool.addtask(target=propagator, name=procname, args=args, kwargs=kwargs)
+				pool.start()
+				pool.wait()
 		finally:
 			# Remove the rotated contrast if necessary
 			if rotcontrast != contrast: os.remove(rotcontrast)
