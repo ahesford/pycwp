@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 import sys, os, numpy as np, getopt
-from pyajh import mio, segmentation
+from pyajh import mio, segmentation, process
 
 def usage(progname = 'segmentation.py'):
 	binfile = os.path.basename(progname)
