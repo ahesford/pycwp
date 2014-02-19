@@ -13,7 +13,7 @@ def preferred_process_count():
 	return nprocs
 
 
-class ProcessPool:
+class ProcessPool(object):
 	'''
 	This provides a context manager interface that manages a list of
 	processes, allowing the caller to attach an arbitrary number of
