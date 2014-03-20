@@ -6,6 +6,69 @@ import numpy, math, operator
 from scipy import special as spec, ndimage
 from itertools import izip
 
+
+def bandwidth(sigft, df=1, level=0.5, r2c=False):
+	'''
+	Return as (bw, fc) the bandwidth bw and center frequency fc of a signal
+	whose DFT is given in sigft. The frequency bin width is df.
+
+	The DFT is searched in both directions from the positive frequency bin
+	with peak amplitude until the signal falls below the specified level.
+	Linear interpolation pinpoints the level crossing between bins. The
+	bandwidth is the difference between the high and low crossings,
+	multiplied by df. Only the level crossing nearest the peak is
+	identified in each direction.
+
+	The center frequency is the average of the high and low crossing
+	frequencies.
+
+	If r2c is True, the DFT is assumed to contain only positive
+	frequencies. Otherwise, the DFT should contain positive and negative
+	frequencies in standard FFT order.
+	'''
+	sigamps = numpy.abs(sigft)
+	if not r2c:
+		# Strip the negative frequencies from the C2C DFT
+		sigamps = sigamps[:len(sigamps)/2]
+
+	# Find the peak positive frequency
+	peakidx = numpy.argmax(sigamps)
+	# Now scale the amplitudes
+	sigamps /= sigamps[peakidx]
+
+
+	# Search low frequencies for the level crossing
+	flo = peakidx + 1
+	for i, s in enumerate(reversed(sigamps[:peakidx])):
+		if s < level:
+			flo = peakidx - i
+			break
+	# Search high frequencies for the level crossing
+	fhi = peakidx - 1
+	for i, s in enumerate(sigamps[peakidx+1:]):
+		if s < level:
+			fhi = peakidx + i
+			break
+
+	# Ensure that a crossing level was identified
+	if sigamps[flo - 1] > level:
+		raise ValueError('Low-frequency level crossing not identified')
+	if sigamps[fhi + 1] > level:
+		raise ValueError('High-frequency level crossing not identified')
+
+	# Now convert the indices to interpolated frequencies
+	# The indices point to the furthest sample exceeding the level
+	mlo = (sigamps[flo] - sigamps[flo - 1])
+	mhi = (sigamps[fhi + 1] - sigamps[fhi])
+
+	flo = (level - sigamps[flo - 1]) / float(mlo) + flo - 1
+	fhi = (level - sigamps[fhi]) / float(mhi) + fhi
+
+	bw = (fhi - flo) * df
+	fc = 0.5 * (fhi + flo) * df
+	return bw, fc
+
+
 def numdigits(m):
 	'''
 	Return the number of digits required to represent int(m).
