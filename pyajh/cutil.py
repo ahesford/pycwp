@@ -7,6 +7,33 @@ from scipy import special as spec, ndimage
 from itertools import izip
 
 
+def asarray(a, rank=None):
+	'''
+	Ensure that a behaves as a numpy ndarray and, if not, duplicate a as an
+	ndarray. If rank is specified, it must not be less than the "natural"
+	rank of a. If rank is greater than the natural rank, the returned
+	ndarray is padded by appending np.newaxis slices until the desired rank
+	is achieved.
+
+	If a is None, None is returned.
+
+	NOTE: If a is already a numpy array, the returned object is either the
+	same as the argument, or a view on the argument.
+	'''
+	if a is None: return None
+
+	if not isinstance(a, numpy.ndarray): a = numpy.array(a)
+
+	nrank = numpy.ndim(a)
+	if rank is None or rank == nrank: return a
+
+	if rank < nrank:
+		raise ValueError('Desired rank must not be less than "natural" rank of a')
+
+	sl = [slice(None)] * nrank + [numpy.newaxis] * (rank - nrank)
+	return a[sl]
+
+
 def bandwidth(sigft, df=1, level=0.5, r2c=False):
 	'''
 	Return as (bw, fc) the bandwidth bw and center frequency fc of a signal
