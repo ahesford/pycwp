@@ -7,13 +7,13 @@ from scipy import special as spec, ndimage
 from itertools import izip
 
 
-def asarray(a, rank=None):
+def asarray(a, rank=None, tailpad=True):
 	'''
 	Ensure that a behaves as a numpy ndarray and, if not, duplicate a as an
 	ndarray. If rank is specified, it must not be less than the "natural"
 	rank of a. If rank is greater than the natural rank, the returned
-	ndarray is padded by appending np.newaxis slices until the desired rank
-	is achieved.
+	ndarray is padded by appending (if tailpad is True) or prepending (if
+	tailpad is False) np.newaxis slices until the desired rank is achieved.
 
 	If a is None, None is returned.
 
@@ -31,6 +31,7 @@ def asarray(a, rank=None):
 		raise ValueError('Desired rank must not be less than "natural" rank of a')
 
 	sl = [slice(None)] * nrank + [numpy.newaxis] * (rank - nrank)
+	if not tailpad: sl = list(reversed(sl))
 	return a[sl]
 
 
