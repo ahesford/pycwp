@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """
-PyAJH: Userful numerical routines for Pyhon
+pycwp: Userful numerical routines for computational wave physics in Pyhon
 
-The PyAJH library is maintained by Andrew J. Hesford to provide useful
+The pycwp library is maintained by Andrew J. Hesford to provide useful
 software in Python for computational wave physics and the manipulation
 of binary matrix files.
 """
@@ -16,7 +16,7 @@ def configuration(parent_package='', top_path=None):
 			assume_default_configuration=True,
 			delegate_options_to_subpackages=True,
 			quiet=True)
-	config.add_subpackage('pyajh')
+	config.add_subpackage('pycwp')
 	config.add_scripts(['shell/*.py'])
 
 	return config
@@ -24,9 +24,9 @@ def configuration(parent_package='', top_path=None):
 if __name__ == '__main__': 
 	from numpy.distutils.core import setup, Extension
 
-	setup(name = "pyajh", version = "2.12",
+	setup(name = "pycwp", version = "2.12",
 		description = DOCLINES[0],
 		long_description = "\n".join(DOCLINES[2:]),
-		author = "Andrew J. Hesford", author_email = "ahesford@me.com",
-		platforms = ["any"], license = "BSD", packages = ["pyajh"],
+		author = "Andrew J. Hesford", author_email = "ahesford@mac.com",
+		platforms = ["any"], license = "BSD", packages = ["pycwp"],
 		configuration=configuration)

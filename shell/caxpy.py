@@ -3,7 +3,7 @@
 import sys, os, getopt, numpy as np, multiprocessing
 from itertools import izip
 
-from pyajh import mio, cutil
+from pycwp import mio, cutil
 
 def usage(progname = 'caxpy.py'):
 	binfile = os.path.basename(progname)

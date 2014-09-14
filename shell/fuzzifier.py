@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 import sys, os, numpy as np, getopt
-from pyajh import mio, cutil, process
+from pycwp import mio, cutil, process
 
 def usage(progname = 'fuzzifier.py'):
 	binfile = os.path.basename(progname)

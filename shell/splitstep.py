@@ -5,8 +5,8 @@ from numpy.linalg import norm
 from subprocess import check_call
 from mpi4py import MPI
 
-from pyajh import mio, wavetools, util, cutil, geom, process
-from pyajh.cltools import SplitStep, BufferedSlices, mapbuffer
+from pycwp import mio, wavetools, util, cutil, geom, process
+from pycwp.cltools import SplitStep, BufferedSlices, mapbuffer
 
 def usage(execname):
 	binfile = os.path.basename(execname)

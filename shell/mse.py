@@ -4,7 +4,7 @@ import sys, os, getopt, numpy as np, math, multiprocessing
 from numpy import linalg as la
 from itertools import izip
 
-from pyajh import mio, cutil
+from pycwp import mio, cutil
 
 def usage(progname = 'mse.py'):
 	binfile = os.path.basename(progname)

@@ -4,7 +4,7 @@ import sys, os
 import getopt
 import numpy as np
 
-from pyajh import mio
+from pycwp import mio
 
 def usage (progname = 'slicer.py'):
 	binfile = os.path.basename(progname)

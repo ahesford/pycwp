@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 
 import numpy as np, math, sys, getopt, os
-from pyajh import mio, cutil, harmonic
-from pyajh.cltools import interpolators as clinterp
+from pycwp import mio, cutil, harmonic
+from pycwp.cltools import interpolators as clinterp
 
 def usage(execname):
 	binfile = os.path.basename(execname)

@@ -2,7 +2,7 @@
 
 import sys, os, socket, numpy as np, getopt
 
-from pyajh import mio, cltools, wavetools, cutil, util
+from pycwp import mio, cltools, wavetools, cutil, util
 
 def pullitems(seq, axes):
 	'''

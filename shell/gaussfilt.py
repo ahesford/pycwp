@@ -2,7 +2,7 @@
 
 import sys, os, numpy as np, getopt
 from scipy.ndimage.filters import gaussian_filter1d
-from pyajh import mio, process
+from pycwp import mio, process
 
 def usage(progname = 'gaussfilt.py'):
 	binfile = os.path.basename(progname)

@@ -6,7 +6,7 @@ from numpy import *
 
 import pylab
 
-from pyajh import focusing, mio, scattering
+from pycwp import focusing, mio, scattering
 
 def usage (progname = 'elevbeam.py'):
 	binfile = os.path.basename(progname)

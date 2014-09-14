@@ -3,7 +3,7 @@
 def configuration(parent_package='', top_path=None):
 	from numpy.distutils.misc_util import Configuration
 
-	config = Configuration('pyajh', parent_package, top_path)
+	config = Configuration('pycwp', parent_package, top_path)
 	config.add_subpackage('cltools')
 	config.add_subpackage('ftntools')
 

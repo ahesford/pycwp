@@ -3,7 +3,7 @@
 import sys, os, re, numpy as np
 from mpi4py import MPI
 
-from pyajh import mio
+from pycwp import mio
 
 def localfiles(dir):
 	'''

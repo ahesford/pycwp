@@ -3,7 +3,7 @@
 import sys, os
 import numpy
 
-from pyajh import mio
+from pycwp import mio
 
 def usage (progname = 'patsplit.py'):
 	binfile = os.path.basename(progname)
