@@ -7,6 +7,22 @@ from scipy import special as spec, ndimage
 from itertools import izip
 
 
+def waterc(t):
+	'''
+	Return the sound speed in water at a temperature of t degrees Celsius.
+	Units are mm/microsec.
+
+	From "Fundamentals of Acoustics", Kinsler and Frey, et al., Eq. (5.22).
+	'''
+	# Pressure in bar (1e5 Pa)
+	p = 1.013
+	t = t / 100.
+	f1 = ((135. * t - 482.) * t + 488.) * t + 1402.7
+	f2 = (2.4 * t + 2.8) * t + 15.9
+	c = f1 + f2 * p / 100.
+	return c / 1000.0
+
+
 def asarray(a, rank=None, tailpad=True):
 	'''
 	Ensure that a behaves as a numpy ndarray and, if not, duplicate a as an
