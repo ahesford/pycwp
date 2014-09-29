@@ -3,8 +3,51 @@ General-purpose numerical routines used in other parts of the module.
 '''
 
 import numpy, math, operator
+from numpy import linalg as la
 from scipy import special as spec, ndimage
 from itertools import izip
+
+
+def vecnormalize(x, ord=None, axis=None):
+	'''
+	Compute the norm, using numpy.linalg.norm, of the array x and scale x
+	by the reciprocal of the norm. The arguments x, ord, and axis must be
+	acceptable to numpy.linalg.norm.
+
+	If the norm of x is smaller than the epsilon parameter for the datatype
+	of x, the reciprocal of the epsilon parameter will be used to scale x.
+
+	The norm will be broadcast to the proper shape for normalization of x.
+	'''
+	# Grab the dtype of x (ensuring x is array-compatible
+	try: dtype = x.dtype
+	except AttributeError:
+		x = numpy.array(x)
+		dtype = x.dtype
+
+	# Find the smallest representable number for the dtype
+	try: eps = numpy.finfo(dtype).eps
+	except ValueError: eps = 1.0
+
+	# Find the norm, but don't allow it to fall below epsilon
+	n = numpy.fmax(la.norm(x, ord, axis), eps)
+
+	if axis is None:
+		# If no axis was specified, n is a scalar;
+		# proper broadcasting will be automatic
+		return x / n
+
+	# Ensure that axis is either an integer or a two-integer sequence
+	# Treat a single axis integer as a 1-element list
+	try: axis = [int(axis)]
+	except ValueError: axis = [int(ax) for ax in axis]
+
+	# Prepare the list of slice objects for proper broadcasting
+	slicers = [slice(None) for i in range(numpy.ndim(x))]
+	# Create a new axis for each axis reduced by the norm
+	for ax in axis: slicers[ax] = None
+
+	return x / n[slicers]
 
 
 def waterc(t):
