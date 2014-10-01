@@ -18,7 +18,7 @@ def indexchoose(n, c, s=0):
 	if n < 1:
 		raise ValueError('n must be a positive integer')
 	s = int(s)
-	if s < 0 || s >= n:
+	if s < 0 or s >= n:
 		raise ValueError('s must be a positive integer between 0 and n - 1')
 	c = int(c)
 	if c < 0 or c > n - s:
