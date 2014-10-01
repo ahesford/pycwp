@@ -8,6 +8,37 @@ from scipy import special as spec, ndimage
 from itertools import izip
 
 
+def indexchoose(n, c, s=0):
+	'''
+	A coroutine to produce successive unique (without regard to order)
+	c-tuples of values in an array range(s, n).
+	'''
+	# Ensure n and c are integers and properly specified
+	n = int(n)
+	if n < 1:
+		raise ValueError('n must be a positive integer')
+	s = int(s)
+	if s < 0 || s >= n:
+		raise ValueError('s must be a positive integer between 0 and n - 1')
+	c = int(c)
+	if c < 0 or c > n - s:
+		raise ValueError('c must be an integer between 0 and n - s')
+
+	# If c is 0, return an empty list
+	if c == 0:
+		yield []
+		return
+	# If c is n - s, return the only possible selection
+	if c == n - s:
+		yield list(range(s, n))
+		return
+
+	# Otherwise, recursively select the values
+	for i in range(s, n - c + 1):
+		for vi in indexchoose(n, c - 1, i + 1):
+			yield [i] + vi
+
+
 def vecnormalize(x, ord=None, axis=None):
 	'''
 	Compute the norm, using numpy.linalg.norm, of the array x and scale x
