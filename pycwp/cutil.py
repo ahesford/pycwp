@@ -3,9 +3,26 @@ General-purpose numerical routines used in other parts of the module.
 '''
 
 import numpy, math, operator
-from numpy import linalg as la
+from numpy import linalg as la, ma
 from scipy import special as spec, ndimage
 from itertools import izip
+
+
+def mask_outliers(s, m=1.5):
+	'''
+	Given a NumPy array s, return a NumPy masked array with outliers
+	masked. The lower quartile (q1), median (q2), and upper quartile (q3)
+	are calculated for s. Outliers are those that fall outside the range
+
+		[q1 - m * IQR, q3 + m * IQR],
+
+	where IQR = q3 - q1 is the interquartile range.
+	'''
+	# Calculate the quartiles and IQR
+	q1, q2, q3 = numpy.percentile(s, [25, 50, 75])
+	iqr = q3 - q1
+	lo, hi = q1 - m * iqr, q3 + m * iqr
+	return ma.MaskedArray(s, numpy.logical_or(s < lo, s > hi))
 
 
 def indexchoose(n, c, s=0):
