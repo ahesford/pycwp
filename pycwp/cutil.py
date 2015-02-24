@@ -3,9 +3,59 @@ General-purpose numerical routines used in other parts of the module.
 '''
 
 import numpy, math, operator
-from numpy import linalg as la, ma
+from numpy import linalg as la, ma, fft
 from scipy import special as spec, ndimage
 from itertools import izip
+
+
+def shifter(sig, delays, s=None, axes=None):
+	'''
+	Shift a multidimensional signal sig by a number of (possibly
+	fractional) sample units in each dimension specified as entries in the
+	delays sequence. The shift is done using FFTs and the arguments s and
+	axes take the same meaning as in numpy.fft.fftn.
+
+	The length of delays must be compatible with the length of axes as
+	specified or inferred.
+	'''
+	# Ensure that sig is a numpy.ndarray
+	sig = asarray(sig)
+	ndim = len(sig.shape)
+
+	# Set default values for axes and s if necessary
+	if axes is None:
+		if s is not None: axes = range(ndim - len(s), ndim)
+		else: axes = range(ndim)
+
+	if s is None: s = tuple(sig.shape[a] for a in axes)
+
+	# Check that all arguments agree
+	if len(s) != len(axes):
+		raise ValueError('FFT shape array and axes list must have same dimensionality')
+	if len(s) != len(delays):
+		raise ValueError('Delay list and axes list must have same dimensionality')
+
+	# Take the forward transform for spectral shifting
+	csig = fft.fftn(sig, s, axes)
+
+	# Loop through the axes, shifting each one in turn
+	for d, n, a in zip(delays, s, axes):
+		# Build the FFT frequency indices
+		dk = 2. * math.pi / n
+		kidx = numpy.arange(n)
+		k = dk * (kidx >= n / 2.).choose(kidx, kidx - n)
+		# Build the shifter and the axis slicer for broadcasting
+		sh = numpy.exp(-1j * k * d)
+		slic = [numpy.newaxis] * ndim
+		slic[a] = slice(None)
+		# Multiply the shift
+		csig *= sh[slic]
+
+	# Perform the inverse transform and cast to the input type
+	rsig = fft.ifftn(csig, axes=axes)
+	if not numpy.issubdtype(sig.dtype, numpy.complexfloating):
+		rsig = rsig.real
+	return rsig.astype(sig.dtype)
 
 
 def mask_outliers(s, m=1.5):
