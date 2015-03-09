@@ -4,6 +4,22 @@ General-purpose, non-numerical routines.
 import math
 from . import cutil
 
+class lazy_property(object):
+	'''
+	A decorator to enable lazy evaluation of a read-only property.
+	Property should be immutable as it is replaced by the computed value.
+	'''
+	def __init__(self, fget):
+		self.fget = fget
+		self.func_name = fget.__name__
+
+	def __get__(self, obj, cls):
+		if obj is None: return None
+		value = self.fget(obj)
+		setattr(obj, self.func_name, value)
+		return value
+
+
 def zeropad(d, m):
 	'''
 	Given a nonnegative integer d less than an integer m, return a string

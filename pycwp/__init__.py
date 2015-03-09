@@ -4,7 +4,7 @@ read and write matrices, deal with focused beams, and handle scattering
 data.
 '''
 
-__all__ = [ 'aca', 'cutil', 'fdtd', 'focusing', 'geom', 
+__all__ = [ 'aca', 'boxer', 'cutil', 'fdtd', 'focusing', 'geom', 
 		'harmonic', 'mio', 'ftntools', 'cltools', 'segmentation',
 		'scattering', 'shtransform', 'util', 'wavetools', 'process' ]
 
