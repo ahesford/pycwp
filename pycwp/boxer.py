@@ -18,11 +18,15 @@ class Segment3D(object):
 		Initialize a 3-D line segment that starts and ends at the
 		indicated points.
 		'''
-		if len(start) != 3 or len(end) != 3:
-			raise TypeError('Start and end points must be sequences of length 3')
+		# Unpack the tuples to confirm dimensionality
+		try:
+			lx, ly, lz = start
+			hx, hy, hz = end
+		except ValueError:
+			raise ValueError('Start and end points must be sequences of length 3')
 		# Store an immutable, float copy of the start and end points
-		self._start = tuple(float(s) for s in start)
-		self._end = tuple(float(e) for e in end)
+		self._start = float(lx), float(ly), float(lz)
+		self._end = float(hx), float(hy), float(hz)
 
 	@property
 	def start(self):
@@ -36,12 +40,17 @@ class Segment3D(object):
 	@lazy_property
 	def length(self): 
 		# Compute the line length lazily
-		return math.sqrt(sum((e - s)**2 for s, e in zip(self.start, self.end)))
+		sx, sy, sz = self.start
+		ex, ey, ez = self.end
+		return math.sqrt((ex - sx)**2 + (ey - sy)**2 + (ez - sz)**2)
 
 	@lazy_property
 	def direction(self):
 		# Compute the normalized direction lazily
-		return tuple(float(e - s) / self.length for s, e in zip(self.start, self.end))
+		sx, sy, sz = self.start
+		ex, ey, ez = self.end
+		length = self.length
+		return (ex - sx) / length, (ey - sy) / length, (ez - sz) / length
 
 	@lazy_property
 	def invdirection(self): 
@@ -49,7 +58,9 @@ class Segment3D(object):
 
 	@lazy_property
 	def midpoint(self): 
-		return tuple(0.5 * (s + e) for s, e in zip(self.start, self.end))
+		sx, sy, sz = self.start
+		ex, ey, ez = self.end
+		return 0.5 * (sx + ex), 0.5 * (sy + ey), 0.5 * (sz + ez)
 
 	@lazy_property
 	def majorAxis(self):
@@ -60,7 +71,10 @@ class Segment3D(object):
 		For a given signed length t, return the point on the line
 		through this segment which is a distance t from the start.
 		'''
-		return tuple(s + t * d for s, d in zip(self.start, self.direction))
+		sx, sy, sz = self.start
+		dx, dy, dz = self.direction
+
+		return sx + t * dx, sy + t * dy, sz + t * dz
 
 	def lengthToPlane(self, c, axis):
 		'''
@@ -71,22 +85,23 @@ class Segment3D(object):
 		signed infinity if the plane does not contain the segment.
 		If the plane contains the segment, the length will be 0.
 		'''
-		start = self.start
+		dx = c - self.start[axis]
 		# Catch equality to zero to avoid NaN in parallel cases
-		if c - start[axis] == 0.: return 0.
-		return (c - start[axis]) * self.invdirection[axis]
+		return 0 if (dx == 0.) else (dx * self.invdirection[axis])
 
 	def projection(self, point):
 		'''
 		Project the three-dimensional point onto the ray defined by the
 		start and direction of this segment.
 		'''
-		if len(point) != 3:
-			raise TypeError('Point to project must be sequence of length 3')
-		# Compute the differential point
-		pdx = tuple(p - s for p, s in zip(point, self.start))
-		# Take the inner product
-		return sum(p * d for p, d in zip(pdx, self.direction))
+		# Unpack the tuple to confirm dimensionality
+		try: px, py, pz = point
+		except ValueError: raise ValueError('Point must be a sequence of length 3')
+
+		sx, sy, sz = self.start
+		dx, dy, dz = self.direction
+
+		return dx * (px - sx) + dy * (py - sy) + dz * (pz - sz)
 
 	def __repr__(self):
 		return self.__class__.__name__ + '(' + str(self.start) + ', ' + str(self.end) + ')'
@@ -100,14 +115,19 @@ class Box3D(object):
 		'''
 		Initialize a 3-D box with extreme corners lo and hi.
 		'''
-		if len(lo) != 3 or len(hi) != 3:
-			raise TypeError('Corners must be sequences of length 3')
-		if any(l > h for l, h in zip(lo, hi)):
+		# Unpack tuples to confirm dimensionality
+		try:
+			lx, ly, lz = lo
+			hx, hy, hz = hi
+		except ValueError:
+			raise ValueError('Corners must be sequences of length 3')
+
+		if hx < lx or hy < ly or hz < lz:
 			raise ValueError('All coordinates of hi must not be less than coordinates of lo')
 
 		# Store an immutable, float copy of the corners
-		self._lo = tuple(float(l) for l in lo)
-		self._hi = tuple(float(h) for h in hi)
+		self._lo = float(lx), float(ly), float(lz)
+		self._hi = float(hx), float(hy), float(hz)
 
 	@property
 	def lo(self):
@@ -131,12 +151,15 @@ class Box3D(object):
 
 	@ncell.setter
 	def ncell(self, c):
-		if len(c) != 3:
-			raise TypeError('Cell numbers must be a 3-element sequence')
-		if any(cl < 1 for cl in c):
-			raise ValueError('Cell counts in all dimensions must be at least 1')
+		# Unpack tuple to confirm dimensionality
+		try: cx, cy, cz = c
+		except ValueError:
+			raise ValueError('Grid dimensions must be a 3-element sequence')
+
+		if cx < 1 or cy < 1 or cz < 1:
+			raise ValueError('Grid dimensions must each be at least 1')
 		# Set the cell count
-		self._ncell = tuple(int(cl) for cl in c)
+		self._ncell = int(cx), int(cy), int(cz)
 		# Clear the cell-length property so it will be recomputed on demand
 		del self.cell
 
@@ -151,7 +174,9 @@ class Box3D(object):
 		'''The lengths of each cell in the grid defined by ncell'''
 		try: return self._cell
 		except AttributeError:
-			self._cell = tuple(l / float(n) for l, n in zip(self.length, self.ncell))
+			lx, ly, lz = self.length
+			nx, ny, nz = self.ncell
+			self._cell = lx / float(nx), ly / float(ny), lz / float(nz)
 			return self._cell
 
 	@cell.deleter
@@ -215,7 +240,11 @@ class Box3D(object):
 		If c does not contain integer types, the types will be
 		truncated. Cells outside the bounds of this box are allowed.
 		'''
-		ci, cj, ck = [int(cv) for cv in c]
+		try:
+			ci, cj, ck = c
+		except ValueError:
+			raise ValueError('Cell index must be a 3-element sequence')
+		ci, cj, ck = int(ci), int(cj), int(ck)
 		lo = self.cell2cart(ci, cj, ck)
 		hi = self.cell2cart(ci + 1, cj + 1, ck + 1)
 		return Box3D(lo, hi)
