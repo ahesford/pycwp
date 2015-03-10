@@ -334,19 +334,24 @@ class Box3D(object):
 		if slabmin < 0: slabmin = 0
 		if slabmax >= ncell[axis]: slabmax = ncell[axis] - 1
 
+		# Compute the starting position of the first slab
+		dslab = cell[axis]
+		esc = lo[axis] + dslab * slabmin
+
 		# Build a list of slab indices and segment entry points
 		# Add an extra slab to capture exit from the final slab
 		slabs = []
 		for slab in range(slabmin, slabmax + 2):
-			# Figure the length at the edge of the slab
-			t = segment.lengthToPlane(lo[axis] + cell[axis] * slab, axis)
+			# Figure the segment length at the edge of the slab
+			t = segment.lengthToPlane(esc, axis)
+			# Shift the edge coordinate to the next slab
+			esc += dslab
 			# Find the coordinates of entry cell
 			px, py, pz = segment.pointAtLength(t)
-			idx = list(self.cart2cell(px, py, pz, False))
-			# Override the axial index to correct rounding errors
-			idx[axis] = slab
+			idx = self.cart2cell(px, py, pz, False)
 			# Add the cell coordinates to the list
-			slabs.append(tuple(idx))
+			# Override axial index to correct rounding errors
+			slabs.append(idx[:axis] + (slab,) + idx[axis+1:])
 
 		intersections = []
 
