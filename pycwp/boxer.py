@@ -228,7 +228,7 @@ class Box3D(object):
 		If enum is True, return a tuple (idx, box), where idx is the
 		three-dimensional index of the cell.
 		'''
-		for idx in itertools.product(*[range(nc) for nc in self.ncell]):
+		for idx in itertools.product(*[xrange(nc) for nc in self.ncell]):
 			box = self.getCell(idx)
 			if not enum: yield box
 			else: yield (idx, box)
@@ -356,25 +356,27 @@ class Box3D(object):
 		intersections = []
 
 		# Now enumerate all intersecting cells
-		for entry, exit in zip(slabs, slabs[1:]):
+		for entry, exit in itertools.izip(slabs, slabs[1:]):
 			# If the transverse coordinates don't change,
 			# the entry cell is the only intersecting cell
 			if entry[tx] == exit[tx] and entry[ty] == exit[ty]:
 				intersections.append(entry)
 				continue
+
 			# If the transverse coordinates do change, check
-			# all cells in the range of the change
-			scell = [None]*3
-			scell[axis] = entry[axis]
-			mnc = [max(0, min(entry[t], exit[t])) for t in (tx, ty)]
-			mxc = [min(ncell[t] - 1, max(entry[t], exit[t])) for t in (tx, ty)]
-			for i in range(mnc[0], mxc[0] + 1):
-				scell[tx] = i
-				for j in range(mnc[1], mxc[1] + 1):
-					scell[ty] = j
-					sbox = self.getCell(scell)
-					if sbox.intersection(segment) is not None:
-						intersections.append(tuple(scell))
+			# all cells in the neighborhood of the change
+			ranges = [(e,) for e in entry]
+			for t in (tx, ty):
+				# Determine whether a range is necessary
+				# along each transverse axis
+				if entry[t] != exit[t]:
+					mn = max(0, min(entry[t], exit[t]))
+					mx = min(ncell[t], max(entry[t], exit[t]) + 1)
+					ranges[t] = xrange(mn, mx)
+
+			for cell in itertools.product(*ranges):
+				if self.getCell(cell).intersection(segment) is not None:
+					intersections.append(cell)
 		return intersections
 
 	def raytracer(self, segments):
