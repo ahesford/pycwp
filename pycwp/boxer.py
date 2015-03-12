@@ -336,8 +336,13 @@ class Box3D(object):
 		'''
 		Marches along the given 3-D line segment (like Segment3D) to
 		identify all cells in the grid (defined by the ncell property)
-		that intersect the segment. Returns a list of tuples
-		representing the grid indices of each cell.
+		that intersect the segment. Returns a list of tuples of the
+		form (i, j, k, tmin, tmax), where (i, j, k) is a grid index of
+		a cell, and (tmin, tmax) are the lengths along the segment of
+		the entry and exit points, respectively, through the cell.
+
+		If the segment begins or ends in a cell, tmin or tmax may fall
+		outside the range [0, segment.length].
 		'''
 		# March along the major axis
 		axis = segment.majorAxis
@@ -386,12 +391,6 @@ class Box3D(object):
 
 		# Now enumerate all intersecting cells
 		for entry, exit in itertools.izip(slabs, slabs[1:]):
-			# If the transverse coordinates don't change,
-			# the entry cell is the only intersecting cell
-			if entry[tx] == exit[tx] and entry[ty] == exit[ty]:
-				intersections.append(entry)
-				continue
-
 			# If the transverse coordinates do change, check
 			# all cells in the neighborhood of the change
 			ranges = [(e,) for e in entry]
@@ -404,66 +403,7 @@ class Box3D(object):
 					ranges[t] = xrange(mn, mx)
 
 			for cell in itertools.product(*ranges):
-				if self.getCell(cell).intersection(segment) is not None:
-					intersections.append(cell)
+				t = self.getCell(cell).intersection(segment)
+				if t is not None:
+					intersections.append(cell + t)
 		return intersections
-
-	def raytracer(self, segments):
-		'''
-		Given a list of 3-D line segments, determine which of the cells
-		in this box (as defined by the ncell property) intersect with
-		the segments. Returns a list of tuples for each segment, each
-		of the form (i, j, k), representing the grid indices of cells
-		that intersect with that segment.
-		'''
-		# Find the number of levels necessary to enclose the whole box
-		nmax = max(self.ncell)
-		nc, y, nlev = nmax, 1, 0
-		while nc > 1:
-			nc >>= 1
-			y <<= 1
-			nlev += 1
-		if y < nmax:
-			y <<= 1
-			nlev += 1
-
-		# Add an extended box, with an oct-tree grid that aligns
-		# with the desired box grid, to the investigation queue
-		lo = self.lo
-		hi = tuple(s + y * sl for s, sl in zip(lo, self.cell))
-		boxqueue = [Box3D(lo, hi)]
-		
-		# Build a list of intersecting boxes for each segment
-		results = [[] for i in range(len(segments))]
-
-		for lev in range(nlev):
-			# Intersection tests short-circuit after the first hit
-			# on all but the finest level of computation
-			shortCircuit = lev < nlev - 1
-			# Create a new box queue for children in this level
-			nextqueue = []
-			# Iterate over all boxes in the current queue
-			for ibox in boxqueue:
-				# Loop over all child boxes in an oct-tree decomposition
-				ibox.ncell = (2, 2, 2)
-				for cbox in ibox.allCells():
-					# Skip the child if it is outside this box
-					if not self.overlaps(cbox): continue
-	
-					# When short-circuiting, add hit boxes to
-					# next-level queue; at the finest level, add
-					# cell index for each hit box to result list
-					for i, segment in enumerate(segments):
-						if cbox.intersection(segment) is not None:
-							if shortCircuit:
-								nextqueue.append(cbox)
-								break
-							else:
-								mx, my, mz = cbox.midpoint
-								ci = self.cart2cell(mx, my, mz, False)
-								results[i].append(ci)
-	
-			# Populate the box queue with the intersecting children
-			boxqueue = nextqueue
-
-		return tuple(results)
