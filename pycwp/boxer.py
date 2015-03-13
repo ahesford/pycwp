@@ -403,7 +403,7 @@ class Box3D(object):
 				ranges[tx] = xrange(max(0, mn), min(ntx, mx + 1))
 			if eny != exy:
 				mn, mx = (eny, exy) if (eny < exy) else (exy, eny)
-				ranges[ty] = xrange(max(0, mn), min(ntx, mx + 1))
+				ranges[ty] = xrange(max(0, mn), min(nty, mx + 1))
 
 			for i in ranges[0]:
 				for j in ranges[1]:
