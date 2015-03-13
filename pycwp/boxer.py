@@ -257,10 +257,13 @@ class Box3D(object):
 		If enum is True, return a tuple (idx, box), where idx is the
 		three-dimensional index of the cell.
 		'''
-		for idx in itertools.product(*[xrange(nc) for nc in self.ncell]):
-			box = self.getCell(idx)
-			if not enum: yield box
-			else: yield (idx, box)
+		ni, nj, nk = self.ncell
+		for i in xrange(ni):
+			for j in xrange(nj):
+				for k in xrange(nk):
+					box = self.getCell((i, j, k))
+					if not enum: yield box
+					else: yield (idx, box)
 
 	def overlaps(self, b):
 		'''
@@ -329,9 +332,6 @@ class Box3D(object):
 		if tmax < max(0, tmin) or tmin > segment.length: return None
 		return tmin, tmax
 
-		# Check for intersections within segment
-		#return tmax >= max(0, tmin) and tmin <= segment.length
-
 	def raymarcher(self, segment):
 		'''
 		Marches along the given 3-D line segment (like Segment3D) to
@@ -350,27 +350,30 @@ class Box3D(object):
 		tx, ty = (axis + 1) % 3, (axis + 2) % 3
 
 		# Pull grid parameters for efficiency
-		ncell, cell, lo = self.ncell, self.cell, self.lo
+		ncell = self.ncell
+		lo = self.lo[axis]
+		dslab = self.cell[axis]
+
+		nax, ntx, nty = ncell[axis], ncell[tx], ncell[ty]
 
 		# Try to grab the intersection lengths, if they exist
 		try: tmin, tmax = self.intersection(segment)
-		except TypeError: return None
+		except TypeError: return []
 
 		# Find the intersection points
 		pmin = segment.pointAtLength(max(0., tmin))
 		pmax = segment.pointAtLength(min(segment.length, tmax))
 
 		# Find the minimum and maximum slabs; ensure proper ordering
-		slabmin = int((pmin[axis] - lo[axis]) / cell[axis])
-		slabmax = int((pmax[axis] - lo[axis]) / cell[axis])
+		slabmin = int((pmin[axis] - lo) / dslab)
+		slabmax = int((pmax[axis] - lo) / dslab)
 		if slabmin > slabmax: slabmin, slabmax = slabmax, slabmin
 		# Ensure the slabs don't run off the end
 		if slabmin < 0: slabmin = 0
-		if slabmax >= ncell[axis]: slabmax = ncell[axis] - 1
+		if slabmax >= nax: slabmax = nax - 1
 
 		# Compute the starting position of the first slab
-		dslab = cell[axis]
-		esc = lo[axis] + dslab * slabmin
+		esc = lo + dslab * slabmin
 
 		# Build a list of slab indices and segment entry points
 		# Add an extra slab to capture exit from the final slab
@@ -391,19 +394,21 @@ class Box3D(object):
 
 		# Now enumerate all intersecting cells
 		for entry, exit in itertools.izip(slabs, slabs[1:]):
-			# If the transverse coordinates do change, check
-			# all cells in the neighborhood of the change
 			ranges = [(e,) for e in entry]
-			for t in (tx, ty):
-				# Determine whether a range is necessary
-				# along each transverse axis
-				if entry[t] != exit[t]:
-					mn = max(0, min(entry[t], exit[t]))
-					mx = min(ncell[t], max(entry[t], exit[t]) + 1)
-					ranges[t] = xrange(mn, mx)
+			# Check all cells in range spanned by transverse indices
+			enx, eny = entry[tx], entry[ty]
+			exx, exy = exit[tx], exit[ty]
+			if enx != exx:
+				mn, mx = (enx, exx) if (enx < exx) else (exx, enx)
+				ranges[tx] = xrange(max(0, mn), min(ntx, mx + 1))
+			if eny != exy:
+				mn, mx = (eny, exy) if (eny < exy) else (exy, eny)
+				ranges[ty] = xrange(max(0, mn), min(ntx, mx + 1))
 
-			for cell in itertools.product(*ranges):
-				t = self.getCell(cell).intersection(segment)
-				if t is not None:
-					intersections.append(cell + t)
+			for i in ranges[0]:
+				for j in ranges[1]:
+					for k in ranges[2]:
+						t = self.getCell((i, j, k)).intersection(segment)
+						if t is not None:
+							intersections.append((i, j, k, t[0], t[1]))
 		return intersections
