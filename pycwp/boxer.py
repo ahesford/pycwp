@@ -5,7 +5,6 @@ algorithm.
 '''
 
 import sys, math, itertools
-import operator as op
 
 from .util import lazy_property
 
@@ -64,7 +63,7 @@ class Segment3D(object):
 
 	@lazy_property
 	def majorAxis(self):
-		return max(enumerate(self.direction), key=op.itemgetter(1))[0]
+		return max(enumerate(self.direction), key=lambda x: abs(x[1]))[0]
 
 	def pointAtLength(self, t):
 		'''
@@ -284,7 +283,7 @@ class Box3D(object):
 		if ah[2] < bl[2]: return False
 		# Self is completely above b
 		if al[2] > bh[2]: return False
-		
+
 		return True
 
 	def contains(self, p):
