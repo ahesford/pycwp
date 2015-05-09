@@ -8,6 +8,22 @@ from scipy import special as spec, ndimage
 from itertools import izip
 
 
+def overlap(lwin, rwin):
+	'''
+	For two windows lwin and rwin, each of the form (start, length), return
+	the tuple (lstart, rstart, length), where lstart and rstart are the
+	starts of the overlapping window relative to the starts of lwin and
+	rwin, respectively, and length is the length of the overlapping window.
+
+	If there is no overlap in lwin and rwin, None is returned.
+	'''
+	start = max(lwin[0], rwin[0])
+	end = min(lwin[0] + lwin[1], rwin[0] + rwin[1])
+
+	if end <= start: return None
+	return (start - lwin[0], start - rwin[0], end - start)
+
+
 def shifter(sig, delays, s=None, axes=None):
 	'''
 	Shift a multidimensional signal sig by a number of (possibly
