@@ -4,6 +4,28 @@ General-purpose, non-numerical routines.
 import math
 from . import cutil
 
+class bidict(dict):
+	'''
+	Extends a dictionary to simultaneously keep an inverse dictionary for
+	two-way lookups.
+	'''
+	def __init__(self, *args, **kwargs):
+		super(bidict, self).__init__(*args, **kwargs)
+		self.inverse = {}
+		for key, value in self.iteritems():
+			self.inverse.setdefault(value, []).append(key)
+
+	def __setitem__(self, key, value):
+		super(bidict, self).__setitem__(key, value)
+		self.inverse.setdefault(value, []).append(key)
+
+	def __delitem__(self, key):
+		self.inverse.setdefault(self[key],[]).remove(key)
+		if self[key] in self.inverse and not self.inverse[self[key]]:
+			del self.inverse[self[key]]
+		super(bidict, self).__delitem__(key)
+
+
 class lazy_property(object):
 	'''
 	A decorator to enable lazy evaluation of a read-only property.
