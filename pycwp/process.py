@@ -13,6 +13,22 @@ def preferred_process_count():
 	return nprocs
 
 
+def procname(procnum, funcname=None, hostname=None):
+	'''
+	Return a string of the form <hostname>-<funcname>-Proc<procnum>, where
+	procnum is an integer and the other two components are strings. If
+	funcname is None, the basname of sys.argv[0] is used. If hostname is
+	None, the output of socket.gethostname() is used.
+	'''
+	import sys, os
+	from socket import gethostname
+
+	if funcname is None: funcname = os.path.basename(sys.argv[0])
+	if hostname is None: hostname = gethostname()
+
+	return '{:s}-{:s}-Rank{:d}'.format(hostname, funcname, procnum)
+
+
 class ProcessPool(object):
 	'''
 	This provides a context manager interface that manages a list of
