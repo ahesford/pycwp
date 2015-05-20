@@ -34,8 +34,7 @@ def getmattype (infile, dim = None, dtype = None):
 	if dtype is not None:
 		dtype = np.dtype(dtype)
 		deftypes = [dtype]
-	else:
-		deftypes = [np.dtype(s) for s in ['float32', 'compelx64', 'complex128']]
+	else: deftypes = [np.dtype(s) for s in ['float32', 'complex64', 'complex128']]
 
 	datatypes = { s.itemsize: s for s in deftypes }
 
