@@ -32,11 +32,12 @@ def getmattype (infile, dim = None, dtype = None):
 	# Try to limit the pool of auto-sensed data types, if possible
 	# Ensure that the datatype is a Numpy type
 	if dtype is not None:
-		dtype = np.dtype(dtype).type
-		datatypes = { dtype().nbytes : dtype }
-	else: datatypes = { np.float32().nbytes : np.float32,
-			np.complex64().nbytes : np.complex64,
-			np.complex128().nbytes : np.complex128 }
+		dtype = np.dtype(dtype)
+		deftypes = [dtype]
+	else:
+		deftypes = [np.dtype(s) for s in ['float32', 'compelx64', 'complex128']]
+
+	datatypes = { s.itemsize: s for s in deftypes }
 
 	# Set the range of dimensions to check
 	if dim is None: dimrange = range(1, maxdim + 1)
@@ -53,7 +54,7 @@ def getmattype (infile, dim = None, dtype = None):
 			matsize = hdr[:dimen]
 
 		# Check the size of the file, minus the header
-		dsize = fsize - hdrlen * np.int32().nbytes;
+		dsize = fsize - hdrlen * np.dtype('int32').itemsize
 
 		# Grab the number of bytes per record and
 		# check that the record size lines up
@@ -69,10 +70,7 @@ def getmattype (infile, dim = None, dtype = None):
 	else: raise TypeError('Could not determine data type in file.')
 
 	# Seek to the end of the header
-	infile.seek(hdrlen * np.int32().nbytes)
-
-	# Ensure that the type and shape are compatible with array types
-	dtype = np.dtype(dtype)
+	infile.seek(hdrlen * np.dtype('int32').itemsize)
 
 	# Return the matrix size and data type
 	return (matsize, dtype)
@@ -194,7 +192,7 @@ class Slicer(object):
 			np.array(self.shape, dtype=np.int32).tofile(f)
 
 			# Set the desired size of the output
-			nbytes = cutil.prod(self.shape) * self.dtype.type().nbytes
+			nbytes = cutil.prod(self.shape) * self.dtype.itemsize
 			f.truncate(f.tell() + nbytes)
 
 		# Copy the backer file
@@ -203,7 +201,7 @@ class Slicer(object):
 		# The shape, number of elements and bytes per slice
 		self.sliceshape = self.shape[:-1]
 		self.nelts = cutil.prod(self.sliceshape)
-		self.slicebytes = self.nelts * self.dtype.type().nbytes
+		self.slicebytes = self.nelts * self.dtype.itemsize
 
 		# Store the start of the data block
 		self._hdrlen = self._backer.tell()
@@ -388,7 +386,7 @@ class CoordinateShifter(object):
 		self.shape = self._backtrans.shape
 		self.sliceshape = self.shape[:-1]
 		self.nelts = cutil.prod(self.sliceshape)
-		self.slicebytes = self.nelts * self.dtype.type().nbytes
+		self.slicebytes = self.nelts * self.dtype.itemsize
 
 
 	def __len__(self):
