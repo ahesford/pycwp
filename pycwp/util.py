@@ -2,6 +2,8 @@
 General-purpose, non-numerical routines.
 '''
 import math
+from itertools import islice
+
 from . import cutil
 
 class bidict(dict):
@@ -65,7 +67,9 @@ def grouplist(lst, n):
 	The final tuple may have a dimensionality less than n if the length of
 	the iterable is not evenly divided by n.
 	'''
-	for i in range(0, len(lst), n): yield tuple(lst[i:i+n])
+	iterable = iter(lst)
+	while True:
+		yield tuple(islice(iterable, n)) or iterable.next()
 
 
 def printflush(string):
