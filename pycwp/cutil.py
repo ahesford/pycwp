@@ -8,6 +8,70 @@ from scipy import special as spec, ndimage
 from itertools import izip
 
 
+def findpeaks(vec, minwidth=None, minprom=None):
+	'''
+	Find all peaks in the 1-D sequence vec. Return a list with elements
+	(index, value, width, prominence) for a peak at the indicated index
+	such that vec[index] == value, width is the distance from the peak to
+	its key col, and prominence is the peak's height above its key col.
+
+	Only peaks with widths greater than a specified minwidth, or with
+	prominences greater than the specified minprom, will be considered.
+	'''
+	# Prepare output lists
+	maxtab, mintab = [], []
+
+	if (minwidth and minwidth < 0) or (minprom and minprom < 0):
+		raise ValueError('Minimum prominence and width must be nonnegative')
+
+	mn, mx = float('inf'), float('-inf')
+	mnpos, mxpos = float('nan'), float('nan')
+
+	lookformax = True
+
+	for i, v in enumerate(vec):
+		if v > mx: mx, mxpos = v, i
+		if v < mn: mn, mnpos = v, i
+
+		if lookformax and v < mx:
+			maxtab.append((mxpos, mx))
+			mn, mnpos = v, i
+			lookformax = False
+		elif not lookformax and v > mn:
+			mintab.append((mnpos, mn))
+			mx, mxpos = v, i
+			lookformax = True
+
+
+	# Sort the list by peak height, descending
+	maxtab.sort(key=operator.itemgetter(1), reverse=True)
+
+	# Now build a list of peaks as (index, value, width, height)
+	# The hightes peak is a special case
+	index, value = maxtab[0]
+	width = max(len(vec) - index, index)
+	prom = value - min(mp[1] for mp in mintab)
+	peaks = [(index, value, width, prom)]
+	
+	for index, value in maxtab[1:]:
+		# Find the nearest higher peak
+		npk = min(peaks, key=lambda x: abs(x[0] - index))
+		# This peak's key col lies between it and the nearest higher peak
+		left, right = min(index, npk[0]), max(index, npk[0])
+		cols = (mnv for mnv in mintab if left <= mnv[0] <= right)
+		keycol = min(cols, key=operator.itemgetter(1))
+		# Find the width and prominence of the peak
+		width = abs(keycol[0] - index)
+		prom = value - keycol[1]
+		# Skip a peak that is too narrow
+		if minwidth and width < minwidth: continue
+		# Skip a peak that is not prominent enough
+		if minprom and prom < minprom: continue
+		peaks.append((index, value, width, prom))
+
+	return peaks
+
+
 def overlap(lwin, rwin):
 	'''
 	For two windows lwin and rwin, each of the form (start, length), return
