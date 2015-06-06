@@ -42,6 +42,8 @@ def findpeaks(vec, minwidth=None, minprom=None):
 			mx, mxpos = v, i
 			lookformax = True
 
+	if not len(maxtab): return []
+
 
 	# Sort the list by peak height, descending
 	maxtab.sort(key=operator.itemgetter(1), reverse=True)
