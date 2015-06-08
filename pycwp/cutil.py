@@ -44,6 +44,18 @@ def findpeaks(vec, minwidth=None, minprom=None):
 
 	if not len(maxtab): return []
 
+	def findrange(a, lo, hi):
+		'''
+		For an ascending-sorted list a, return a tuple (l, r) such that
+		a[l:r] is the largest possible subarray with all values larger
+		than lo and less than hi.
+		'''
+		from bisect import bisect_left, bisect_right
+		# Search the entire list for the left endpoint
+		l = bisect_right(a, lo)
+		# Search only the right half for the right endpoint
+		r = bisect_left(a, hi, lo=l)
+		return l, r
 
 	# Sort the list by peak height, descending
 	maxtab.sort(key=operator.itemgetter(1), reverse=True)
@@ -54,21 +66,27 @@ def findpeaks(vec, minwidth=None, minprom=None):
 	width = max(len(vec) - index, index)
 	prom = value - min(mp[1] for mp in mintab)
 	peaks = [(index, value, width, prom)]
+
+	# Pull the indices of minima for quick searching
+	# (Indices are already sorted in increasing order)
+	minidx = [mn[0] for mn in mintab]
 	
 	for index, value in maxtab[1:]:
 		# Find the nearest higher peak
 		npk = min(peaks, key=lambda x: abs(x[0] - index))
 		# This peak's key col lies between it and the nearest higher peak
-		left, right = min(index, npk[0]), max(index, npk[0])
-		cols = (mnv for mnv in mintab if left <= mnv[0] <= right)
-		keycol = min(cols, key=operator.itemgetter(1))
+		left, right = index, npk[0]
+		if left > right: left, right = right, left
+		clo, chi = findrange(minidx, left, right)
+		kcidx, kcval = min(mintab[clo:chi], key=operator.itemgetter(1))
 		# Find the width and prominence of the peak
-		width = abs(keycol[0] - index)
-		prom = value - keycol[1]
+		width = abs(kcidx - index)
+		prom = value - kcval
 		# Skip a peak that is too narrow
 		if minwidth and width < minwidth: continue
 		# Skip a peak that is not prominent enough
 		if minprom and prom < minprom: continue
+		# Append the peak to the list
 		peaks.append((index, value, width, prom))
 
 	return peaks
