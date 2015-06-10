@@ -7,6 +7,7 @@ from numpy import linalg as la, ma, fft
 from scipy import special as spec, ndimage
 from itertools import izip, count
 
+from pycwp.util import alternator
 
 def findpeaks(vec, minwidth=None, minprom=None):
 	'''
@@ -19,7 +20,6 @@ def findpeaks(vec, minwidth=None, minprom=None):
 	prominences greater than the specified minprom, will be considered.
 	'''
 	# Prepare output extrema
-	extrema = []
 	maxtab, mintab = [], []
 
 	if (minwidth and minwidth < 0) or (minprom and minprom < 0):
@@ -30,27 +30,23 @@ def findpeaks(vec, minwidth=None, minprom=None):
 
 	lookformax = True
 
-	# Count all maxima and minima in the signal
-	# Maxima and minima always alternate; first entry is always a maximum
+	# Alternately count all maxima and minima in the signal
+	# Note: mintab[i] is always first minimum AFTER maxtab[i]
 	for i, v in enumerate(vec):
 		if v > mx: mx, mxpos = v, i
 		if v < mn: mn, mnpos = v, i
 
 		if lookformax and v < mx:
-			extrema.append((mxpos, mx))
+			maxtab.append((mxpos, mx))
 			mn, mnpos = v, i
 			lookformax = False
 		elif not lookformax and v > mn:
-			extrema.append((mnpos, mn))
+			mintab.append((mnpos, mn))
 			mx, mxpos = v, i
 			lookformax = True
 
-	# Find the number of maxima in the extrema list
-	# Add one to account for bookended maxima (in an odd-length list)
-	nmax = int((len(extrema) + 1) / 2)
-
 	# Build a list mapping each maximum to a key col
-	keycols = [None] * nmax
+	keycols = [None] * len(maxtab)
 
 	def bestcol(idx, lcol, rcol):
 		'''
@@ -72,32 +68,38 @@ def findpeaks(vec, minwidth=None, minprom=None):
 		else: return rcol
 
 
-	# Start walking from the first maximum
-	# Skip the last maximum if it is the final extremum
-	for i, (iidx, ival) in izip(count(0, 2), extrema[:-1:2]):
-		# The first col is immediately right of the maximum
-		col = extrema[i + 1]
-		# Examine all extrema until a higher peak is discovered
-		for j, (jidx, jval) in enumerate(extrema[i+2:], i+2):
+	# Walk to the right from each maximum in turn
+	for i, (iidx, ival) in enumerate(maxtab):
+		# Reset the col tracker
+		col = None
+		# Interleave extrema to right of start, starting with next minimum
+		extrema = alternator(mintab[i:], maxtab[i+1:])
+		# The first minimum has index 2 * i + 1 in the merged extrema list
+		for j, (jidx, jval) in enumerate(extrema, 2 * i + 1):
 			if j % 2:
-				# Update stored col if new one is at least as low
-				if jval <= col[1]: col = (jidx, jval)
+				# Update col tracker if a lower col is encountered
+				try:
+					if jval <= col[1]: col = (jidx, jval)
+				except TypeError: col = (jidx, jval)
+				# Skip to next maximum for further processing
+				continue
+			# Analyze subsequent maxima
+			if ival > jval:
+				# Set candidate key col for lower peaks to right
+				jh = j / 2
+				keycols[jh] = bestcol(jidx, keycols[jh], col)
 			else:
-				if ival > jval:
-					# Set candidate key col for lower peaks to right
-					keycols[j / 2] = bestcol(jidx, keycols[j / 2], col)
-				else:
-					# Final key col for left peak with higher peak at right
-					keycols[i / 2] = bestcol(iidx, keycols[i / 2], col)
-					# No need to walk further to right
-					break
+				# Final key col for left peak with higher peak at right
+				keycols[i] = bestcol(iidx, keycols[i], col)
+				# No need to walk past a larger peak
+				break
 
 	# Determine the overall minimum value
-	minval = min(ex[1] for ex in extrema[1::])
+	minval = min(ex[1] for ex in mintab)
 
 	# Build the peak list
 	peaks = []
-	for (ei, ev), kcol in izip(extrema[::2], keycols):
+	for (ei, ev), kcol in izip(maxtab, keycols):
 		try:
 			# Try to unpack the key col
 			ki, kv = kcol
