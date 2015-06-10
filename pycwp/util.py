@@ -4,8 +4,6 @@ General-purpose, non-numerical routines.
 import math
 from itertools import islice
 
-from . import cutil
-
 
 def alternator(*args):
 	'''
@@ -67,8 +65,9 @@ def zeropad(d, m):
 	  zeropad(999, 999) -> '999'
 	  zeropad(12, 1000) -> '0012'
 	'''
+	from .cutil import numdigits
 	digs = max(d, m)
-	return '{0:0{digits}d}'.format(d, digits=cutil.numdigits(digs))
+	return '{0:0{digits}d}'.format(d, digits=numdigits(digs))
 
 
 def grouplist(lst, n):

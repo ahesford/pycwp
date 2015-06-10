@@ -7,8 +7,6 @@ from numpy import linalg as la, ma, fft
 from scipy import special as spec, ndimage
 from itertools import izip, count
 
-from pycwp.util import alternator
-
 def findpeaks(vec, minwidth=None, minprom=None, prommode='absolute'):
 	'''
 	Find all peaks in the 1-D sequence vec. Return a list with elements
@@ -26,6 +24,8 @@ def findpeaks(vec, minwidth=None, minprom=None, prommode='absolute'):
 		absprom = {'abs': True, 'absolute': True,
 				'rel': False, 'relative': False}[prommode.lower()]
 	except KeyError: raise ValueError('Invalid argument for prommode')
+
+	from .util import alternator
 
 	# Prepare output extrema
 	maxtab, mintab = [], []
