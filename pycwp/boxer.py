@@ -408,6 +408,5 @@ class Box3D(object):
 				for j in ranges[1]:
 					for k in ranges[2]:
 						t = self.getCell((i, j, k)).intersection(segment)
-						if t is not None:
-							intersections.append((i, j, k, t[0], t[1]))
+						if t: intersections.append((i, j, k, t[0], t[1]))
 		return intersections

@@ -174,12 +174,12 @@ def shifter(sig, delays, s=None, axes=None):
 	specified or inferred.
 	'''
 	# Ensure that sig is a numpy.ndarray
-	sig = asarray(sig)
+	sig = np.asarray(sig)
 	ndim = len(sig.shape)
 
 	# Set default values for axes and s if necessary
 	if axes is None:
-		if s is not None: axes = range(ndim - len(s), ndim)
+		if s: axes = range(ndim - len(s), ndim)
 		else: axes = range(ndim)
 
 	if s is None: s = tuple(sig.shape[a] for a in axes)
@@ -317,34 +317,6 @@ def waterc(t):
 	f2 = (2.4 * t + 2.8) * t + 15.9
 	c = f1 + f2 * p / 100.
 	return c / 1000.0
-
-
-def asarray(a, rank=None, tailpad=True):
-	'''
-	Ensure that a behaves as a numpy ndarray and, if not, duplicate a as an
-	ndarray. If rank is specified, it must not be less than the "natural"
-	rank of a. If rank is greater than the natural rank, the returned
-	ndarray is padded by appending (if tailpad is True) or prepending (if
-	tailpad is False) np.newaxis slices until the desired rank is achieved.
-
-	If a is None, None is returned.
-
-	NOTE: If a is already a numpy array, the returned object is either the
-	same as the argument, or a view on the argument.
-	'''
-	if a is None: return None
-
-	if not isinstance(a, numpy.ndarray): a = numpy.array(a)
-
-	nrank = numpy.ndim(a)
-	if rank is None or rank == nrank: return a
-
-	if rank < nrank:
-		raise ValueError('Desired rank must not be less than "natural" rank of a')
-
-	sl = [slice(None)] * nrank + [numpy.newaxis] * (rank - nrank)
-	if not tailpad: sl = list(reversed(sl))
-	return a[sl]
 
 
 def bandwidth(sigft, df=1, level=0.5, r2c=False):

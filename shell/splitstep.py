@@ -376,7 +376,7 @@ if __name__ == '__main__':
 		facelts = elements[elements['facet'] == fidx]
 
 		# Determine if rotation is necessary
-		if directivity is not None and len(directivity) > 1:
+		if directivity and len(directivity) > 1:
 			# A directivity axis was specified
 			propax = -np.array(directivity[:-1])
 			r, theta, phi = geom.cart2sph(*propax)
@@ -417,7 +417,7 @@ if __name__ == '__main__':
 			propax = np.array(geom.rotate3d(propax, -theta, -phi))
 
 		# If directivity was specified, set argument to propagator
-		if directivity is not None:
+		if directivity:
 			beamwidth = directivity[-1]
 			propargs['d'] = list(-propax) + [beamwidth]
 
