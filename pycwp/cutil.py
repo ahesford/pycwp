@@ -163,6 +163,31 @@ def overlap(lwin, rwin):
 	return (start - lwin[0], start - rwin[0], end - start)
 
 
+def asarray(a, rank=None, tailpad=True):
+	'''
+	Ensure that a is an array and has the specified rank. If rank is
+	greater than the "natural" rank of a, insert additional axes at the
+	beginning (if tailpad is False) or the end (if tailpad is True) of the
+	nonempty axes. It is an error to specify a rank less than the "natural"
+	rank of a.
+
+	If rank is None, the rank of a is not changed.
+	'''
+	if a is None: return None
+
+	a = numpy.asarray(a)
+	nrank = a.ndim
+
+	if rank is None or rank == nrank: return a
+
+	if rank < nrank:
+		raise ValueError('Rank must not be less than "natural" rank of a')
+
+	sl = [slice(None)] * nrank + [numpy.newaxis] * (rank - nrank)
+	if not tailpad: sl = list(reversed(sl))
+	return a[sl]
+
+
 def shifter(sig, delays, s=None, axes=None):
 	'''
 	Shift a multidimensional signal sig by a number of (possibly
