@@ -56,6 +56,8 @@ def findpeaks(vec, minwidth=None, minprom=None):
 		'''
 		Return the higher of lcol and rcol, or the col nearer to idx
 		if both have the same height.
+
+		If one of lcol or rcol is not a 2-tuple, the other is returned.
 		'''
 		try: li, lv = lcol
 		except TypeError: return rcol

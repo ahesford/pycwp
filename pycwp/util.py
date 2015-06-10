@@ -6,6 +6,18 @@ from itertools import islice
 
 from . import cutil
 
+
+def alternator(*args):
+	'''
+	Create a generator that yields elements from the provided iterators in
+	a round-robin fashion until one of the iterators is exhausted.
+	'''
+	iters = tuple(iter(a) for a in args)
+	while True:
+		for it in iters:
+			yield it.next()
+
+
 class bidict(dict):
 	'''
 	Extends a dictionary to simultaneously keep an inverse dictionary for
