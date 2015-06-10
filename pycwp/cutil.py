@@ -5,7 +5,7 @@ General-purpose numerical routines used in other parts of the module.
 import numpy, math, operator
 from numpy import linalg as la, ma, fft
 from scipy import special as spec, ndimage
-from itertools import izip
+from itertools import izip, count
 
 
 def findpeaks(vec, minwidth=None, minprom=None):
@@ -18,7 +18,8 @@ def findpeaks(vec, minwidth=None, minprom=None):
 	Only peaks with widths greater than a specified minwidth, or with
 	prominences greater than the specified minprom, will be considered.
 	'''
-	# Prepare output lists
+	# Prepare output extrema
+	extrema = []
 	maxtab, mintab = [], []
 
 	if (minwidth and minwidth < 0) or (minprom and minprom < 0):
@@ -29,65 +30,86 @@ def findpeaks(vec, minwidth=None, minprom=None):
 
 	lookformax = True
 
+	# Count all maxima and minima in the signal
+	# Maxima and minima always alternate; first entry is always a maximum
 	for i, v in enumerate(vec):
 		if v > mx: mx, mxpos = v, i
 		if v < mn: mn, mnpos = v, i
 
 		if lookformax and v < mx:
-			maxtab.append((mxpos, mx))
+			extrema.append((mxpos, mx))
 			mn, mnpos = v, i
 			lookformax = False
 		elif not lookformax and v > mn:
-			mintab.append((mnpos, mn))
+			extrema.append((mnpos, mn))
 			mx, mxpos = v, i
 			lookformax = True
 
-	if not len(maxtab): return []
+	# Find the number of maxima in the extrema list
+	# Add one to account for bookended maxima (in an odd-length list)
+	nmax = int((len(extrema) + 1) / 2)
 
-	def findrange(a, lo, hi):
+	# Build a list mapping each maximum to a key col
+	keycols = [None] * nmax
+
+	def bestcol(idx, lcol, rcol):
 		'''
-		For an ascending-sorted list a, return a tuple (l, r) such that
-		a[l:r] is the largest possible subarray with all values larger
-		than lo and less than hi.
+		Return the higher of lcol and rcol, or the col nearer to idx
+		if both have the same height.
 		'''
-		from bisect import bisect_left, bisect_right
-		# Search the entire list for the left endpoint
-		l = bisect_right(a, lo)
-		# Search only the right half for the right endpoint
-		r = bisect_left(a, hi, lo=l)
-		return l, r
+		try: li, lv = lcol
+		except TypeError: return rcol
 
-	# Sort the list by peak height, descending
-	maxtab.sort(key=operator.itemgetter(1), reverse=True)
+		try: ri, rv = rcol
+		except TypeError: return lcol
 
-	# Now build a list of peaks as (index, value, width, height)
-	# The hightes peak is a special case
-	index, value = maxtab[0]
-	width = max(len(vec) - index, index)
-	prom = value - min(mp[1] for mp in mintab)
-	peaks = [(index, value, width, prom)]
+		if lv > rv: return lcol
+		if lv < rv: return rcol
 
-	# Pull the indices of minima for quick searching
-	# (Indices are already sorted in increasing order)
-	minidx = [mn[0] for mn in mintab]
-	
-	for index, value in maxtab[1:]:
-		# Find the nearest higher peak
-		npk = min(peaks, key=lambda x: abs(x[0] - index))
-		# This peak's key col lies between it and the nearest higher peak
-		left, right = index, npk[0]
-		if left > right: left, right = right, left
-		clo, chi = findrange(minidx, left, right)
-		kcidx, kcval = min(mintab[clo:chi], key=operator.itemgetter(1))
-		# Find the width and prominence of the peak
-		width = abs(kcidx - index)
-		prom = value - kcval
-		# Skip a peak that is too narrow
-		if minwidth and width < minwidth: continue
-		# Skip a peak that is not prominent enough
-		if minprom and prom < minprom: continue
-		# Append the peak to the list
-		peaks.append((index, value, width, prom))
+		if abs(li - idx) < abs(ri - idx): return lcol
+		else: return rcol
+
+
+	# Start walking from the first maximum
+	# Skip the last maximum if it is the final extremum
+	for i, (iidx, ival) in izip(count(0, 2), extrema[:-1:2]):
+		# The first col is immediately right of the maximum
+		col = extrema[i + 1]
+		# Examine all extrema until a higher peak is discovered
+		for j, (jidx, jval) in enumerate(extrema[i+2:], i+2):
+			if j % 2:
+				# Update stored col if new one is at least as low
+				if jval <= col[1]: col = (jidx, jval)
+			else:
+				if ival > jval:
+					# Set candidate key col for lower peaks to right
+					keycols[j / 2] = bestcol(jidx, keycols[j / 2], col)
+				else:
+					# Final key col for left peak with higher peak at right
+					keycols[i / 2] = bestcol(iidx, keycols[i / 2], col)
+					# No need to walk further to right
+					break
+
+	# Determine the overall minimum value
+	minval = min(ex[1] for ex in extrema[1::])
+
+	# Build the peak list
+	peaks = []
+	for (ei, ev), kcol in izip(extrema[::2], keycols):
+		try:
+			# Try to unpack the key col
+			ki, kv = kcol
+			width = abs(ei - ki)
+			prom = ev - kv
+		except TypeError:
+			# If the key col is "None", this is a dominant peak
+			# The width stretches all the way to the end of the signal
+			width = max(ei, len(vec) - ei)
+			prom = ev - minval
+		# Skip recording peaks that don't satisfy minimum requirements
+		if minwidth and (width < minwidth): continue
+		if minprom and (prom < minprom): continue
+		peaks.append((ei, ev, width, prom))
 
 	return peaks
 
