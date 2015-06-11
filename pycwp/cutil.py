@@ -199,12 +199,12 @@ def shifter(sig, delays, s=None, axes=None):
 	specified or inferred.
 	'''
 	# Ensure that sig is a numpy.ndarray
-	sig = np.asarray(sig)
+	sig = asarray(sig)
 	ndim = len(sig.shape)
 
 	# Set default values for axes and s if necessary
 	if axes is None:
-		if s: axes = range(ndim - len(s), ndim)
+		if s is not None: axes = range(ndim - len(s), ndim)
 		else: axes = range(ndim)
 
 	if s is None: s = tuple(sig.shape[a] for a in axes)

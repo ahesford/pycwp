@@ -64,8 +64,10 @@ def main (argv = None):
 	theta = [thr * 180 / pi for thr in theta]
 
 	if scatpat is None:
-		if output: output = file (output, 'w')
-		else: output = sys.stdout
+		if output is not None:
+			output = file (output, 'w')
+		else:
+			output = sys.stdout
 
 		# Print the angles in ascending order
 		for c, t in zip(T[::-1], theta[::-1]):

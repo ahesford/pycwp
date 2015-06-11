@@ -182,7 +182,7 @@ class RectangularTransfer(object):
 			return
 
 		# Allocate a host-side buffer...
-		if context:
+		if context is not None:
 			# As a map of a device buffer if a context was given
 			queue = cl.CommandQueue(context)
 			dflags = cl.mem_flags.WRITE_ONLY | cl.mem_flags.ALLOC_HOST_PTR
@@ -299,11 +299,11 @@ class BufferedSlices(Thread):
 			hflags = cl.map_flags.READ
 
 		# Create a queue for mapping the device memory
-		if context: queue = cl.CommandQueue(context)
+		if context is not None: queue = cl.CommandQueue(context)
 
 		# Allocate device and host buffer pairs corresponding to slices
 		for b in range(nbufs):
-			if context:
+			if context is not None:
 				dbuf, hbuf = mapbuffer(queue, backer.sliceshape,
 						backer.dtype, dflags, hflags)
 			else:

@@ -282,7 +282,7 @@ class SplitStep(object):
 		'''
 		# Ensure that the phase tolerance is not too small
 		# Otherwise, number of propagation steps will blow up uncontrollably
-		if phasetol and abs(phasetol) < 1e-6:
+		if phasetol is not None and abs(phasetol) < 1e-6:
 			raise ValueError('Phase tolerance must be greater than 1e-6')
 
 		# Copy the parameters
@@ -291,8 +291,9 @@ class SplitStep(object):
 		self.w = np.float32(1. / w**2)
 		self.phasetol = phasetol
 		# Specify the use of corrective terms
-		try: self.propcorr = tuple(propcorr)
-		except TypeError: self.propcorr = (True, True)
+		if propcorr is not None:
+			self.propcorr = tuple(propcorr)
+		else: self.propcorr = (True, True)
 
 		# Set the step length
 		self.dz = dz if dz else h
@@ -368,7 +369,7 @@ class SplitStep(object):
 		(slice by slice) the Fourier transform, restricted to the unit
 		sphere, of induced scattering sources.
 		'''
-		if propcorr: self.propcorr = tuple(propcorr)
+		if propcorr is not None: self.propcorr = tuple(propcorr)
 		grid = self.grid
 		z = np.zeros(grid, dtype=np.complex64)
 		for a in self.fld + self.obj + self.goertzbuf:
@@ -444,7 +445,7 @@ class SplitStep(object):
 		'''
 		prog, grid = self.prog, self.grid
 		fwdque = self.fwdque
-		hospec, hospat = corr if corr else self.propcorr
+		hospec, hospat = corr if corr is not None else self.propcorr
 
 		# Point to the field, scratch buffers, and refractive index
 		if fld is None: fld = self.fld[idx]
@@ -453,7 +454,7 @@ class SplitStep(object):
 
 		# These constants will be used in field computations
 		one = np.float32(1.)
-		dz = np.float32(dz if dz else self.dz)
+		dz = np.float32(dz if dz is not None else self.dz)
 
 		# Attenuate the boundaries using a Hann window, if desired
 		if self.l > 0:
@@ -554,7 +555,7 @@ class SplitStep(object):
 		# Push the next slab to its buffer (overwrites speed extrema)
 		ocur, onxt, obevt = self.objupdate(obj)
 
-		if self.phasetol:
+		if self.phasetol is not None:
 			# Figure maximum propagation distance to not
 			# exceed maximum permissible phase deviation
 			dzl = []

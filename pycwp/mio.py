@@ -31,7 +31,7 @@ def getmattype (infile, dim = None, dtype = None):
 
 	# Try to limit the pool of auto-sensed data types, if possible
 	# Ensure that the datatype is a Numpy type
-	if dtype:
+	if dtype is not None:
 		dtype = np.dtype(dtype)
 		deftypes = [dtype]
 	else: deftypes = [np.dtype(s) for s in ['float32', 'complex64', 'complex128']]

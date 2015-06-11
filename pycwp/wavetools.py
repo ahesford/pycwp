@@ -128,7 +128,7 @@ def spd2ct(c, cbg, atn = None, rho = None):
 	The speed units are mm / us; attenuation units are dB / cm / MHz.
 	'''
 
-	if atn:
+	if atn is not None:
 		# The factor 0.1 converts dB / cm / MHz to dB / mm / MHz
 		# The factor log(10) / 20 converts dB to Np
 		scale = 0.1 * math.log(10) / 20
@@ -139,7 +139,7 @@ def spd2ct(c, cbg, atn = None, rho = None):
 	# Compute the contrast profile
 	obj = (k / 2. / math.pi)**2 - 1.
 	# Add density variations if provided
-	if rho: obj -= np.sqrt(rho[0]) * rho[1] / (2. * math.pi)**2
+	if rho is not None: obj -= np.sqrt(rho[0]) * rho[1] / (2. * math.pi)**2
 
 	return obj
 
@@ -607,7 +607,7 @@ class SplitPade(object):
 		self.derivs = self.operderivs()
 
 		# Build the two-sided Hann window for apodization
-		if l and l > 0: self.hann = np.hanning(2 * l)
+		if l is not None and l > 0: self.hann = np.hanning(2 * l)
 		else: self.hann = None
 
 		# Initial guesses
@@ -793,7 +793,7 @@ class SplitPade(object):
 		The kwargs are passed to the solver to invert the denominator.
 		'''
 		# Attenuate the field before propagation
-		if self.hann:
+		if self.hann is not None:
 			l = len(self.hann) / 2
 			fld[:l,:] *= self.hann[:l, np.newaxis]
 			fld[-l:,:] *= self.hann[-l:, np.newaxis]

@@ -35,7 +35,8 @@ def main (argv = None):
 
 	# Reshape each column and write it
 	for i, col in enumerate(mat.transpose()):
-		if shape: col = col.reshape (shape, order = 'F')
+		if shape is not None:
+			col = col.reshape (shape, order = 'F')
 		mio.writebmat (col, fname + '.%03d' % i)
 
 	return 0

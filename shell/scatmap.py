@@ -39,7 +39,7 @@ if __name__ == "__main__":
 
 	# Gather all of the local matrices on the root
 	fullmat = MPI.COMM_WORLD.gather(a)
-	if fullmat:
+	if fullmat is not None:
 		# Sort the columns of the combined matrix by facet-element pair
 		idx = sorted(range(len(sources)), key=lambda i: sources[i])
 		# Concatenate the local matrices to build a scattering map
