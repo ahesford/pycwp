@@ -9,8 +9,7 @@ from numpy import fft, linalg, random
 import scipy.special as spec, scipy.sparse.linalg as la, scipy.sparse as sparse
 from itertools import izip, product, repeat
 
-from . import mio, cutil
-from .ftntools import pade, splitstep
+from . import cutil
 
 def crdtogrid(x, nx, dx=1.):
 	'''
@@ -451,6 +450,7 @@ class SplitStep(object):
 		The parameter w (as a multiplier 1 / w**2) governs high-order
 		spectral corrections.
 		'''
+		from .ftntools import splitstep
 
 		# Copy the parameters
 		self.grid = nx, ny
@@ -509,6 +509,7 @@ class SplitStep(object):
 		Return the current refrective indices and the reflection
 		coefficients for the slab.
 		'''
+		from .ftntools import splitstep
 		# Grab the current index of refraction
 		cur = self.eta
 		# Store the next index of refraction
@@ -530,6 +531,8 @@ class SplitStep(object):
 		If shift is True, the forward and backward fields are also
 		shifted by half a slab to agree with full-wave solutions.
 		'''
+		from .ftntools import splitstep
+
 		# Grab the current and next indices of refraction
 		eta, enxt = self.etaupdate(obj)
 
@@ -792,6 +795,8 @@ class SplitPade(object):
 
 		The kwargs are passed to the solver to invert the denominator.
 		'''
+		from .ftntools import pade
+
 		# Attenuate the field before propagation
 		if self.hann is not None:
 			l = len(self.hann) / 2

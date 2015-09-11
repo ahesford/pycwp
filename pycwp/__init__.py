@@ -5,7 +5,10 @@ data.
 '''
 
 __all__ = [ 'aca', 'boxer', 'cutil', 'fdtd', 'focusing', 'geom', 
-		'harmonic', 'mio', 'ftntools', 'cltools', 'segmentation',
+		'harmonic', 'mio', 'cltools', 'segmentation',
 		'scattering', 'shtransform', 'util', 'wavetools', 'process' ]
 
 from . import *
+
+# ftntools is not imported by default because it depends on external FFTW
+__all__.append('ftntools')
