@@ -3,7 +3,7 @@ Routines for reading and displaying scattering patterns in two or three
 dimensions.
 '''
 
-import numpy, math, pylab
+import numpy, math
 
 from .mio import readbmat
 from .cutil import gaussleg
@@ -37,6 +37,7 @@ def linpat (angle, pattern, column):
 	'''
 	Plot the pattern of a specified column using provided angle indices.
 	'''
+	import pylab
 	majorLocator = ticker.MultipleLocator (90)
 	majorFormatter = ticker.FormatStrFormatter ('%d')
 	minorLocator = ticker.MultipleLocator (15)

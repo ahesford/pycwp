@@ -1,4 +1,4 @@
-import numpy as np, pyopencl as cl, pyopencl.array as cla
+import numpy as np
 
 def findiff(a, axis=0):
 	'''
@@ -38,7 +38,6 @@ class PML(object):
 		edge along axis i, and smap[i][1] == True to attenuate the
 		right edge along axis i.
 		'''
-
 		# Copy the parameters of the PML
 		self.csq = c**2
 		self.h = h
