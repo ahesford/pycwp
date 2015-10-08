@@ -1,5 +1,8 @@
 #!/usr/bin/env python
 
+# Copyright (c) 2015 Andrew J. Hesford. All rights reserved.
+# Restrictions are listed in the LICENSE file distributed with this package.
+
 import sys, os, numpy as np, getopt
 from scipy.ndimage.filters import gaussian_filter1d
 from pycwp import mio, process

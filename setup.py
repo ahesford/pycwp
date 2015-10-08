@@ -7,6 +7,9 @@ software in Python for computational wave physics and the manipulation
 of binary matrix files.
 """
 
+# Copyright (c) 2015 Andrew J. Hesford. All rights reserved.
+# Restrictions are listed in the LICENSE file distributed with this package.
+
 DOCLINES = __doc__.split("\n")
 
 def configuration(parent_package='', top_path=None):

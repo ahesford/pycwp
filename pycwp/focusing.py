@@ -2,6 +2,9 @@
 Routines for dealing with focused beams in three dimensions.
 '''
 
+# Copyright (c) 2015 Andrew J. Hesford. All rights reserved.
+# Restrictions are listed in the LICENSE file distributed with this package.
+
 import numpy, math, numpy.fft as fft, scipy.interpolate as intp
 
 from . import cutil

@@ -3,6 +3,9 @@ General-purpose numerical routines, relating to angular functions defined on
 surfaces of spheres, used in other parts of the module.
 '''
 
+# Copyright (c) 2015 Andrew J. Hesford. All rights reserved.
+# Restrictions are listed in the LICENSE file distributed with this package.
+
 import math, numpy as np
 from scipy import special as spec, sparse
 from itertools import count, izip

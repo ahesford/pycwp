@@ -1,3 +1,6 @@
+c Copyright (c) 2015 Andrew J. Hesford. All rights reserved.
+c Restrictions are listed in the LICENSE file distributed with this package.
+c
 c Compute the action of the split-step Padé operator
 c 
 c     Q = a + b * obj + b * (d_{xx} + d_{yy}) / (k_0**2)

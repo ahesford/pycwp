@@ -4,6 +4,9 @@ to perform ray-tracing based on oct-tree decompositions or a linear marching
 algorithm.
 '''
 
+# Copyright (c) 2015 Andrew J. Hesford. All rights reserved.
+# Restrictions are listed in the LICENSE file distributed with this package.
+
 import sys, math, itertools
 
 from .util import lazy_property

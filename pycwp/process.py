@@ -1,6 +1,10 @@
 '''
 These routines and classes simplify the use of the multiprocessing module.
 '''
+
+# Copyright (c) 2015 Andrew J. Hesford. All rights reserved.
+# Restrictions are listed in the LICENSE file distributed with this package.
+
 from multiprocessing import Process, cpu_count
 
 def preferred_process_count():

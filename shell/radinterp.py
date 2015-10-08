@@ -1,5 +1,8 @@
 #!/usr/bin/env python
 
+# Copyright (c) 2015 Andrew J. Hesford. All rights reserved.
+# Restrictions are listed in the LICENSE file distributed with this package.
+
 import numpy as np, math, sys, getopt, os
 from pycwp import mio, cutil, harmonic
 from pycwp.cltools import interpolators as clinterp

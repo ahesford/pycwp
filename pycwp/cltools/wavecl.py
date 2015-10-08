@@ -1,3 +1,6 @@
+# Copyright (c) 2015 Andrew J. Hesford. All rights reserved.
+# Restrictions are listed in the LICENSE file distributed with this package.
+
 import numpy as np, scipy.special as spec, math
 import pyopencl as cl, pyopencl.array as cla
 

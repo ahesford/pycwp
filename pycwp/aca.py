@@ -2,6 +2,9 @@
 Routines to construct and recompress ACA approximations to matrices.
 '''
 
+# Copyright (c) 2015 Andrew J. Hesford. All rights reserved.
+# Restrictions are listed in the LICENSE file distributed with this package.
+
 import math, numpy as np, numpy.linalg as la
 
 from itertools import izip

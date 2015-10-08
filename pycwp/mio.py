@@ -2,6 +2,9 @@
 Routines for reading and writing binary matrix files in FORTRAN-order.
 '''
 
+# Copyright (c) 2015 Andrew J. Hesford. All rights reserved.
+# Restrictions are listed in the LICENSE file distributed with this package.
+
 import os, math, numpy as np
 from threading import Lock
 from . import cutil

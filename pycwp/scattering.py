@@ -3,6 +3,9 @@ Routines for reading and displaying scattering patterns in two or three
 dimensions.
 '''
 
+# Copyright (c) 2015 Andrew J. Hesford. All rights reserved.
+# Restrictions are listed in the LICENSE file distributed with this package.
+
 import numpy, math
 
 from .mio import readbmat

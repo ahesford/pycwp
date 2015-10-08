@@ -1,5 +1,7 @@
-import math, numpy as np
+# Copyright (c) 2015 Andrew J. Hesford. All rights reserved.
+# Restrictions are listed in the LICENSE file distributed with this package.
 
+import math, numpy as np
 
 def rotate3d(pt, theta, phi, inverse=False):
 	'''

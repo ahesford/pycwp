@@ -4,6 +4,9 @@ parameters of sound speed, attenuation and density for simulation of ultrasound
 wave propagation.
 '''
 
+# Copyright (c) 2015 Andrew J. Hesford. All rights reserved.
+# Restrictions are listed in the LICENSE file distributed with this package.
+
 import numpy as np, math
 from scipy import ndimage
 from . import mio, cutil

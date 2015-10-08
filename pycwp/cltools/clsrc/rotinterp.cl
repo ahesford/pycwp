@@ -1,5 +1,8 @@
 #define FLOAT2(vec) { (float) (vec).x, (float) (vec).y }
 
+/* Copyright (c) 2015 Andrew J. Hesford. All rights reserved.
+ * Restrictions are listed in the LICENSE file distributed with this package. */
+
 /* Use linear interpolation to resample the source image src into dst, where
  * the destination grid is rotated an angle theta (in radians) about the center
  * of the source image grid. The destination grid spacing is given by (dx,dy)

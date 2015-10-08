@@ -4,6 +4,9 @@ magnitude correction for comparison of k-space (FDTD) and integral equation
 solvers, Green's functions, and a split-step solver.
 '''
 
+# Copyright (c) 2015 Andrew J. Hesford. All rights reserved.
+# Restrictions are listed in the LICENSE file distributed with this package.
+
 import sys, math, cmath, numpy as np, scipy as sp
 from numpy import fft, linalg, random
 import scipy.special as spec, scipy.sparse.linalg as la, scipy.sparse as sparse

@@ -1,3 +1,6 @@
+c Copyright (c) 2015 Andrew J. Hesford. All rights reserved.
+c Restrictions are listed in the LICENSE file distributed with this package.
+c
 c A module to encapsulate forward and inverse FFTW transforms
       module fft
         implicit none

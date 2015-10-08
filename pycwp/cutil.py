@@ -2,6 +2,9 @@
 General-purpose numerical routines used in other parts of the module.
 '''
 
+# Copyright (c) 2015 Andrew J. Hesford. All rights reserved.
+# Restrictions are listed in the LICENSE file distributed with this package.
+
 import numpy, math, operator
 from numpy import linalg as la, ma, fft
 from scipy import special as spec, ndimage

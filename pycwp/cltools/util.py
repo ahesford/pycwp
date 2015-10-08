@@ -1,4 +1,8 @@
 "General-purpose OpenCL routines."
+
+# Copyright (c) 2015 Andrew J. Hesford. All rights reserved.
+# Restrictions are listed in the LICENSE file distributed with this package.
+
 import pyopencl as cl, os.path as path, numpy as np, time
 from threading import Thread, Condition, RLock, ThreadError
 from itertools import chain

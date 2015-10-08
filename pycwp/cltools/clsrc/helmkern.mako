@@ -1,3 +1,6 @@
+## Copyright (c) 2015 Andrew J. Hesford. All rights reserved.
+## Restrictions are listed in the LICENSE file distributed with this package.
+
 <%
 	# Define a function to compute the product of elements in a list
 	# Empty lists return a produce of unity
