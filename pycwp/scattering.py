@@ -11,8 +11,6 @@ import numpy, math
 from .mio import readbmat
 from .cutil import gaussleg
 
-from matplotlib import ticker
-
 def readradpat (fname, uniform = False):
 	'''
 	Read a complex double radiation pattern matrix and return the matrix with
@@ -40,7 +38,9 @@ def linpat (angle, pattern, column):
 	'''
 	Plot the pattern of a specified column using provided angle indices.
 	'''
+	from matplotlib import ticker
 	import pylab
+
 	majorLocator = ticker.MultipleLocator (90)
 	majorFormatter = ticker.FormatStrFormatter ('%d')
 	minorLocator = ticker.MultipleLocator (15)
