@@ -9,7 +9,7 @@ surfaces of spheres, used in other parts of the module.
 import math, numpy as np
 from scipy import special as spec, sparse
 from itertools import count, izip
-from . import cutil
+from . import cutil, poly, quad
 
 
 class HarmonicSpline(object):
@@ -350,7 +350,7 @@ class SphericalInterpolator(object):
 				else: tharr.append(thetas[0][ti])
 
 			# Build the Lagrange interpolation coefficients
-			twts = cutil.lagrange(rtheta, tharr)
+			twts = poly.lagrange(rtheta, tharr)
 
 			# Loop over the higher azimuthal sampling rate
 			for j in range(nphi[1]):
@@ -388,7 +388,7 @@ class SphericalInterpolator(object):
 					pharr = [(k + m) * dphi[0] for m in range(order)]
 
 					# Build the Lagrange interpolation coefficients
-					pwts = cutil.lagrange(rphi, pharr)
+					pwts = poly.lagrange(rphi, pharr)
 
 					# Populate the columns of the sparse array
 					for pw, cv in zip(pwts, cols):
@@ -426,43 +426,7 @@ def polararray(ntheta, lobatto=True):
 		theta = math.pi * np.arange(ntheta) / (ntheta - 1.).
 	'''
 	if not lobatto: return math.pi * np.arange(ntheta) / (ntheta - 1.)
-	return cutil.gausslob(ntheta)[0][::-1]
-
-
-def legassoc (n, m, th):
-	'''
-	Compute the normalized associated Legendre functions up to degree
-	n and order n for an argument cos(th), where th is a polar angle.
-	Output is an array with shape (m+1,n+1).
-	'''
-	t = math.cos(th)
-	u = -math.sin(th)
-
-	# Initialize the output array
-	lgp = np.zeros((m+1,n+1))
-
-	# The initial value
-	lgp[0,0] = math.sqrt(1. / 4. / math.pi)
-
-	# Set up the diagonal elements
-	for l in xrange(1,min(m,n)+1):
-		lgp[l,l] = math.sqrt((2. * l + 1.) / (2. * l)) * u * lgp[l-1,l-1]
-
-	# Set up the upper diagonal
-	for l in xrange(0,min(m,n)):
-		lgp[l,l+1] = math.sqrt(2. * l + 3.) * t * lgp[l,l]
-
-	# Now fill in the rest of the matrix
-	for p in xrange(0,m+1):
-		for l in xrange(1+p,n):
-			# Precompute the recursion coefficients
-			an = math.sqrt((2. * l + 1.) * (2. * l + 3) /
-					(1. + l + p) / (1. + l - p))
-			bn = math.sqrt((2. * l + 3.) * (l - p) * (l + p) /
-					(2. * l - 1.) / (1. + l + p) / (1. + l - p))
-			lgp[p,l+1] = an * t * lgp[p,l] - bn * lgp[p,l-1]
-
-	return lgp
+	return quad.gausslob(ntheta)[0][::-1]
 
 def harmorder (maxdeg):
 	'''
@@ -523,8 +487,53 @@ def sh2fld (k, clm, r, t, p, reg = True):
 		for l in xrange(deg)] for m in harmorder(deg-1)])
 
 	# Compute the polar term and multiply by harmonic coefficients
-	ytlm = np.array([shxp(clm,legassoc(deg-1,deg-1,tx)) for tx in t])
+	ytlm = np.array([shxp(clm,poly.legassoc(deg-1,deg-1,tx)) for tx in t])
 
 	# Return the product on the specified grid
 	fld = np.tensordot(jlr, np.tensordot(ytlm, epm, axes=(1,0)), axes=(1,1))
 	return fld.squeeze()
+
+
+def translator (r, s, phi, theta, l):
+	'''
+	Compute the diagonal translator for a translation distance r, a
+	translation direction s, azimuthal samples specified in the array phi,
+	polar samples specified in the array theta, and a truncation point l.
+	'''
+
+	# The radial argument
+	kr = 2. * math.pi * r
+
+	# Compute the radial component
+	hl = spec.sph_jn(l, kr)[0] + 1j * spec.sph_yn(l, kr)[0]
+	# Multiply the radial component by scale factors in the translator
+	m = numpy.arange(l + 1)
+	hl *= (1j / 4. / math.pi) * (1j)**m * (2. * m + 1.)
+
+	# Compute Legendre angle argument dot(s,sd) for sample directions sd
+	stheta = numpy.sin(theta)[:,numpy.newaxis]
+	sds = (s[0] * stheta * numpy.cos(phi)[numpy.newaxis,:]
+			+ s[1] * stheta * numpy.sin(phi)[numpy.newaxis,:]
+			+ s[2] * numpy.cos(theta)[:,numpy.newaxis])
+
+	# Initialize the translator
+	tr = 0
+
+	# Sum the terms of the translator
+	for hv, pv in izip(hl, poly.legpoly(sds, l)): tr += hv * pv
+	return tr
+
+
+def exband (a, tol = 1e-6):
+	'''
+	Compute the excess bandwidth estimation for an object with radius a
+	to a tolerance tol.
+	'''
+
+	# Compute the number of desired accurate digits
+	d0 = -math.log10(tol)
+
+	# Return the estimated bandwidth
+	return int(2. * math.pi * a + 1.8 * (d0**2 * 2. * math.pi * a)**(1./3.))
+
+

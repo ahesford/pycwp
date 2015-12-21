@@ -9,7 +9,7 @@ dimensions.
 import numpy, math
 
 from .mio import readbmat
-from .cutil import gaussleg
+from .quad import gaussleg
 
 def readradpat (fname, uniform = False):
 	'''
@@ -30,7 +30,7 @@ def readradpat (fname, uniform = False):
 		theta = (2.0 * numpy.arange (0, ntheta) + 1.0) * 180.0 / (2.0 * ntheta)
 	else:
 		# Gauss-Legendre samples in theta
-		theta = gaussleg (ntheta)[0] * 180.0 / math.pi
+		theta = gaussleg(ntheta)[0] * 180.0 / math.pi
 
 	return pat, theta, phi
 

@@ -5,7 +5,7 @@ import numpy, math, numpy.fft as fft
 
 from scipy import special as spec
 
-from . import cutil, harmonic
+from . import cutil, quad, poly
 
 class SHTransform(object):
 	'''
@@ -28,7 +28,7 @@ class SHTransform(object):
 			self.nphi = 2 * deg - 1
 
 		# Allocate a list of the polar samples and integration weights
-		self.thetas, self.weights = cutil.gaussleg (self.ntheta)
+		self.thetas, self.weights = quad.gaussleg (self.ntheta)
 
 	def scale (self, shdata, forward=True):
 		'''
@@ -59,7 +59,7 @@ class SHTransform(object):
 
 		for theta, out in zip (self.thetas, outtr):
 			# Compute the normalized associated Legendre polynomials
-			legpol = harmonic.legassoc(self.deg-1, self.deg-1, theta)
+			legpol = poly.legassoc(self.deg-1, self.deg-1, theta)
 			# Transpose the matrix for iterations
 			legpol = legpol.transpose()
 
@@ -85,7 +85,7 @@ class SHTransform(object):
 			scale = 2. * math.pi * weight / self.nphi
 
 			# Compute the associated Legendre polynomials
-			legpol = harmonic.legassoc(self.deg-1, self.deg-1, theta)
+			legpol = poly.legassoc(self.deg-1, self.deg-1, theta)
 			# Transpose the matrix for iterations
 			legpol = legpol.transpose()
 

@@ -5,7 +5,7 @@
 
 import sys, os, socket, numpy as np, getopt
 
-from pycwp import mio, cltools, wavetools, cutil, util
+from pycwp import mio, cltools, wavetools, cutil, util, geom
 
 def pullitems(seq, axes):
 	'''
@@ -104,7 +104,7 @@ def rectbounds(n, h, theta, phi, hd=None):
 	# Perform two Givens rotations, azimuthal first
 	# The polar rotation is done around the y axis
 	def rotator(c, theta, phi):
-		return cutil.givens(cutil.givens(c, phi), theta, axes=(2, 0))
+		return geom.givens(geom.givens(c, phi), theta, axes=(2, 0))
 
 	# Figure all of the rotated corner coordinates
 	coords = [rotator(wavetools.gridtocrd(c, n, h), theta, phi)

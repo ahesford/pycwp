@@ -10,145 +10,6 @@ from numpy import linalg as la, ma, fft
 from scipy import special as spec, ndimage
 from itertools import izip, count
 
-def findpeaks(vec, minwidth=None, minprom=None, prommode='absolute'):
-	'''
-	Find all peaks in the 1-D sequence vec. Return a list with elements
-	(index, value, width, prominence) for a peak at the indicated index
-	such that vec[index] == value, width is the distance from the peak to
-	its key col, and prominence is the peak's height above its key col.
-
-	Only peaks with widths greater than a specified minwidth, or with
-	prominences greater than the specified minprom, will be considered. If
-	prommode is 'absolute' or 'abs', minprom is an absolute cutoff. If
-	prommode is 'relative' or 'rel', minprom is interpreted as a fraction
-	of the highest prominence.
-	'''
-	try:
-		absprom = {'abs': True, 'absolute': True,
-				'rel': False, 'relative': False}[prommode.lower()]
-	except KeyError: raise ValueError('Invalid argument for prommode')
-
-	from .util import alternator
-
-	# Prepare output extrema
-	maxtab, mintab = [], []
-
-	if (minwidth and minwidth < 0) or (minprom and minprom < 0):
-		raise ValueError('Minimum prominence and width must be nonnegative')
-
-	mn, mx = float('inf'), float('-inf')
-	mnpos, mxpos = float('nan'), float('nan')
-
-	lookformax = True
-
-	# Alternately count all maxima and minima in the signal
-	# Note: mintab[i] is always first minimum AFTER maxtab[i]
-	for i, v in enumerate(vec):
-		if v > mx: mx, mxpos = v, i
-		if v < mn: mn, mnpos = v, i
-
-		if lookformax and v < mx:
-			maxtab.append((mxpos, mx))
-			mn, mnpos = v, i
-			lookformax = False
-		elif not lookformax and v > mn:
-			mintab.append((mnpos, mn))
-			mx, mxpos = v, i
-			lookformax = True
-
-	# Build a list mapping each maximum to a key col
-	keycols = [None] * len(maxtab)
-
-	def bestcol(idx, lcol, rcol):
-		'''
-		Return the higher of lcol and rcol, or the col nearer to idx
-		if both have the same height.
-
-		If one of lcol or rcol is not a 2-tuple, the other is returned.
-		'''
-		try: li, lv = lcol
-		except TypeError: return rcol
-
-		try: ri, rv = rcol
-		except TypeError: return lcol
-
-		if lv > rv: return lcol
-		if lv < rv: return rcol
-
-		if abs(li - idx) < abs(ri - idx): return lcol
-		else: return rcol
-
-
-	# Walk to the right from each maximum in turn
-	for i, (iidx, ival) in enumerate(maxtab):
-		# Reset the col tracker
-		col = None
-		# Interleave extrema to right of start, starting with next minimum
-		extrema = alternator(mintab[i:], maxtab[i+1:])
-		# The first minimum has index 2 * i + 1 in the merged extrema list
-		for j, (jidx, jval) in enumerate(extrema, 2 * i + 1):
-			if j % 2:
-				# Update col tracker if a lower col is encountered
-				try:
-					if jval <= col[1]: col = (jidx, jval)
-				except TypeError: col = (jidx, jval)
-				# Skip to next maximum for further processing
-				continue
-			# Analyze subsequent maxima
-			if ival > jval:
-				# Set candidate key col for lower peaks to right
-				jh = j / 2
-				keycols[jh] = bestcol(jidx, keycols[jh], col)
-			else:
-				# Final key col for left peak with higher peak at right
-				keycols[i] = bestcol(iidx, keycols[i], col)
-				# No need to walk past a larger peak
-				break
-
-	# Determine the overall minimum value
-	minval = min(ex[1] for ex in mintab)
-
-	if minprom and not absprom:
-		# Reinterpret minprom if relative mode was specified
-		minprom *= (max(ex[1] for ex in maxtab) - minval)
-
-	if minwidth and minprom:
-		# Assess both prominence and width for cuttof
-		def goodpeak(width, prom):
-			return (width >= minwidth) and (prom >= minprom)
-	elif minwidth:
-		# Assess only width for cutoff
-		def goodpeak(width, prom):
-			return width >= minwidth
-	elif minprom:
-		# Assess only prominence for cutoff
-		def goodpeak(width, prom):
-			return prom >= minprom
-	else:
-		# There is no cutoff
-		def goodpeak(width, prom):
-			return True
-
-
-	# Build the peak list
-	peaks = []
-	for (ei, ev), kcol in izip(maxtab, keycols):
-		try:
-			# Try to unpack the key col
-			ki, kv = kcol
-			width = abs(ei - ki)
-			prom = ev - kv
-		except TypeError:
-			# If the key col is "None", this is a dominant peak
-			# The width stretches all the way to the end of the signal
-			width = max(ei, len(vec) - ei)
-			prom = ev - minval
-		# Only record "good" peaks
-		if goodpeak(width, prom):
-			peaks.append((ei, ev, width, prom))
-
-	return peaks
-
 
 def overlap(lwin, rwin):
 	'''
@@ -189,73 +50,6 @@ def asarray(a, rank=None, tailpad=True):
 	sl = [slice(None)] * nrank + [numpy.newaxis] * (rank - nrank)
 	if not tailpad: sl = list(reversed(sl))
 	return a[sl]
-
-
-def shifter(sig, delays, s=None, axes=None):
-	'''
-	Shift a multidimensional signal sig by a number of (possibly
-	fractional) sample units in each dimension specified as entries in the
-	delays sequence. The shift is done using FFTs and the arguments s and
-	axes take the same meaning as in numpy.fft.fftn.
-
-	The length of delays must be compatible with the length of axes as
-	specified or inferred.
-	'''
-	# Ensure that sig is a numpy.ndarray
-	sig = asarray(sig)
-	ndim = len(sig.shape)
-
-	# Set default values for axes and s if necessary
-	if axes is None:
-		if s is not None: axes = range(ndim - len(s), ndim)
-		else: axes = range(ndim)
-
-	if s is None: s = tuple(sig.shape[a] for a in axes)
-
-	# Check that all arguments agree
-	if len(s) != len(axes):
-		raise ValueError('FFT shape array and axes list must have same dimensionality')
-	if len(s) != len(delays):
-		raise ValueError('Delay list and axes list must have same dimensionality')
-
-	# Take the forward transform for spectral shifting
-	csig = fft.fftn(sig, s, axes)
-
-	# Loop through the axes, shifting each one in turn
-	for d, n, a in zip(delays, s, axes):
-		# Build the FFT frequency indices
-		dk = 2. * math.pi / n
-		kidx = numpy.arange(n)
-		k = dk * (kidx >= n / 2.).choose(kidx, kidx - n)
-		# Build the shifter and the axis slicer for broadcasting
-		sh = numpy.exp(-1j * k * d)
-		slic = [numpy.newaxis] * ndim
-		slic[a] = slice(None)
-		# Multiply the shift
-		csig *= sh[slic]
-
-	# Perform the inverse transform and cast to the input type
-	rsig = fft.ifftn(csig, axes=axes)
-	if not numpy.issubdtype(sig.dtype, numpy.complexfloating):
-		rsig = rsig.real
-	return rsig.astype(sig.dtype)
-
-
-def mask_outliers(s, m=1.5):
-	'''
-	Given a NumPy array s, return a NumPy masked array with outliers
-	masked. The lower quartile (q1), median (q2), and upper quartile (q3)
-	are calculated for s. Outliers are those that fall outside the range
-
-		[q1 - m * IQR, q3 + m * IQR],
-
-	where IQR = q3 - q1 is the interquartile range.
-	'''
-	# Calculate the quartiles and IQR
-	q1, q2, q3 = numpy.percentile(s, [25, 50, 75])
-	iqr = q3 - q1
-	lo, hi = q1 - m * iqr, q3 + m * iqr
-	return ma.MaskedArray(s, numpy.logical_or(s < lo, s > hi))
 
 
 def indexchoose(n, c, s=0):
@@ -347,68 +141,6 @@ def waterc(t):
 	return c / 1000.0
 
 
-def bandwidth(sigft, df=1, level=0.5, r2c=False):
-	'''
-	Return as (bw, fc) the bandwidth bw and center frequency fc of a signal
-	whose DFT is given in sigft. The frequency bin width is df.
-
-	The DFT is searched in both directions from the positive frequency bin
-	with peak amplitude until the signal falls below the specified level.
-	Linear interpolation pinpoints the level crossing between bins. The
-	bandwidth is the difference between the high and low crossings,
-	multiplied by df. Only the level crossing nearest the peak is
-	identified in each direction.
-
-	The center frequency is the average of the high and low crossing
-	frequencies.
-
-	If r2c is True, the DFT is assumed to contain only positive
-	frequencies. Otherwise, the DFT should contain positive and negative
-	frequencies in standard FFT order.
-	'''
-	sigamps = numpy.abs(sigft)
-	if not r2c:
-		# Strip the negative frequencies from the C2C DFT
-		sigamps = sigamps[:len(sigamps)/2]
-
-	# Find the peak positive frequency
-	peakidx = numpy.argmax(sigamps)
-	# Now scale the amplitudes
-	sigamps /= sigamps[peakidx]
-
-
-	# Search low frequencies for the level crossing
-	flo = peakidx + 1
-	for i, s in enumerate(reversed(sigamps[:peakidx])):
-		if s < level:
-			flo = peakidx - i
-			break
-	# Search high frequencies for the level crossing
-	fhi = peakidx - 1
-	for i, s in enumerate(sigamps[peakidx+1:]):
-		if s < level:
-			fhi = peakidx + i
-			break
-
-	# Ensure that a crossing level was identified
-	if sigamps[flo - 1] > level:
-		raise ValueError('Low-frequency level crossing not identified')
-	if sigamps[fhi + 1] > level:
-		raise ValueError('High-frequency level crossing not identified')
-
-	# Now convert the indices to interpolated frequencies
-	# The indices point to the furthest sample exceeding the level
-	mlo = (sigamps[flo] - sigamps[flo - 1])
-	mhi = (sigamps[fhi + 1] - sigamps[fhi])
-
-	flo = (level - sigamps[flo - 1]) / float(mlo) + flo - 1
-	fhi = (level - sigamps[fhi]) / float(mhi) + fhi
-
-	bw = (fhi - flo) * df
-	fc = 0.5 * (fhi + flo) * df
-	return bw, fc
-
-
 def numdigits(m):
 	'''
 	Return the number of digits required to represent int(m).
@@ -422,39 +154,11 @@ def numdigits(m):
 	return digits
 
 
-def deg2rad(t):
-	'''
-	Convert the angle t in degrees to radians.
-	'''
-	return t * math.pi / 180.
-
-
-def rad2deg(t):
-	'''
-	Convert the angle t in radians to degrees.
-	'''
-	return t * 180. / math.pi
-
-
 def roundn(x, n):
 	'''
 	Round x up to the next multiple of n.
 	'''
 	return x + (n - x) % n
-
-
-def givens(crd, theta, axes=(0,1)):
-	'''
-	Perform a Givens rotation of angle theta in the specified axes of the
-	coordinate vector crd.
-	'''
-	c = math.cos(theta)
-	s = math.sin(theta)
-	ncrd = list(crd)
-	x, y = crd[axes[0]], crd[axes[1]]
-	ncrd[axes[0]] = x * c - s * y
-	ncrd[axes[1]] = x * s + c * y
-	return tuple(ncrd)
 
 
 def matchdim(*args):
@@ -566,11 +270,6 @@ def smoothkern(w, s, n = 3):
 	k = ndimage.gaussian_filter(k, s, mode='constant')
 	return k / numpy.sum(k)
 
-def binomial(n, k):
-	'''
-	Compute the binomial coefficient n choose k.
-	'''
-	return prod(float(n - (k - i)) / i for i in range(1, k+1))
 
 def ceilpow2(x):
 	'''
@@ -581,6 +280,7 @@ def ceilpow2(x):
 		xc >>= 1
 		y <<= 1
 	return y if y >= x else (y << 1)
+
 
 def rlocate(arr, val):
 	'''
@@ -607,11 +307,13 @@ def rlocate(arr, val):
 
 	return jl
 
+
 def hadamard(x, y):
 	'''
 	Compute the Hadamard product of iterables x and y.
 	'''
 	return map(operator.mul, x, y)
+
 
 def prod(a):
 	'''
@@ -619,26 +321,13 @@ def prod(a):
 	'''
 	return reduce(operator.mul, a)
 
+
 def dot(x, y):
 	'''
 	Compute the dot product of two iterables.
 	'''
 	return sum(hadamard(x, y))
 
-def lagrange(x, pts):
-	'''
-	For sample points pts and a test point x, return the Lagrange
-	polynomial weights.
-	'''
-
-	# Compute a single weight term
-	def lgwt(x, pi, pj): return float(x - pj) / float(pi - pj)
-
-	# Compute all the weights
-	wts = [prod(lgwt(x, pi, pj) for j, pj in enumerate(pts) if i != j)
-			for i, pi in enumerate(pts)]
-
-	return wts
 
 def rotate(x, y = 1):
 	'''
@@ -656,242 +345,21 @@ def rotate(x, y = 1):
 
 	return x[y:] + x[:y]
 
-def translator (r, s, phi, theta, l):
-	'''
-	Compute the diagonal translator for a translation distance r, a
-	translation direction s, azimuthal samples specified in the array phi,
-	polar samples specified in the array theta, and a truncation point l.
-	'''
-
-	# The radial argument
-	kr = 2. * math.pi * r
-
-	# Compute the radial component
-	hl = spec.sph_jn(l, kr)[0] + 1j * spec.sph_yn(l, kr)[0]
-	# Multiply the radial component by scale factors in the translator
-	m = numpy.arange(l + 1)
-	hl *= (1j / 4. / math.pi) * (1j)**m * (2. * m + 1.)
-
-	# Compute Legendre angle argument dot(s,sd) for sample directions sd
-	stheta = numpy.sin(theta)[:,numpy.newaxis]
-	sds = (s[0] * stheta * numpy.cos(phi)[numpy.newaxis,:]
-			+ s[1] * stheta * numpy.sin(phi)[numpy.newaxis,:]
-			+ s[2] * numpy.cos(theta)[:,numpy.newaxis])
-
-	# Initialize the translator
-	tr = 0
-
-	# Sum the terms of the translator
-	for hv, pv in izip(hl, legpoly(sds, l)): tr += hv * pv
-	return tr
-
-def legpoly (x, n = 0):
-	'''
-	A coroutine to generate the Legendre polynomials up to order n,
-	evaluated at argument x.
-	'''
-
-	if numpy.any(numpy.abs(x) > 1.0):
-		raise ValueError("Arguments must be in [-1,1]")
-	if n < 0:
-		raise ValueError("Order must be nonnegative")
-
-	# Set some recursion values
-	cur = x
-	prev = numpy.ones_like(x)
-
-	# Yield the zero-order value
-	yield prev
-
-	# Yield the first-order value, if that order is desired
-	if n < 1: raise StopIteration
-	else: yield cur
-
-	# Now compute the subsequent values
-	for i in xrange(1, n):
-		next = ((2. * i + 1.) * x * cur - i * prev) / (i + 1.)
-		prev = cur
-		cur = next
-		yield cur
-
-	raise StopIteration
-
-
-def exband (a, tol = 1e-6):
-	'''
-	Compute the excess bandwidth estimation for an object with radius a
-	to a tolerance tol.
-	'''
-
-	# Compute the number of desired accurate digits
-	d0 = -math.log10(tol)
-
-	# Return the estimated bandwidth
-	return int(2. * math.pi * a + 1.8 * (d0**2 * 2. * math.pi * a)**(1./3.))
-
-
-def legendre (t, m):
-	'''
-	Return the value of the Legendre polynomial of order m, along with its
-	first and second derivatives, at a point t.
-	'''
-	# Set function values explicitly for orders less than 2
-	if m < 1: return 1., 0., 0.
-	elif m < 2: return t, 1., 0.
-
-	p0, p1 = 1.0, t
-
-	for k in range(1, m):
-		# This value is necessary for the second derivative
-		dpl = k * (p0 - t * p1) / (1. - t**2)
-		p = ((2.*k + 1.0) * t * p1 - k * p0) / (1. + k)
-		p0 = p1; p1 = p
-
-	# Compute the value of the derivative
-	dp = m * (p0 - t * p1) / (1.0 - t**2)
-
-	# Compute the value of the second derivative
-	ddp = ((m - 2.) * t * dp + m * (p1 - dpl)) / (t**2 - 1.)
-
-	return p, dp, ddp
-
-
-def clenshaw (m):
-	'''
-	Compute the Clenshaw-Curtis quadrature nodes and weights in the
-	interval [0,pi] for a specified order m.
-	'''
-	n = m - 1
-	idx = numpy.arange(m)
-	# Nodes are equally spaced in the interval
-	nodes = idx * math.pi / float(n)
-	# Endpoint weights should be halved to avoid aliasing
-	cj = (numpy.mod(idx, n) == 0).choose(2., 1.)
-	k = numpy.arange(1, int(n / 2) + 1)[:,numpy.newaxis]
-	bk = (k < n / 2.).choose(1., 2.)
-	# The weights are defined according to Waldvogel (2003)
-	cos = numpy.cos(2. * k * nodes[numpy.newaxis,:])
-	scl = bk / (4. * k**2 - 1.)
-	weights = (cj / n) * (1. - numpy.sum(scl * cos, axis=0))
-	return nodes, weights
-
-
-def fejer2 (m):
-	'''
-	Compute the quadrature nodes and weights, in the interval [0, pi],
-	using Fejer's second rule for an order m.
-	'''
-	n = m - 1
-	idx = numpy.arange(m)
-	nodes = idx * math.pi / float(n)
-	k = numpy.arange(1, int(n / 2) + 1)[:,numpy.newaxis]
-	sin = numpy.sin((2. * k - 1.) * nodes[numpy.newaxis,:])
-	weights = (4. / n) * numpy.sin(nodes) * numpy.sum(sin / (2. * k - 1.), axis=0)
-	return nodes, weights
-
-
-def gaussleg (m, tol = 1e-9, itmax=100):
-	'''
-	Compute the Gauss-Legendre quadrature nodes and weights in the interval
-	[0,pi] for a specified order m. The Newton-Raphson method is used to
-	find the roots of Legendre polynomials (the nodes) with a maximum of
-	itmax iterations and an error tolerance of tol.
-	'''
-	weights = numpy.zeros((m), dtype=numpy.float64)
-	nodes = numpy.zeros((m), dtype=numpy.float64)
-
-	nRoots = (m + 1) / 2
-
-	for i in range(nRoots):
-		# The initial guess is the (i+1) Chebyshev root
-		t = math.cos (math.pi * (i + 0.75) / m)
-		for j in range(itmax):
-			# Grab the Legendre polynomial and its derviative
-			p, dp = legendre (t, m)[:2]
-
-			# Perform a Newton-Raphson update
-			dt = -p/dp
-			t += dt
-
-			# Update the node and weight estimates
-			nodes[i] = math.acos(t)
-			nodes[-(i + 1)] = math.acos(-t)
-			weights[i] = 2.0 / (1.0 - t**2) / (dp**2)
-			weights[-(i + 1)] = weights[i]
-
-			# Nothing left to do if tolerance was achieved
-			if abs(dt) < tol: break
-
-	return nodes, weights
-
-
-def gausslob (m, tol = 1e-9, itmax=100):
-	'''
-	Compute the Gauss-Lobatto quadrature nodes and weights in the interval
-	[0,pi] for a specified order m. The Newton-Raphson method is used to
-	find the roots of derivatives of Legendre polynomials (the nodes) with
-	a maximum of itmax iterations and an error tolerance of tol.
-	'''
-	weights = numpy.zeros((m), dtype=numpy.float64)
-	nodes = numpy.zeros((m), dtype=numpy.float64)
-
-	# This is the number of roots away from the endpoints
-	nRoots = (m - 1) / 2
-
-	# First compute the nodes and weights at the endpoints
-	nodes[0] = 0.
-	nodes[-1] = math.pi
-	weights[0] = 2. / m / (m - 1.)
-	weights[-1] = weights[0]
-
-	for i in range(1, nRoots + 1):
-		# The initial guess is halfway between subsequent Chebyshev roots
-		t = 0.5 * sum(math.cos(math.pi * (i + j - 0.25) / m) for j in range(2));
-		for j in range(itmax):
-			# Grab the Legendre polynomial and its derviative
-			p, dp, ddp = legendre (t, m - 1)
-
-			# Perform a Newton-Raphson update
-			dt = -dp / ddp
-			t += dt
-
-			# Update the node and weight estimates
-			nodes[i] = math.acos(t)
-			nodes[-(i + 1)] = math.acos(-t)
-			weights[i] = 2. / m / (m - 1.) / (p**2)
-			weights[-(i + 1)] = weights[i]
-
-			# Nothing left to do if tolerance was achieved
-			if abs(dt) < tol: break
-
-	return nodes, weights
-
 
 def complexmax (a):
 	'''
 	Compute the maximum element of a complex array like MATLAB does.
 	'''
 	# Return the maximum value of a numpy matrix.
+	a = numpy.asarray(a)
 	return a.flat[numpy.argmax(numpy.abs(a))]
 
-def psnr (x, y):
-	'''
-	The peak SNR, in dB, of a matrix x relative to the matrix y.
-	This assumes x = y + N, where N is noise and y is signal.
-	'''
-	# Compute the average per-pixel squared error
-	err = numpy.sum (numpy.abs(x - y)**2) / float(prod(x.shape))
-	# Compute the square of the maximum signal value
-	maxval = numpy.max(numpy.abs(y))**2
-
-	# Compute the peak SNR in dB
-	return 10. * math.log10(maxval / err)
 
 def mse (x, y):
 	'''
 	Report the mean squared error between the matrix x and the matrix y.
 	'''
-	err = numpy.sum (numpy.abs(x - y)**2)
-	err /= numpy.sum (numpy.abs(y)**2)
+	err = numpy.sum(numpy.abs(x - y)**2)
+	err /= numpy.sum(numpy.abs(y)**2)
 
 	return math.sqrt(err)

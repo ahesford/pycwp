@@ -165,3 +165,31 @@ def cart2pol (x, y):
 	r = np.sqrt (x**2 + y**2)
 	t = np.arctan2 (y, x)
 	return r, t
+
+
+def deg2rad(t):
+	'''
+	Convert the angle t in degrees to radians.
+	'''
+	return t * math.pi / 180.
+
+
+def rad2deg(t):
+	'''
+	Convert the angle t in radians to degrees.
+	'''
+	return t * 180. / math.pi
+
+
+def givens(crd, theta, axes=(0,1)):
+	'''
+	Perform a Givens rotation of angle theta in the specified axes of the
+	coordinate vector crd.
+	'''
+	c = math.cos(theta)
+	s = math.sin(theta)
+	ncrd = list(crd)
+	x, y = crd[axes[0]], crd[axes[1]]
+	ncrd[axes[0]] = x * c - s * y
+	ncrd[axes[1]] = x * s + c * y
+	return tuple(ncrd)
