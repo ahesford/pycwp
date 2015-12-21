@@ -7,6 +7,7 @@ Routines used for basic statistical analysis.
 
 import numpy
 from numpy import ma
+from itertools import izip
 
 
 def mask_outliers(s, m=1.5):
@@ -18,12 +19,25 @@ def mask_outliers(s, m=1.5):
 		[q1 - m * IQR, q3 + m * IQR],
 
 	where IQR = q3 - q1 is the interquartile range.
+
+	If s is, instead, a dictionary-like collection (it has an items()
+	method that returns key-value pairs), outlying values (as defined
+	above) and corresponding keys will simply be removed from a copy of s.
 	'''
+	try:
+		k, s = zip(*s.items())
+	except AttributeError:
+		s = numpy.asarray(s)
+
 	# Calculate the quartiles and IQR
 	q1, q2, q3 = numpy.percentile(s, [25, 50, 75])
 	iqr = q3 - q1
 	lo, hi = q1 - m * iqr, q3 + m * iqr
-	return ma.MaskedArray(s, numpy.logical_or(s < lo, s > hi))
+
+	try:
+		return dict(kp for kp in izip(k, s) if lo <= kp[1] <= hi)
+	except NameError:
+		return ma.MaskedArray(s, numpy.logical_or(s < lo, s > hi))
 
 
 def binomial(n, k):
