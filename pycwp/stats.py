@@ -52,6 +52,8 @@ def rolling_mean(x, n):
 	Compute the rolling mean of length n for a sequence x. If the sequence
 	is not 1-D, it will be flattened first.
 	'''
+	if n < 2 or int(n) != n:
+		raise ValueError('Window width must be an integer of at least 2')
 	# Compute the cumulative sum
 	ret = numpy.cumsum(x)
 	# Subtract too-early contributions
