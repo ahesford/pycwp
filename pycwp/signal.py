@@ -9,31 +9,26 @@ import numpy, math
 from numpy import fft
 from itertools import izip
 
-def findpeaks(vec, minwidth=None, minprom=None, prommode='absolute'):
+def findpeaks(vec):
 	'''
-	Find all peaks in the 1-D sequence vec. Return a list with elements
-	(index, value, width, prominence) for a peak at the indicated index
-	such that vec[index] == value, width is the distance from the peak to
-	its key col, and prominence is the peak's height above its key col.
+	Find all peaks in the 1-D sequence vec. Return a list whose elements
+	each correspond to a single peak and take the form
 
-	Only peaks with widths greater than a specified minwidth, or with
-	prominences greater than the specified minprom, will be considered. If
-	prommode is 'absolute' or 'abs', minprom is an absolute cutoff. If
-	prommode is 'relative' or 'rel', minprom is interpreted as a fraction
-	of the highest prominence.
+		{ 'peak': (pidx, pval), 'keycol': (kidx, kval) },
+
+	where the peak is located at index pidx, has a value vec[pidx] = pval,
+	and has a key col at index kidx such that vec[kidx] = kval.
+
+	Typically, the peak's width is defined to be abs(pidx - kidx), while
+	the peak's prominence is vec[pidx] - vec[kidx].
+
+	The highest peak in the signal will have a 'keycol' of None, which
+	means the prominence and width are undefined.
 	'''
-	try:
-		absprom = {'abs': True, 'absolute': True,
-				'rel': False, 'relative': False}[prommode.lower()]
-	except KeyError: raise ValueError('Invalid argument for prommode')
-
 	from .util import alternator
 
 	# Prepare output extrema
 	maxtab, mintab = [], []
-
-	if (minwidth and minwidth < 0) or (minprom and minprom < 0):
-		raise ValueError('Minimum prominence and width must be nonnegative')
 
 	mn, mx = float('inf'), float('-inf')
 	mnpos, mxpos = float('nan'), float('nan')
@@ -104,49 +99,8 @@ def findpeaks(vec, minwidth=None, minprom=None, prommode='absolute'):
 				# No need to walk past a larger peak
 				break
 
-	# Determine the overall minimum value
-	minval = min(ex[1] for ex in mintab)
-
-	if minprom and not absprom:
-		# Reinterpret minprom if relative mode was specified
-		minprom *= (max(ex[1] for ex in maxtab) - minval)
-
-	if minwidth and minprom:
-		# Assess both prominence and width for cuttof
-		def goodpeak(width, prom):
-			return (width >= minwidth) and (prom >= minprom)
-	elif minwidth:
-		# Assess only width for cutoff
-		def goodpeak(width, prom):
-			return width >= minwidth
-	elif minprom:
-		# Assess only prominence for cutoff
-		def goodpeak(width, prom):
-			return prom >= minprom
-	else:
-		# There is no cutoff
-		def goodpeak(width, prom):
-			return True
-
-
 	# Build the peak list
-	peaks = []
-	for (ei, ev), kcol in izip(maxtab, keycols):
-		try:
-			# Try to unpack the key col
-			ki, kv = kcol
-			width = abs(ei - ki)
-			prom = ev - kv
-		except TypeError:
-			# If the key col is "None", this is a dominant peak
-			# The width stretches all the way to the end of the signal
-			width = max(ei, len(vec) - ei)
-			prom = ev - minval
-		# Only record "good" peaks
-		if goodpeak(width, prom):
-			peaks.append((ei, ev, width, prom))
-
-	return peaks
+	return [ { 'peak': pk, 'keycol': kc } for pk, kc in izip(maxtab, keycols) ]
 
 
 def shifter(sig, delays, s=None, axes=None):
