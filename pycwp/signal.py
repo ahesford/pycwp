@@ -118,8 +118,14 @@ def findpeaks(vec):
 	peaks = []
 	for pk, lc, rc in izip(maxtab, lcols, rcols):
 		kc, sc = keysubcol(pk[0], lc, rc)
-		if not (sc[0] < pk[0] < kc[0] or sc[0] > pk[0] > kc[0]):
-			raise ValueError('Key col %s and sub col %s should straddle peak %s' % (kc, sc, pk))
+		try:
+			sidx, kidx, pidx = sc[0], kc[0], pk[0]
+		except TypeError:
+			pass
+		else:
+			if not (sidx < pidx < kidx or sidx > pidx > kidx):
+				raise ValueError('Key col %d and sub col %d should straddle peak %d' % (kidx, sidx, pidx))
+
 		peaks.append({'peak': pk, 'keycol': kc, 'subcol': sc})
 
 	return peaks
