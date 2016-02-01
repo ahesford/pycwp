@@ -14,16 +14,28 @@ def findpeaks(vec):
 	Find all peaks in the 1-D sequence vec. Return a list whose elements
 	each correspond to a single peak and take the form
 
-		{ 'peak': (pidx, pval), 'keycol': (kidx, kval) },
+		{ 'peak': (pidx, pval),
+		  'keycol': (kidx, kval),
+		  'subcol': (sidx, sval) },
 
 	where the peak is located at index pidx, has a value vec[pidx] = pval,
-	and has a key col at index kidx such that vec[kidx] = kval.
+	has a key col at index kidx such that vec[kidx] = kval, and a "subcol"
+	at index sidx such that vec[sidx] = sval.
 
-	Typically, the peak's width is defined to be abs(pidx - kidx), while
-	the peak's prominence is vec[pidx] - vec[kidx].
+	Each peak may have a lowest point between it and a higher peak to the
+	left (a left col) along with a lowest point between it and a higher
+	peak to the right (a right col). Either may be None if there are no
+	higher peaks to one side or the other. Both will be None iff the peak
+	is the highest peak in the signal. A peak's key col is the higher of
+	its left and right cols (if both exist). The "subcol" is the col that
+	is NOT the key col.
 
-	The highest peak in the signal will have a 'keycol' of None, which
-	means the prominence and width are undefined.
+	Typically, the peak's prominence is defined as vec[pidx] - vec[kidx].
+	The width of the peak can be defined as either abs(pidx - kidx), or as
+	min(abs(pidx - kidx), abs(pidx - sidx)).
+
+	Because the highest peak in the signal has a 'keycol' and 'subcol' of
+	None, the prominence and width of the highest peak are undefined.
 	'''
 	from .util import alternator
 
@@ -50,27 +62,30 @@ def findpeaks(vec):
 			mx, mxpos = v, i
 			lookformax = True
 
-	# Build a list mapping each maximum to a key col
-	keycols = [None] * len(maxtab)
+	# Build a list mapping each maximum to left and right cols
+	lcols = [None] * len(maxtab)
+	rcols = [None] * len(maxtab)
 
-	def bestcol(idx, lcol, rcol):
+	def keysubcol(idx, lcol, rcol):
 		'''
-		Return the higher of lcol and rcol, or the col nearer to idx
-		if both have the same height.
+		Return a tuple (keycol, subcol), where keycol is the higher of
+		lcol and rcol, and subcol is the lower of the two. If both have
+		the same height, the keycol is the one closer to idx.
 
-		If one of lcol or rcol is not a 2-tuple, the other is returned.
+		If one of lcol and rcol is None, the keycol is the other, and
+		the subcol is None. If both are None, (None, None) is returned.
 		'''
 		try: li, lv = lcol
-		except TypeError: return rcol
+		except TypeError: return rcol, lcol
 
 		try: ri, rv = rcol
-		except TypeError: return lcol
+		except TypeError: return lcol, rcol
 
-		if lv > rv: return lcol
-		if lv < rv: return rcol
+		if lv > rv: return lcol, rcol
+		if lv < rv: return rcol, lcol
 
-		if abs(li - idx) < abs(ri - idx): return lcol
-		else: return rcol
+		if abs(li - idx) < abs(ri - idx): return lcol, rcol
+		else: return rcol, lcol
 
 
 	# Walk to the right from each maximum in turn
@@ -90,17 +105,24 @@ def findpeaks(vec):
 				continue
 			# Analyze subsequent maxima
 			if ival > jval:
-				# Set candidate key col for lower peaks to right
+				# Set the left col for the rightward peak
 				jh = j / 2
-				keycols[jh] = bestcol(jidx, keycols[jh], col)
+				lcols[jh] = col
 			else:
-				# Final key col for left peak with higher peak at right
-				keycols[i] = bestcol(iidx, keycols[i], col)
+				# Set the right col for the leftward peak
+				rcols[i] = col
 				# No need to walk past a larger peak
 				break
 
 	# Build the peak list
-	return [ { 'peak': pk, 'keycol': kc } for pk, kc in izip(maxtab, keycols) ]
+	peaks = []
+	for pk, lc, rc in izip(maxtab, lcols, rcols):
+		kc, sc = keysubcol(pk[0], lc, rc)
+		if not (sc[0] < pk[0] < kc[0] or sc[0] > pk[0] > kc[0]):
+			raise ValueError('Key col %s and sub col %s should straddle peak %s' % (kc, sc, pk))
+		peaks.append({'peak': pk, 'keycol': kc, 'subcol': sc})
+
+	return peaks
 
 
 def shifter(sig, delays, s=None, axes=None):
