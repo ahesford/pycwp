@@ -47,28 +47,42 @@ def binomial(n, k):
 	return prod(float(n - (k - i)) / i for i in range(1, k+1))
 
 
+def rolling_window(x, n):
+	'''
+	Given an N-dimensional array x (or an array-compatible object) with shape
+	(s_1, s_2, ..., s_N), return an (N+1)-dimensional view into x with shape
+	(s_1, s_2, ..., s_{N-1}, s_{N} - n + 1, n), wherein the N+1 axis is a
+	rolling window fo values along the N axis of x. In other words,
+
+		rolling_window(x, n)[t1,t2,...,tN,:] == x[t1,t2,...,tN:tN+n].
+
+	The function numpy.lib.stride_tricks.as_strided is used to create the
+	view. For applications, see rolling_mean() and rolling_variance().
+	'''
+	x = numpy.asarray(x)
+	shape = x.shape[:-1] + (x.shape[-1] - n + 1, n)
+	strides = x.strides + (x.strides[-1],)
+	return numpy.lib.stride_tricks.as_strided(x, shape=shape, strides=strides)
+
+
 def rolling_mean(x, n):
 	'''
-	Compute the rolling mean of length n for a sequence x. If the sequence
-	is not 1-D, it will be flattened first.
+	Compute the rolling mean of length n along the last axis of x.
 	'''
-	if n < 2 or int(n) != n:
-		raise ValueError('Window width must be an integer of at least 2')
-	# Compute the cumulative sum
-	ret = numpy.cumsum(x)
-	# Subtract too-early contributions
-	ret[n:] = ret[n:] - ret[:-n]
-
-	if not numpy.issubdtype(ret.dtype, numpy.inexact):
-		ret = ret.astype(numpy.float64)
-
-	return ret[n - 1:] / n
+	return numpy.mean(rolling_window(x, n), axis=-1)
 
 
 def rolling_variance(x, n):
 	'''
-	Compute the variance, over a sliding window of length n, for the
-	sequence x. If the sequence is not 1-D, it will be flattened first.
+	Compute the variance, over a sliding window of length n, along the last
+	axis of x.
 	'''
-	x = numpy.asarray(x)
-	return rolling_mean(x**2, n) - rolling_mean(x, n)**2
+	return numpy.var(rolling_window(x, n), axis=-1)
+
+
+def rolling_std(x, n):
+	'''
+	Compute the standard deviation, over a sliding window of length n,
+	along the last axis of x.
+	'''
+	return numpy.std(rolling_window(x, n), axis=-1)
