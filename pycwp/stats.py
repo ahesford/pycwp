@@ -25,9 +25,12 @@ def mask_outliers(s, m=1.5):
 	above) and corresponding keys will simply be removed from a copy of s.
 	'''
 	try:
-		k, s = zip(*s.items())
+		items = s.items()
 	except AttributeError:
 		s = numpy.asarray(s)
+	else:
+		if not len(items): return { }
+		k, s = zip(*items)
 
 	# Calculate the quartiles and IQR
 	q1, q2, q3 = numpy.percentile(s, [25, 50, 75])
