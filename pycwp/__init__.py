@@ -9,8 +9,8 @@ data.
 
 __all__ = [
 		'aca', 'boxer', 'cutil', 'cltools', 'fdtd', 'focusing',
-		'geom', 'harmonic', 'mio', 'process', 'poly', 'quad', 
-		'scattering', 'segmentation', 'shtransform', 'signal', 
+		'geom', 'harmonic', 'imgtools', 'mio', 'process', 'poly',
+		'quad', 'scattering', 'segmentation', 'shtransform', 'signal',
 		'stats', 'util', 'wavetools',
 	]
 

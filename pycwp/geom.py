@@ -3,6 +3,94 @@
 
 import math, numpy as np
 
+
+def eurotate(pt, alpha, beta, gamma, passive=False):
+	'''
+	Perform an Euler rotation (or N rotations) of the given 3-vector (or
+	N-by-3 list of 3 vectors) pt using precession, nutation, and rotation
+	angles (alpha, beta, gamma), respectively. These angles are equilvalent
+	to the outputs of the euler3d function.
+
+	The rotation will be active (i.e., the coordinates in pt will be
+	rotated with respect to a fixed reference frame) unless passive is
+	True, in which case the rotation is passive (i.e., the reference frame
+	rotates rather than the vector).
+	'''
+	pt = np.asarray(pt, dtype=float)
+	squeeze = False
+
+	if not 0 < pt.ndim < 3:
+		raise ValueError('Sequence pt must be a 3-vector or N-by-3 array')
+	elif pt.ndim == 1:
+		pt = pt[np.newaxis,:]
+		squeeze = True
+
+	if pt.shape[-1] != 3:
+		raise ValueError('Sequence pt must be a 3-vector or N-by-3 array')
+
+	c1, c2, c3 = [math.cos(float(a)) for a in [alpha, beta, gamma]]
+	s1, s2, s3 = [math.sin(float(a)) for a in [alpha, beta, gamma]]
+
+	R = np.array([[c1 * c3 - c2 * s1 * s3, -c1 * s3 - c2 * c3 * s1, s1 * s2],
+		[c3 * s1 + c1 * c2 * s3, c1 * c2 * c3 - s1 * s3, -c1 * s2],
+		[s2 * s3, c3 * s2, c2]], dtype=float)
+
+	if passive: R = R.T
+
+	rpt = np.dot(R, pt.T).T
+	if squeeze: rpt = rpt.squeeze()
+
+	return rpt
+
+
+def euler3d(xp, yp, zp):
+	'''
+	Determine the Euler angles that rotate the three-dimensional orthogonal
+	basis (xp, yp, zp), where each is a three-element sequence, into the
+	standard orthonormal (X, Y, Z) basis. Returns (alpha, beta, gamma),
+	where
+
+	1. Precession alpha is a rotation about the zp axis to place the xp
+	   axis into the X-Y plane,
+
+	2. Nutation beta is a rotation about the precessed xp axis to align the
+	   zp and Z axes, and
+
+	3. Rotation gamma aligns the precessed xp axis with the X axis.
+
+	To transform from (X, Y, Z) to (xp, yp, zp), negate the angles and swap
+	alpha and gamma.
+
+	Calculations are done as native Python floats.
+	'''
+	# Split the coordinate systems
+	xx, xy, xz = [float(xv) for xv in xp]
+	yx, yy, yz = [float(xv) for xv in yp]
+	zx, zy, zz = [float(xv) for xv in zp]
+
+	# Check for orthogonality
+	eps = np.finfo(float).eps
+	if abs(xx * yx + xy * yy + xz * yz) > eps:
+		raise ValueError('Axes xp and yp must be orthogonal')
+	elif abs(xx * zx + xy * zy + xz * zz) > eps:
+		raise ValueError('Axes xp and zp must be orthogonal')
+	elif abs(yx * zx + yy * zy + yz * zz) > eps:
+		raise ValueError('Axes yp and zp must be orthogonal')
+
+	zxy = math.sqrt(zx**2 + zy**2)
+
+	if zxy > eps:
+		pre = math.atan2(yx * zy - yy * zx, xx * zy - xy * zx)
+		nut = math.atan2(zxy, zz)
+		rot = -math.atan2(-zx, zy)
+	else:
+		pre = float(0)
+		nut = float(0) if zz >= 0 else math.pi
+		rot = -math.atan2(xy, xx)
+
+	return pre, nut, rot
+
+
 def rotate3d(pt, theta, phi, inverse=False):
 	'''
 	Rotate a 3-D point pt (represented as a sequence x, y, z) by first
@@ -144,9 +232,13 @@ def cart2sph (x, y, z):
 	Mimics the cart2sph function of Matlab, converting Cartesian
 	coordinates (x, y, z) to spherical coordinates (r, t, p). The
 	variables t and p are the polar and azimuthal angles, respectively.
+
+	In the degenerate cases, t and p will be 0.
 	'''
 	r = np.sqrt(x**2 + y**2 + z**2)
-	t = np.arccos (z / r)
+	sz = np.copysign(1, z)
+	ct = sz if sz * z >= r else z / r
+	t = np.arccos (ct)
 	p = np.arctan2 (y, x)
 	return r, t, p
 
