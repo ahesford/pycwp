@@ -13,31 +13,15 @@ class PinholeCamera(object):
 	A class that projects planar images onto an image plane with an
 	arbitrary 3-D orientation using a pinhole camera model.
 	'''
-	@classmethod
-	def imgcoords(cls, m, n):
-		'''
-		Given dimensions (m, n) for a desired image plane, return as
-		(x, y) an ogrid representation of image coordinates that are
-		symmetric about the origin. The raster order is such that, for
-
-			lx, ly, hx, hy = cls.imgbounds(m, n),
-
-		pixel (0, 0) has coordinates (lx, ly) and pixel (m - 1, n - 1)
-		has coordinates (hx, hy).
-		'''
-		lx, ly, hx, hy = cls.imgbounds(m, n)
-		return np.ogrid[lx:hx+1,ly:hy+1]
-
-
 	@staticmethod
 	def imgbounds(m, n):
 		'''
 		Given dimensions (m, n) for an image plane, return bounds
 
-			(lx, ly, hx, hy),
+			(lm, ln, hm, hn),
 
-		where (lx, ly) is the center of the lower-left pixel in image
-		coordinates, and (hx, hy) is the center of the upper-right
+		where (lm, ln) is the center of the lower-left pixel in image
+		coordinates, and (hm, hn) is the center of the upper-right
 		pixel in image coordinates.
 
 		The coordinates are symmetric about the origin.
@@ -119,89 +103,134 @@ class PinholeCamera(object):
 		self.rotmat = np.array(self.axes(orientation), dtype=float)
 
 
-	@staticmethod
-	def _validatePixelGrid(origin, dm, dn):
+	@classmethod
+	def validatePixelGrid(cls, m, n, basis, origin):
 		'''
-		Ensure that origin, dm, and dn are 3-vectors as Numpy arrays
-		and that dm and dn are orthogonal and have non-zero length.
+		Ensure that the parameters m, n, basis and origin describe a
+		valid pixel grid for (m, n) pixels. Validation checks are:
 
-		Returns origin, dm, and dn as Numpy float arrays.
+		1. m and n should be positive integers,
+
+		2. basis should be a 2-by-3 array (see Note 1) wherein the two
+		   rows are orthogonal, the first row gives the coordinate
+		   offset between pixel (i+1,j) and (i,j) and the second row
+		   gives the coordinate offset between pixel (i,j+1) and (i,j),
+
+		3. origin is a 3-vector (see Note 2) specifying the world
+		   coordinates of pixel (0, 0).
+
+		These criteria imply that the coordinates pixel (i, j) are
+
+			crd(i, j) = origin + i * basis[0] + j * basis[1].
+
+		Return values are m and n as integers, basis as a Numpy float
+		array of shape (2,3), and origin as a Numpy float array of
+		shape (3,).
+
+		*** Note 1 ***
+
+		The basis argument can also be a 2-character string from the
+		take from the (case-insensitive) set
+
+			{ 'x', 'y', 'z' }**2 - { 'xx', 'yy', 'zz' }
+
+		where the first character determines the first basis row and
+		the second character determines the second basis row according
+		to the map
+
+			{ 'x': [1, 0, 0], 'y': [0, 1, 0], 'z': [0, 0, 1] }.
+
+		*** Note 2 ***
+
+		The origin argument can take one of two special values for
+		convenience:
+
+		1. None or empty sequence: Use a "natural" origin where, for
+
+			lm, ln, hm, hn = cls.imgbounds(m, n),
+
+		   origin = lm * basis[0] + ln * basis[1], or
+
+		2. Scalar f or 1-vector [f]: Use an offset "natural" origin
+		   where, for
+
+		   	lm, ln, hm, hn = cls.imgbounds(m, n),
+
+		   origin = lm * basis[0] + ln * basis[1] + f * nrm for
+
+			nrm = np.cross(basis[0], basis[1]) / np.norm(nrm).
+
+		   Note that the normal nrm is normalized even if basis[0] or
+		   basis[1] are not.
 		'''
-		origin = np.asarray(origin, dtype=float).squeeze()
-		dm = np.asarray(dm, dtype=float).squeeze()
-		dn = np.asarray(dn, dtype=float).squeeze()
+		mi, ni = int(m), int(n)
+		if mi != m or ni != n or mi < 1 or ni < 1:
+			raise ValueError('Arguments m, n must have positive integer values')
 
-		if any(v.ndim != 1 or len(v) != 3 for v in (origin, dm, dn)):
-			raise ValueError('Points origin, dm, and dn must be 3-D vectors')
+		if isinstance(basis, basestring):
+			basis = basis.lower()
+			try:
+				dm, dn = basis
+			except ValueError:
+				raise ValueError('String argument basis must contain exactly 2 characters')
+			# Map the characters to appropriate basis functions
+			bmap = dict(zip('xyz', np.eye(3, dtype=float)))
+			try:
+				basis = np.array([bmap[dm], bmap[dn]], dtype=float)
+			except KeyError:
+				raise ValueError('Characters in string argument basis must be in set { "x", "y", "z" }')
+		else:
+			basis = np.asarray(basis, dtype=np.float)
+			if basis.shape != (2, 3):
+				raise ValueError('Array argument basis must have shape (2, 3)')
 
 		eps = np.finfo(float).eps
+		if abs(np.dot(basis[0], basis[1])) > eps:
+			raise ValueError('Rows of basis matrix must be orthogonal')
+		if any(d < eps for d in np.sum(basis, axis=-1)):
+			raise ValueError('Rows of basis matrix must not be 0')
 
-		if abs(np.dot(dm, dn)) > eps:
-			raise ValueError('Pixel offsets dm and dn must be orthogonal')
+		if origin is None:
+			origin = np.array([], dtype=float)
+		else: origin = np.asarray(origin, dtype=float)
 
-		if any(sum(v**2 for v in d) <= eps for d in (dm, dn)):
-			raise ValueError('Pixel offsets must not be 0')
+		if origin.ndim == 0:
+			origin = origin[np.newaxis]
 
-		return origin, dm, dn
+		if origin.ndim == 1:
+			try:
+				f = origin[0]
+				nrm = np.cross(basis[0], basis[1])
+				nrm /= np.sqrt(np.sum(nrm**2))
+			except IndexError:
+				f, nrm = 0, 0
+			lm, ln, hm, hn = cls.imgbounds(m, n)
+			origin = lm * basis[0] + ln * basis[1] + f * nrm
+		elif origin.ndim != 3:
+			raise ValueError('Argument origin must be None, 1-D array, or 3-D array')
+
+		return mi, ni, basis, origin
 
 
-	def normalizedCoords(self, *args):
+	def project(self, pts):
 		'''
-		Valid signatures:
+		Project the N-dimensional array pts of world coordinates into
+		normalized, homoegeneous camera coordinates. The output will
+		have the same shape as the input.
 
-		self.normalizedCoords(pts) or
-		self.normalizedCoords(m, n, origin, dm, dn)
-
-		In the single-argument form, pts should be an L-by-3 array of
-		spatial coordinates. The return value is an L-by-3 array of
-		homogeneous, normalized image coordinates for each of the L
-		input coordinates.
-
-		In the multiple-argument form, for an original image of shape
-		(m, n), where the pixel at index (i [< m], j [< n]) has spatial
-		coordinates
-
-			crd(i,j) = origin + i * dm + j * dn
-
-		for 3-D points origin, dm and dn, return a Numpy array icrd of
-		shape (m, n, 3), where icrd[i,j,:] holds the homogeneous,
-		normalized image coordinates for pixel (i, j).
+		The coordinates are specified along the final axis, so
+		pts.shape[-1] == 3 and output.shape[-1] == 3.
 		'''
-		if len(args) == 1:
-			# Make sure the coordinates are a copy
-			crd = np.array(args[0], dtype=float)
+		pts = np.asarray(pts, dtype=float)
 
-			if crd.ndim != 2 or crd.shape[1] != 3:
-				raise ValueError('Single argument pts must be an L-by-3 array')
+		if pts.ndim < 1 or pts.shape[-1] != 3:
+			raise ValueError('Input pts must be at least 1-D with a final axis of length 3')
 
-			# Subtract the camera center...
-			nax = np.newaxis
-			crd -= self.center[nax,:]
+		# Pad the origin to perform camera transform
+		axpad = [np.newaxis] * (pts.ndim - 1) + [slice(None)]
 
-			return np.dot(crd, self.rotmat.T)
-		elif len(args) != 5:
-			raise TypeError('Invalid argument list')
-
-		m, n, origin, dm, dn = args
-
-		if m < 1 or n < 1:
-			raise ValueError('Image dimensions (m, n) must be positive')
-
-		# Use arrays for fancy slicing
-		origin, dm, dn = self._validatePixelGrid(origin, dm, dn)
-
-		# Build the (m,n,3) spatial coordinate grid
-		i, j = np.ogrid[:float(m),:float(n)]
-		nax = np.newaxis
-		crd = (origin[nax, nax, :]
-				+ i[:, :, nax] * dm[nax, nax, :]
-				+ j[:, :, nax] * dn[nax, nax, :])
-
-		# Translate the coordinate origin to the camera center
-		crd -= self.center[nax, nax, :]
-
-		# Rotate into homogeneous, normalized coordinates
-		return np.dot(crd, self.rotmat.T)
+		# Shift origin and rotate to camera coordinates
+		return np.dot(pts - self.center[axpad], self.rotmat.T)
 
 
 	def optimumFocalLength(self, crd, m, n):
@@ -254,19 +283,18 @@ class PinholeCamera(object):
 			return f
 
 
-	def revcoords(self, tm, tn, m, n, origin, dm, dn, f=None):
+	def rproject(self, imgshape, srcshape, basis, origin, f=None):
 		'''
-		Given an image plane containing (tm, tn) pixels centered on the
-		optical axis, return (coords, depth), where the array coords
-		has shape (tm, tn, 2) and slice [i', j', :] yields the
-		fractional pixel coordinates of a point in a source plane that
-		projects onto image pixel (i', j'). The source plane is defined
-		as a grid of (m, n) pixels such that source pixel (i, j) has
-		coordinates
+		Given an image plane containing imgshape = (tm, tn) pixels
+		centered on the optical axis, return (coords, depth), where the
+		array coords has shape (tm, tn, 2) and slice [i', j', :] yields
+		the fractional pixel coordinates of a point in a source plane
+		that projects onto image pixel (i', j'). The source plane is
+		defined according to the rules of
 
-			crd(i, j) = origin + i * dm + j * dn
+			self.validatePixelGrid(m, n, basis, origin)
 
-		for 3-vectors origin, dm, and dn.
+		for (m, n) = srcshape.
 
 		The array depth has shape (tm, tn) and maps each image pixel to
 		its projective distance to the source plane.
@@ -280,24 +308,27 @@ class PinholeCamera(object):
 		The camera is assumed to have focal length f. If f is None, it
 		is determined with self.optimumFocalLength.
 		'''
+		tm, tn = imgshape
+		m, n = srcshape
+
 		if any(v < 1 for v in (tm, tn, m, n)):
 			raise ValueError('Pixel dimension tm, tn, m, and n must be positive')
 
 		nax = np.newaxis
 
-		origin, dm, dn = self._validatePixelGrid(origin, dm, dn)
+		m, n, (dm, dn), origin = self.validatePixelGrid(m, n, basis, origin)
 		normal = np.cross(dm, dn)
 
 		if f is None:
 			i, j = np.array([[0]*2 + [m-1]*2, [0, n-1]*2], dtype=float)
 			crd = origin[nax,:] + i[:,nax] * dm[nax,:] + j[:,nax] * dn[nax,:]
-			ncrd = self.normalizedCoords(crd)
+			ncrd = self.project(crd)
 
 			try: f = self.optimumFocalLength(ncrd, tm, tn)
 			except ValueError: f = 1.
 
 		# Rotate the source origin and normal into camera coordinates
-		p0 = self.normalizedCoords([origin])[0]
+		p0 = self.project(origin)
 		normal = np.dot(self.rotmat, normal)
 
 		eps = np.finfo(float).eps
@@ -306,23 +337,23 @@ class PinholeCamera(object):
 		# In camera coordinates, the line "origin" is 0
 		pn = np.dot(p0, normal)
 
-		# In degenerate cases, return all -1s
 		if abs(pn) < eps:
-			negone = -np.ones((tm, tn, 2), dtype=float)
-			return negone, negone
+			# In degenerate cases, return all -1s
+			return (-np.ones((tm, tn, 2), dtype=float),
+					-np.ones((tm, tn), dtype=float))
 
 		# Build a dense grid for projection
-		x, y = self.imgcoords(tm, tn)
+		lx, ly, hx, hy = self.imgbounds(tm, tn)
 		l = np.empty((tm, tn, 3), dtype=float)
-		l[:,:,0] = x
-		l[:,:,1] = y
+		l[:,:,0] = np.arange(lx, hx + 1, dtype=float)[:,nax]
+		l[:,:,1] = np.arange(ly, hy + 1, dtype=float)[nax,:]
 		# Image coordinates have z height of the focal length
 		l[:,:,2] = -f
 
 		# Project the image coordinates into the source plane
 		l *= (pn / np.dot(l, normal))[:,:,nax]
 		# Compute the distance from source plane to aperture
-		depth = np.sqrt(l[:,:,0]**2 + l[:,:,1]**2 + l[:,:,2]**2)
+		depth = np.sqrt(np.sum(l**2, axis=-1))
 
 		# Transform intersection points into source coordinates
 		crds = np.dot(l, self.rotmat) + self.center[nax,nax,:]
@@ -330,70 +361,10 @@ class PinholeCamera(object):
 		crds -= origin[nax,nax,:]
 		# This works because dm and dn are be orthogonal
 		# Clip out-of-bounds values
-		ic = (np.dot(crds, dm) / sum(v**2 for v in dm)).clip(-1, m)
-		jc = (np.dot(crds, dn) / sum(v**2 for v in dn)).clip(-1, n)
+		ic = (np.dot(crds, dm) / np.sum(dm**2)).clip(-1, m)
+		jc = (np.dot(crds, dn) / np.sum(dn**2)).clip(-1, n)
 
 		# Combine the pixel coordinates along the final axis
 		crds = np.array([ic, jc], dtype=float).transpose(1, 2, 0)
 
 		return crds, depth
-
-
-	def project(self, tm, tn, img, origin, dm, dn, f=None):
-		'''
-		Project, onto a camera image of shape (tm, tn) centered on the
-		camera axis, the source image img. Returns (pixmap, depthmap),
-		where pixmap is the projected image and depthmap maps each
-		projected pixel to a distance from the corresponding target
-		value to the camera pinhole. Linear interpolation is done using
-		the function scipy.interpolate.griddata.
-
-		Arguments origin, dm, and dn should be 3-vectors such that
-		pixel (i, j) in the source img has spatial coordinates
-
-			crd(i, j) = origin + i * dm + j * dn
-
-		(e.g., origin, dm, and dn have the same interpretation as for
-		self.normalizedCoords).
-
-		If f is not None, it should be a positive number which will be
-		the focal length of the camera for the projection. If f is
-		None, it will be determined with self.optimumFocalLength.
-
-		If self.optimumFocalLength fails for any reason, the focal
-		length will be assumed to be unity.
-
-		A front-image camera is assumed, so the coordinates will be in
-		the proper orientation.
-		'''
-		from scipy.interpolate import griddata
-
-		# Try to identify a single image or list of images
-		try:
-			img = np.asarray(img, dtype=float)
-			if img.ndim != 2: raise ValueError
-		except ValueError:
-			raise ValueError('Argument img must be a 2-D array')
-
-		# Determine the source shape and coordinates
-		m, n = img.shape
-		crd = self.normalizedCoords(m, n, origin, dm, dn)
-		crd = crd.reshape((m * n, 3), order='C')
-		# Negate the focus to make a front-image camera
-		crd[:,-1] = -crd[:,-1]
-
-		# Determine the focal length if necessary
-		if f is None:
-			try: f = self.optimumFocalLength(crd, tm, tn)
-			except ValueError: f = 1.0
-
-		# Homogeneous to image coordinates, with focal length
-		ncrd = f * crd[:,:2] / crd[:,2,np.newaxis]
-
-		# Interpolate the projected data onto the image grid
-		x, y = self.imgcoords(tm, tn)
-
-		pixels = griddata(ncrd, img.reshape((m * n,), order='C'), (x, y))
-		depth = griddata(ncrd, crd[:,-1], (x, y))
-
-		return pixels, depth
