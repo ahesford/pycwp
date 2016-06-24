@@ -8,6 +8,261 @@ Utilities for image manipulation.
 import numpy as np, math
 
 
+class MultiplaneProjector(object):
+	'''
+	A class that manages a group of image slices and a PinholeCamera
+	instance, projecting and compositing the slices onto the camera image
+	plane. Slices are referenced externally by user-provided keys.
+
+	Bilinear interpolation of source images during projections is
+	accomplished using scipy.interpolate.RegularGridInterpolator instances.
+	'''
+	def __init__(self, *args):
+		'''
+		Create a multiplane projector using an appropriately specified
+		camera.
+
+		If args are empty or a single argument is None, the projector
+		will have no associated camera.
+
+		If one argument is specified and it is an instance of
+		PinholeCamera, a reference will be stored in the camera
+		property of this object.
+
+		Otherwise, self.camera = PinholeCamera(*args).
+		'''
+		# Initialize an empty list of image slices and cached projections
+		self._slices = { }
+		self._imgcache = { }
+
+		la = len(args)
+
+		if not la or (la == 1 and args[0] is None):
+			self._camera = None
+		elif la == 1 and isinstance(args[0], PinholeCamera):
+			self._camera = args[0]
+		else:
+			self._camera = PinholeCamera(*args)
+
+
+	@property
+	def camera(self):
+		'''
+		The camera instance used to capture the composite image.
+		'''
+		return self._camera
+
+
+	@camera.setter
+	def camera(self, cam):
+		'''
+		Assign the PinholeCamera instance cam to the camera property.
+		'''
+		if cam is not None and not isinstance(cam, PinholeCamera):
+			raise ValueError('Property camera must be a PinholeCamera instance or None')
+
+		self._camera = cam
+		# Clear the image cache because new projections will be required
+		self._imgcache = { }
+
+
+	def boundingBox(self):
+		'''
+		A float array of shape (8, 3) that contains, along the rows,
+		the world coordinates of the cube that bounds all registered
+		image slices.
+		'''
+		x, y, z = [], [], []
+		nax = np.newaxis
+
+		if not len(self._slices):
+			return np.array([[]], dtype=float)
+
+		for _, (m, n), (dm, dn), o in self._slices.itervalues():
+			# Build the four corners of each slice
+			i, j = np.array([[0]*2 + [m-1]*2, [0, n-1]*2], dtype=float)
+			crd = o[nax,:] + i[:,nax] * dm[nax,:] + j[:,nax] * dn[nax,:]
+			# Add the coordinates
+			x.extend(crd[:,0])
+			y.extend(crd[:,1])
+			z.extend(crd[:,2])
+
+		lx, hx = min(x), max(x)
+		ly, hy = min(y), max(y)
+		lz, hz = min(z), max(z)
+
+		return np.array([[lx, ly, lz], [lx, hy, lz], [hx, ly, lz],
+			[hx, hy, lz], [lx, ly, hz], [lx, hy, hz],
+			[hx, ly, hz], [hx, hy, hz]], dtype=float)
+
+
+	def delslice(self, key, ignore_error=True):
+		'''
+		Attempt to remove a previously registered slice with the
+		provided key from the projector. If ignore_error is True, no
+		error will be raised if no image exists for the given key.
+		Otherwise, a KeyError will be raised if no image exists.
+		'''
+		# Always ignore missing keys in the cache
+		self._imgcache.pop(key, None)
+		# Ignore missing keys in the slice list if desired
+		try: self._slices.pop(key)
+		except KeyError as k:
+			if not ignore_error: raise k
+
+
+	def setslice(self, key, img, basis, origin):
+		'''
+		Register the provided image img, with a basis and origin as
+		processed by self.camera.validatePixelGrid (or, if self.camera
+		is None, PinholeCamera.validatePixelGrid) for projection and
+		associate the image with the provided key.
+
+		The image should be a 2-D Numpy array of floats.
+		'''
+		from scipy.interpolate import RegularGridInterpolator
+
+		img = np.asarray(img, dtype=float)
+
+		try: m, n = img.shape
+		except ValueError:
+			raise ValueError('Argument img should be a 2-D array')
+
+		# Validate the image grid
+		if self.camera is None:
+			validator = PinholeCamera.validatePixelGrid
+		else:
+			validator = self.camera.validatePixelGrid
+		m, n, basis, origin = validator(m, n, basis, origin)
+
+		# Build the image interpolator
+		idim = np.arange(float(m)), np.arange(float(n))
+		intp = RegularGridInterpolator(idim, img, bounds_error=False)
+
+		# Store the interpolator and grid information
+		self._slices[key] = (intp, (m, n), basis, origin)
+
+		# Remove any existing cached image for this key
+		self._imgcache.pop(key, None)
+
+
+	@staticmethod
+	def _validateImageSize(m, n):
+		'''
+		Ensure that m and n are both positive integers, returning m and
+		n as integers.
+		'''
+		mi, ni = int(m), int(n)
+		if mi != m or ni != n or mi < 1 or ni < 1:
+			raise ValueError('Image sizes (m, n) must be positive integers')
+		return mi, ni
+
+
+	def getslice(self, key, psize, f):
+		'''
+		Get, as (img, depth), the projected slice image and associated
+		depth map for the slice identified by key. The image will have
+		size psize and a focal length f.
+		
+		The local image cache is first checked for an existing image
+		and depth map with matching size and focal length. If no valid
+		image or depth map exists, both will be recomputed and stored
+		in the cache (possibly replacing a cached images for different
+		psize and f values).
+		'''
+		try:
+			intp, ssize, basis, origin = self._slices[key]
+		except (KeyError, ValueError):
+			raise KeyError('No valid image exists for key "%s"' % key)
+
+		cam = self.camera
+		if cam is None:
+			raise ValueError('Cannot project image when self.camera is None')
+
+		tm, tn = self._validateImageSize(*psize)
+
+		try:
+			img, depth, (cm, cn), cf = self._imgcache[key]
+		except (KeyError, ValueError):
+			pass
+		else:
+			if (tm, tn) == (cm, cn) and abs(cf - f) < np.finfo(float).eps:
+				return img, depth
+
+		# Need to recompute the slice
+		crds, depth = cam.rproject(psize, ssize, basis, origin, f)
+		img = intp(crds)
+
+		# Cache these results
+		self._imgcache[key] = img, depth, (tm, tn), f
+		return img, depth
+
+
+	def iterkeys(self):
+		'''
+		Return an iterator of slice keys registered with the projector.
+		'''
+		return self._slices.iterkeys()
+
+
+	def slicecount(self):
+		'''
+		Return the number of slices registered with the projector.
+		'''
+		return len(self._slices)
+
+
+	def composite(self, psize, f = None):
+		'''
+		Prepare a composite image, with a size psize = (m, n) and a
+		focal length f, of all registered planes for the current
+		camera.
+
+		If f is None, it will be be optimized so that all projections
+		fill the image plane with no clipping.
+		'''
+		cam = self.camera
+		if cam is None:
+			raise ValueError('Cannot composit image when self.camera is None')
+
+		tm, tn = self._validateImageSize(*psize)
+
+		if f is None:
+			ncrd = cam.project(self.boundingBox())
+			try: f = cam.optimumFocalLength(ncrd, tm, tn)
+			except ValueError: f = 1.
+
+		output = np.empty((tm, tn), dtype=float)
+		cdepth = np.empty((tm, tn), dtype=float)
+
+		output[:,:] = float('nan')
+
+		# Shorten the function names
+		_and = np.logical_and
+		_not = np.logical_not
+		_or = np.logical_or
+		_isnan = np.isnan
+
+		for key in self.iterkeys():
+			img, depth = self.getslice(key, (tm, tn), f)
+
+			onan = _isnan(output)
+			inan = _isnan(img)
+
+			# All NaNs can be replaced with valid image pixels
+			idx = _and(onan, _not(inan))
+			output[idx] = img[idx]
+			cdepth[idx] = depth[idx]
+
+			# Look for new pixels closer than existing pixels
+			# Restrict subsequent changes to previously valid pixels
+			idx = _and(_not(onan), _and(_not(inan), depth < cdepth))
+			output[idx] = img[idx]
+			cdepth[idx] = depth[idx]
+
+		return output
+
+
 class PinholeCamera(object):
 	'''
 	A class that projects planar images onto an image plane with an
@@ -161,7 +416,9 @@ class PinholeCamera(object):
 			nrm = np.cross(basis[0], basis[1]) / np.norm(nrm).
 
 		   Note that the normal nrm is normalized even if basis[0] or
-		   basis[1] are not.
+		   basis[1] are not. Also note that the direction of nrm
+		   follows the right-hand rule so, e.g., the normal for basis
+		   'xz' points in the -y direction.
 		'''
 		mi, ni = int(m), int(n)
 		if mi != m or ni != n or mi < 1 or ni < 1:
@@ -196,8 +453,10 @@ class PinholeCamera(object):
 
 		if origin.ndim == 0:
 			origin = origin[np.newaxis]
+		elif origin.ndim != 1:
+			raise ValueError('Argument origin must be None, scalar, 1-vector, or 3-vector')
 
-		if origin.ndim == 1:
+		if len(origin) <= 1:
 			try:
 				f = origin[0]
 				nrm = np.cross(basis[0], basis[1])
@@ -206,8 +465,8 @@ class PinholeCamera(object):
 				f, nrm = 0, 0
 			lm, ln, hm, hn = cls.imgbounds(m, n)
 			origin = lm * basis[0] + ln * basis[1] + f * nrm
-		elif origin.ndim != 3:
-			raise ValueError('Argument origin must be None, 1-D array, or 3-D array')
+		elif len(origin) != 3:
+			raise ValueError('Argument origin must be None, scalar, 1-vector, or 3-vector')
 
 		return mi, ni, basis, origin
 
