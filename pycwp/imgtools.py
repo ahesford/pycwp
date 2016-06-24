@@ -214,8 +214,8 @@ class MultiplaneProjector(object):
 
 	def composite(self, psize, f = None):
 		'''
-		Prepare a composite image, with a size psize = (m, n) and a
-		focal length f, of all registered planes for the current
+		Return a composite image and depth map, each with a size psize
+		and a focal length f, of all registered planes for the current
 		camera.
 
 		If f is None, it will be be optimized so that all projections
@@ -260,7 +260,7 @@ class MultiplaneProjector(object):
 			output[idx] = img[idx]
 			cdepth[idx] = depth[idx]
 
-		return output
+		return output, _isnan(output).choose(cdepth, float('nan'))
 
 
 class PinholeCamera(object):
