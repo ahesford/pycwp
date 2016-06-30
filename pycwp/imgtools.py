@@ -158,6 +158,14 @@ class MultiplaneProjector(object):
 		return mi, ni
 
 
+	def __contains__(self, key):
+		'''
+		Returns True when key is in the map of managed slices, False
+		otherwise.
+		'''
+		return self._slices.__contains__(key)
+
+
 	def getslice(self, key, psize, f):
 		'''
 		Get, as (img, depth), the projected slice image and associated
@@ -198,11 +206,12 @@ class MultiplaneProjector(object):
 		return img, depth
 
 
-	def iterkeys(self):
+	def keys(self, iterator=True):
 		'''
-		Return an iterator of slice keys registered with the projector.
+		Return an iterator (if iterator is True) or list (if iterator
+		is False) of slice keys registered with the projector.
 		'''
-		return self._slices.iterkeys()
+		return self._slices.iterkeys() if iterator else self._slices.keys()
 
 
 	def slicecount(self):
@@ -243,7 +252,7 @@ class MultiplaneProjector(object):
 		_or = np.logical_or
 		_isnan = np.isnan
 
-		for key in self.iterkeys():
+		for key in self.keys():
 			img, depth = self.getslice(key, (tm, tn), f)
 
 			onan = _isnan(output)
