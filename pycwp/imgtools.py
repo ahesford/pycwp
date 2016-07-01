@@ -245,12 +245,14 @@ class MultiplaneProjector(object):
 		cdepth = np.empty((tm, tn), dtype=float)
 
 		output[:,:] = float('nan')
+		cdepth[:,:] = float('nan')
 
 		# Shorten the function names
 		_and = np.logical_and
 		_not = np.logical_not
 		_or = np.logical_or
 		_isnan = np.isnan
+		_num = np.nan_to_num
 
 		for key in self.keys():
 			img, depth = self.getslice(key, (tm, tn), f)
@@ -265,7 +267,10 @@ class MultiplaneProjector(object):
 
 			# Look for new pixels closer than existing pixels
 			# Restrict subsequent changes to previously valid pixels
-			idx = _and(_not(onan), _and(_not(inan), depth < cdepth))
+			idx = _and(_not(onan),
+					_and(_not(inan),
+						# Remove NaN to prevent warnings
+						_num(depth) < _num(cdepth)))
 			output[idx] = img[idx]
 			cdepth[idx] = depth[idx]
 
