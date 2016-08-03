@@ -181,7 +181,7 @@ class MultiplaneProjector(object):
 		try:
 			intp, ssize, basis, origin = self._slices[key]
 		except (KeyError, ValueError):
-			raise KeyError('No valid image exists for key "%s"' % key)
+			raise KeyError('No valid image exists for key "%s"' % (key,))
 
 		cam = self.camera
 		if cam is None:
@@ -254,8 +254,9 @@ class MultiplaneProjector(object):
 		_isnan = np.isnan
 		_num = np.nan_to_num
 
-		for key in self.keys():
-			img, depth = self.getslice(key, (tm, tn), f)
+		for key in self.keys(iterator=False):
+			try: img, depth = self.getslice(key, (tm, tn), f)
+			except KeyError: continue
 
 			onan = _isnan(output)
 			inan = _isnan(img)
