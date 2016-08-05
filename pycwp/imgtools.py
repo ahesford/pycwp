@@ -78,7 +78,11 @@ class MultiplaneProjector(object):
 		if not len(self._slices):
 			return np.array([[]], dtype=float)
 
-		for _, (m, n), (dm, dn), o in self._slices.itervalues():
+		for key in self._slices.keys():
+			# Ignore slices that disappear during calculation
+			try: _, (m, n), (dm, dn), o = self._slices[key]
+			except KeyError: continue
+
 			# Build the four corners of each slice
 			i, j = np.array([[0]*2 + [m-1]*2, [0, n-1]*2], dtype=float)
 			crd = o[nax,:] + i[:,nax] * dm[nax,:] + j[:,nax] * dn[nax,:]
