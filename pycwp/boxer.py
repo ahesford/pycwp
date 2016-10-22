@@ -11,6 +11,23 @@ import sys, math, itertools
 
 from .util import lazy_property
 
+def _infmpy(a, b):
+	'''
+	Return a * b, unless one value has infinite magnitude and the other has
+	magnitude less than sys.float_info.min, in which case 0. will be
+	returned.
+	'''
+	# Make sure a has the smallest magnitude
+	aa, ab = abs(a), abs(b)
+	if aa > ab:
+		a, b = b, a
+		aa, ab = ab, aa
+
+	if ab < float('inf') or aa > sys.float_info.min:
+		return a * b
+
+	return 0.
+
 class Segment3D(object):
 	'''
 	A representation of a 3-D line segment.
@@ -55,8 +72,9 @@ class Segment3D(object):
 		return (ex - sx) / length, (ey - sy) / length, (ez - sz) / length
 
 	@lazy_property
-	def invdirection(self): 
-		return tuple(1. / d if d != 0. else float('inf') for d in self.direction)
+	def invdirection(self):
+		eps = sys.float_info.min
+		return tuple(1. / d if abs(d) > eps else float('inf') for d in self.direction)
 
 	@lazy_property
 	def midpoint(self): 
@@ -89,7 +107,7 @@ class Segment3D(object):
 		'''
 		dx = c - self.start[axis]
 		# Catch equality to zero to avoid NaN in parallel cases
-		return 0 if (dx == 0.) else (dx * self.invdirection[axis])
+		return _infmpy(dx, self.invdirection[axis])
 
 	def projection(self, point):
 		'''
@@ -251,21 +269,27 @@ class Box3D(object):
 		hi = self.cell2cart(ci + 1, cj + 1, ck + 1)
 		return Box3D(lo, hi)
 
+	def allIndices(self):
+		'''
+		Return a generator that produces every 3-D cell index within
+		the grid defined by the ncell property in row-major order.
+		'''
+		ni, nj, nk = self.ncell
+		return itertools.product(xrange(ni), xrange(nj), xrange(nk))
+
 	def allCells(self, enum=False):
 		'''
 		Return a generator that produces every cell in the grid defined
-		by the ncell property. Generation is done in row-major order.
+		by the ncell property. Generation is done in the same order as
+		self.allIndices().
 
 		If enum is True, return a tuple (idx, box), where idx is the
 		three-dimensional index of the cell.
 		'''
-		ni, nj, nk = self.ncell
-		for i in xrange(ni):
-			for j in xrange(nj):
-				for k in xrange(nk):
-					box = self.getCell((i, j, k))
-					if not enum: yield box
-					else: yield (idx, box)
+		for idx in self.allIndices():
+			box = self.getCell(idx)
+			if not enum: yield box
+			else: yield (idx, box)
 
 	def overlaps(self, b):
 		'''
@@ -309,29 +333,34 @@ class Box3D(object):
 		the segment ends within the box, tmax will exceed the segment
 		length.
 		'''
-		sx, sy, sz = segment.start
-		idx, idy, idz = segment.invdirection
+		try:
+			sx, sy, sz = segment.start
+			idx, idy, idz = segment.invdirection
+			seglen = segment.length
+		except AttributeError:
+			raise TypeError('Argument segment must behave like Segment3D')
+
 		lx, ly, lz = self.lo
 		hx, hy, hz = self.hi
 
 		# Check, in turn, intersections with the x, y and z slabs
-		tmin = (lx - sx) * idx
-		tmax = (hx - sx) * idx
+		tmin = _infmpy(lx - sx, idx)
+		tmax = _infmpy(hx - sx, idx)
 		if tmax < tmin: tmin, tmax = tmax, tmin
 		# Check the y-slab
-		ty1 = (ly - sy) * idy
-		ty2 = (hy - sy) * idy
+		ty1 = _infmpy(ly - sy, idy)
+		ty2 = _infmpy(hy - sy, idy)
 		if ty2 < ty1: ty1, ty2 = ty2, ty1
 		if ty2 < tmax: tmax = ty2
 		if ty1 > tmin: tmin = ty1
 		# Check the z-slab
-		tz1 = (lz - sz) * idz
-		tz2 = (hz - sz) * idz
+		tz1 = _infmpy(lz - sz, idz)
+		tz2 = _infmpy(hz - sz, idz)
 		if tz2 < tz1: tz1, tz2 = tz2, tz1
 		if tz2 < tmax: tmax = tz2
 		if tz1 > tmin: tmin = tz1
 
-		if tmax < max(0, tmin) or tmin > segment.length: return None
+		if tmax < max(0, tmin) or tmin > seglen: return None
 		return tmin, tmax
 
 	def raymarcher(self, segment):
@@ -414,3 +443,158 @@ class Box3D(object):
 						if t is not None:
 							intersections.append((i, j, k, t[0], t[1]))
 		return intersections
+
+
+class Octree(object):
+	'''
+	An multilevel oct-tree decomposition of a three-dimensional space,
+	wherein each level has a Box3D root defining its limits, and contains
+	up to eight Octree children (each representing an octant of the root).
+
+	Leafy children (those children of level 0) can be added to the tree
+	recursively and need not be Box3D objects.
+	'''
+	def __init__(self, level, box):
+		'''
+		Construct an oct tree with a depth of level. The created tree
+		has a rootbox property that is a Box3D object with lo and hi
+		bounds copied from the provided Box3D box. For levels greater
+		than 0, the rootbox is subdivided into (2, 2, 2) octant cells.
+
+		Each octant cell will be the rootBox for one child, but
+		children are created lazily when leaves are added with the
+		addleaves method. When created, the children will be
+		accumulated in the children property of this object, which maps
+		octant indices (i, j, k), where each index can take the value 0
+		or 1, to an Octree instance at (level - 1).
+		'''
+		self.level = int(level)
+		if self.level != level:
+			raise TypeError('Argument level must be an integer')
+		if self.level < 0:
+			raise ValueError('Argument level must be nonnegative')
+
+		self.rootbox = Box3D(box.lo, box.hi)
+		self.children = { }
+
+		# No further action is necessary at level 0
+		if self.level < 1: return
+
+		# Subdivide the root into octants and assign children
+		self.rootbox.ncell = (2, 2, 2)
+
+	def prune(self):
+		'''
+		Recursively remove all children that, themselves, have no
+		children. For level-0 trees, this is a no-op.
+		'''
+		if self.level < 1: return
+
+		# Keep track of empty children
+		nokids = set()
+		for k, v in self.children.iteritems():
+			# Prune the child to see if it is empty
+			v.prune()
+			if not v.children: nokids.add(k)
+
+		for idx in nokids:
+			try: del self.children[idx]
+			except KeyError: pass
+
+	def addleaves(self, leaves, predicate, multibox=False):
+		'''
+		Add leaves to the tree by populating the children property of
+		level-0 trees in the hierarchy that match the given predicate.
+		If any branches are missing from the tree, they will be created
+		as necessary.
+
+		The leaves should be a mapping from some arbitrary global
+		identifier to an some arbitrary leaf object. The keys and
+		values of the level-0 children maps will be the keys and
+		values, respectively, of the provided leaves.
+
+		The predicate should be a callable that takes positional
+		arguments box and leaf and returns True if the specified Box3D
+		box contains the object leaf. The predicate will be called for
+		boxes at every level of the tree while drilling down.
+
+		If multibox is True, all level-0 boxes that match the predicate
+		for a given leaf will record the leaf as a child. Otherwise,
+		only the first box to satisfy the predicate will own the box.
+		The tree is walked depth-first, with children encountered in
+		the order determined by the method Box3D.allIndices.
+
+		If no box contains an entry in leaves, that entry will be
+		silently ignored.
+
+		This method returns True if any leaf was added to the tree,
+		False otherwise.
+		'''
+		rbox = self.rootbox
+		added = False
+
+		for k, v in leaves.iteritems():
+			# Check whether the leaf belongs in this tree
+			if not predicate(rbox, v): continue
+
+			if self.level < 1:
+				# Just add the children at the finest level
+				self.children[k] = v
+				added = True
+				continue
+
+			# Add a higher level, try to add the leaf to children
+			kv = { k: v }
+			for idx in rbox.allIndices():
+				# Grab or create a child tree
+				try:
+					ctree = self.children[idx]
+				except KeyError:
+					cbox = rbox.getCell(idx)
+					ctree = Octree(self.level - 1, cbox)
+
+				# Add the leaf to the child tree, if possible
+				if ctree.addleaves(kv, predicate, multibox):
+					added = True
+					# Make sure the child is recorded
+					self.children.setdefault(idx, ctree)
+					if not multibox: break
+
+		return added
+
+	def search(self, predicate, multibox=True):
+		'''
+		Search the tree for all leaves in level-0 boxes that match the
+		callable predicate. The predicate should take a single
+		argument, which is a Box3D to test for a match. The tree is
+		recursively searched, depth-first, by testing the value of
+		predicate for each rootbox encountered when walking the tree. A
+		False response from the predicate aborts the walk down the
+		current branch.
+
+		The return value is a dictionary that is the union of the
+		children mappings for all matching level-0 boxes. The
+		dictionary will be empty if no matches are found, or if
+		matching level-0 boxes contain no children.
+
+		If multibox is False, the search will terminate after the first
+		matching level-0 box is found. Otherwise, all matching level-0
+		boxes will be identified.
+		'''
+		results = { }
+
+		if not predicate(self.rootbox): return results
+
+		if self.level < 1:
+			# Return the leaves of this matching level-0 box
+			results.update(self.children)
+			return results
+
+		# Check all children of a higher-level box
+		for ctree in self.children.itervalues():
+			cr = ctree.search(predicate, multibox)
+			if cr:
+				results.update(cr)
+				if not multibox: break
+
+		return results
