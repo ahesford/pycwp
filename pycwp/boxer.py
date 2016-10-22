@@ -543,7 +543,7 @@ class Octree(object):
 				added = True
 				continue
 
-			# Add a higher level, try to add the leaf to children
+			# At higher levels, try to add the leaf to children
 			kv = { k: v }
 			for idx in rbox.allIndices():
 				# Grab or create a child tree
@@ -562,39 +562,43 @@ class Octree(object):
 
 		return added
 
-	def search(self, predicate, multibox=True):
+	def search(self, predicate, leafpred=None):
 		'''
-		Search the tree for all leaves in level-0 boxes that match the
-		callable predicate. The predicate should take a single
-		argument, which is a Box3D to test for a match. The tree is
-		recursively searched, depth-first, by testing the value of
-		predicate for each rootbox encountered when walking the tree. A
-		False response from the predicate aborts the walk down the
-		current branch.
+		Perform a depth-first search of the tree. The order in which
+		children are followed is arbitrary.
 
-		The return value is a dictionary that is the union of the
-		children mappings for all matching level-0 boxes. The
-		dictionary will be empty if no matches are found, or if
-		matching level-0 boxes contain no children.
+		The callable predicate should take a single Box3D argument,
+		which will be the root of some branch of the Octree, and return
+		True to continue searching down the branch. If the predicate
+		evaluates to False, searching terminates along that branch.
 
-		If multibox is False, the search will terminate after the first
-		matching level-0 box is found. Otherwise, all matching level-0
-		boxes will be identified.
+		The optional callable leafpred should take as its sole argument
+		a leaf previously assigned to the tree using addleaves(). Any
+		leaf of a level-0 box that satisfies the predicate (along with
+		all of its parents) will be included in the search results if
+		leafpred(leaf) is True and ignored if leafpred(leaf) is False.
+		If leafpred is not specified, the default implementation always
+		returns True.
+
+		*** NOTE: The semantics of the queries imply that no leaf will
+		be included in the results unless it satisfies leafpred and
+		*ALL* of its ancestor boxes satisfy predicate.
+
+		The return value is a dictionary composed of the keys and
+		values of all matching leaves.
 		'''
-		results = { }
+		# Match is empty if the predicate fails
+		if not predicate(self.rootbox): return { }
 
-		if not predicate(self.rootbox): return results
-
-		if self.level < 1:
-			# Return the leaves of this matching level-0 box
-			results.update(self.children)
+		if self.level > 0:
+			# Recursively check branches
+			results = { }
+			for ctree in self.children.itervalues():
+				results.update(ctree.search(predicate, leafpred))
 			return results
 
-		# Check all children of a higher-level box
-		for ctree in self.children.itervalues():
-			cr = ctree.search(predicate, multibox)
-			if cr:
-				results.update(cr)
-				if not multibox: break
+		# With no leaf predicate, all leaves match
+		if not leafpred: return dict(self.children)
 
-		return results
+		# Otherwise, filter leaves by the leaf predicate
+		return { k: v for k, v in self.children.iteritems() if leafpred(v) }
