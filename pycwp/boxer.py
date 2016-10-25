@@ -12,7 +12,16 @@ import sys, math, itertools
 from itertools import izip, product as iproduct
 
 from .util import lazy_property
-from .cutil import dot, norm
+from .cutil import dot, norm, almosteq
+
+def _checkdims(p, d=3):
+	'''
+	Raise a TypeError unless the argument p is a sequence of length d.
+	'''
+	try:
+		if len(p) != d: raise TypeError
+	except TypeError:
+		raise TypeError('Sequence must have length %d', (d,))
 
 def _infdiv(a, b):
 	'''
@@ -28,7 +37,7 @@ def _infdiv(a, b):
 		sa = 2 * int(a >= 0) - 1
 		sb = 2 * int(b >= 0) - 1
 		return sa * sb * float('inf')
-	elif aa < eps:
+	elif aa <= eps:
 		return 0.
 
 	return a / b
@@ -43,18 +52,16 @@ class Segment3D(object):
 		indicated points.
 		'''
 		# Unpack the tuples to confirm dimensionality
-		try:
-			lx, ly, lz = start
-			hx, hy, hz = end
-		except (ValueError, TypeError):
-			raise TypeError('Start and end points must be sequences of length 3')
+		_checkdims(start)
+		_checkdims(end)
+
 		# Store an immutable, float copy of the start and end points
-		self._start = float(lx), float(ly), float(lz)
-		self._end = float(hx), float(hy), float(hz)
+		self._start = tuple(float(x) for x in start)
+		self._end = tuple(float(x) for x in end)
 
 		# Compute the line length
-		self._length = math.sqrt((hx - lx)**2 + (hy - ly)**2 + (hz - lz)**2)
-		if abs(self._length) <= sys.float_info.epsilon:
+		self._length = norm(x - y for x, y in izip(self._start, self._end))
+		if almosteq(self._length, 0.0):
 			raise ValueError('Segment must have nonzero length')
 
 	@property
@@ -95,28 +102,7 @@ class Segment3D(object):
 		For a given signed length t, return the Cartesian point on the
 		line through this segment which is a distance t from the start.
 		'''
-		sx, sy, sz = self.start
-		dx, dy, dz = self.direction
-
-		return sx + t * dx, sy + t * dy, sz + t * dz
-
-	def bezier(self, p, project=False):
-		'''
-		For a given 3-D Cartesian point p, return the signed length t
-		such that p, projected along the segment, is a distance t from
-		its start.
-
-		If project is False and the point is not on the line, None will
-		be returned.
-		'''
-		dl = self.direction
-		dp = tuple(v - w for v, w in izip(p, self.start))
-		t = dot(dp, dl)
-
-		if not project and norm(v - t * d for v, d in izip(dp, dl)) > sys.float_info.epsilon:
-			return None
-
-		return t
+		return tuple(x + t * d for x, d in izip(self.start, self.direction))
 
 	def lengthToAxisPlane(self, c, axis):
 		'''
@@ -138,22 +124,11 @@ class Triangle3D(object):
 	'''
 	A representation of a triangle embedded in 3-D space.
 	'''
-	@staticmethod
-	def _checkdims(p):
-		'''
-		Ensure that the argument p is a three-length sequence, or else
-		raise a TypeError.
-		'''
-		try:
-			if len(p) != 3: raise TypeError
-		except TypeError:
-			raise TypeError('Sequence must have length 3')
-
 	def __init__(self, nodes):
 		'''
 		Initialize a triangle from nodes in the given sequence.
 		'''
-		self._checkdims(nodes)
+		_checkdims(nodes)
 
 		try:
 			self.nodes = tuple((float(x), float(y), float(z)) for x, y, z in nodes)
@@ -173,7 +148,7 @@ class Triangle3D(object):
 
 		# Length of cross product of two sides is twice triangle area
 		self._area = 0.5 * mag
-		if abs(self._area) <= sys.float_info.epsilon:
+		if almosteq(self._area, 0.0):
 			raise ValueError('Triangle must have nonzero area')
 
 		# Scale the normal
@@ -229,7 +204,7 @@ class Triangle3D(object):
 		nodes = self.nodes
 		q0 = tuple(l - r for l, r in izip(nodes[0], nodes[2]))
 		r = (norm(q0),)
-		if r[0] <= sys.float_info.epsilon:
+		if almosteq(r[0], 0.0):
 			raise ValueError('Barycentric coordinates cannot be found in degenerate triangles')
 		q0 = tuple(v / r[0] for v in q0)
 
@@ -237,7 +212,7 @@ class Triangle3D(object):
 		r += (dot(q1, q0),)
 		q1 = tuple(v - r[1] * w for v, w in izip(q1, q0))
 		r += (norm(q1),)
-		if r[2] <= sys.float_info.epsilon:
+		if almosteq(r[2], 0.0):
 			raise ValueError('Barycentric coordinates cannot be found in degenerate triangles')
 		q1 = tuple(v / r[2] for v in q1)
 
@@ -251,12 +226,12 @@ class Triangle3D(object):
 		triangle. If project is False and the point is not in the plane
 		of the triangle, None will be returned.
 		'''
-		self._checkdims(p)
+		_checkdims(p)
 
 		d = tuple(v - w for v, w in izip(p, self.nodes[2]))
 
 		# Make sure the point is in the plane, if necessary
-		if not project and abs(dot(d, self.normal)) > sys.float_info.epsilon:
+		if not (project or almosteq(dot(d, self.normal), 0.0)):
 			return None
 
 		# Invert the orthogonal part of the QR system
@@ -274,7 +249,7 @@ class Triangle3D(object):
 		For a point p in barycentric coordinates, return the
 		corresponding Cartesian coordinates.
 		'''
-		self._checkdims(p)
+		_checkdims(p)
 
 		return tuple(dot(p, v) for v in izip(*self.nodes))
 
@@ -285,7 +260,7 @@ class Triangle3D(object):
 		try:
 			# Check the ranges of barycentric coordinates
 			return all(0 <= v <= 1 for v in self.barycentric(p))
-		except ValueError:
+		except (ValueError, TypeError):
 			# Barycentric conversion fails for out-of-plane points
 			return False
 
@@ -306,19 +281,16 @@ class Triangle3D(object):
 
 	def intersection(self, seg):
 		'''
-		Return the intersection of the segment seg with this triangle,
-		specified in units of length along the segment.
+		Return the intersection of the segment seg with this triangle
+		as (l, t, u, v), where l is the length along the segment seg
+		and (t, u, v) are the barycentric coordinates in the triangle.
 
-		If the segment and triangle do not intersect, this method
-		returns None.
+		If the segment and triangle are in the same plane, this method
+		raises a NotImplementedError without checking for intersection.
 
-		If the segment and triangle intersect and are parallel, this
-		method returns the lengths tmin and tmax that tightly bound the
-		intersection along the segment.
-
-		If the segment and triangle intersect but are not parallel, a
-		single length t that specifies the point of intersection will
-		be returned.
+		Otherwise, the method returns the length t along the segment
+		that defines the point of intersection. If the segment and
+		triangle do not intersect, None is returned.
 		'''
 		# Extend the barycentric QR factorization to a
 		# factorization for parametric line-plane intersection
@@ -335,9 +307,10 @@ class Triangle3D(object):
 		q2 = tuple(v - r4 * w for v, w in izip(q2, q1))
 		r5 = norm(q2)
 
-		if r5 <= sys.float_info.epsilon:
-			# Line is parallel to facet, either in or out of plane
-			# TODO: Check in-plane case
+		if almosteq(r5, 0.0):
+			# Line is parallel to facet
+			if almosteq(dot(y, self.normal), 0.0):
+				raise NotImplementedError('Segment seg is in plane of facet')
 			return None
 
 		q2 = tuple(v / r5 for v in q2)
@@ -346,11 +319,15 @@ class Triangle3D(object):
 		y = tuple(dot(y, b) for b in (q0, q1, q2))
 		v = y[2] / r5
 		u = (y[1] - r4 * v) / r2
-		t = (y[0] - r2 * v - r1 * u) / r0
+		t = (y[0] - r3 * v - r1 * u) / r0
 
-		# In this problem, length along the segment is v
-		if all(0 <= l <= 1 for l in (v, u, t)) and 0 <= u + t <= 1: return v
-		else: return None
+		if all(0 <= l <= 1 for l in (v, u, t)) and 0 <= u + t <= 1:
+			# v is the fraction of segment length
+			# t and u are normal barycentric coordinates in triangle
+			return v * seg.length, t, u, 1 - t - u
+		else:
+			# Intersection is not in segment or triangle
+			return None
 
 
 class Box3D(object):
@@ -361,16 +338,12 @@ class Box3D(object):
 		'''
 		Initialize a 3-D box with extreme corners lo and hi.
 		'''
-		# Unpack tuples to confirm dimensionality
-		try:
-			lx, ly, lz = lo
-			hx, hy, hz = hi
-		except (ValueError, TypeError):
-			raise TypeError('Corners must be sequences of length 3')
+		_checkdims(lo)
+		_checkdims(hi)
 
 		# Store an immutable, float copy of the corners
-		self._lo = float(lx), float(ly), float(lz)
-		self._hi = float(hx), float(hy), float(hz)
+		self._lo = tuple(float(x) for x in lo)
+		self._hi = tuple(float(x) for x in hi)
 
 		eps = sys.float_info.epsilon
 		if any(hv - lv <= eps for lv, hv in izip(self._lo, self._hi)):
@@ -399,15 +372,13 @@ class Box3D(object):
 
 	@ncell.setter
 	def ncell(self, c):
-		# Unpack tuple to confirm dimensionality
-		try: cx, cy, cz = c
-		except ValueError:
-			raise ValueError('Grid dimensions must be a 3-element sequence')
-
-		if cx < 1 or cy < 1 or cz < 1:
+		# Check for sane values
+		_checkdims(c)
+		if any(x < 1 for x in c):
 			raise ValueError('Grid dimensions must each be at least 1')
+
 		# Set the cell count
-		self._ncell = int(cx), int(cy), int(cz)
+		self._ncell = tuple(int(x) for x in c)
 		# Clear the cell-length property so it will be recomputed on demand
 		del self.cell
 
@@ -422,9 +393,8 @@ class Box3D(object):
 		'''The lengths of each cell in the grid defined by ncell'''
 		try: return self._cell
 		except AttributeError:
-			lx, ly, lz = self.length
-			nx, ny, nz = self.ncell
-			self._cell = lx / float(nx), ly / float(ny), lz / float(nz)
+			self._cell = tuple(d / float(l)
+					for d, l in izip(self.length, self.ncell))
 			return self._cell
 
 	@cell.deleter
@@ -451,19 +421,12 @@ class Box3D(object):
 		indicate relative positions in the cell. Otherwise, integer
 		indices are returned.
 		'''
-		lx, ly, lz = self.lo
-		cx, cy, cz = self.cell
-
-		px = (x - lx) / cx
-		py = (y - ly) / cy
-		pz = (z - lz) / cz
+		p = tuple((c - l) / d for c, l, d in izip((x,y,z), self.lo, self.cell))
 
 		if not frac:
-			px = int(px)
-			py = int(py)
-			pz = int(pz)
+			return tuple(int(c) for c in p)
 
-		return px, py, pz
+		return p
 
 	def cell2cart(self, i, j, k):
 		'''
@@ -471,14 +434,7 @@ class Box3D(object):
 		(i, j, k), defined by the box bounds and ncell property, into
 		Cartesian coordinates.
 		'''
-		lx, ly, lz = self.lo
-		cx, cy, cz = self.cell
-
-		px = i * cx + lx
-		py = j * cy + ly
-		pz = k * cz + lz
-
-		return px, py, pz
+		return tuple(n * d + l for n, l, d in izip((i,j,k), self.lo, self.cell))
 
 	def getCell(self, c):
 		'''
@@ -488,13 +444,10 @@ class Box3D(object):
 		If c does not contain integer types, the types will be
 		truncated. Cells outside the bounds of this box are allowed.
 		'''
-		try:
-			ci, cj, ck = c
-		except ValueError:
-			raise ValueError('Cell index must be a 3-element sequence')
-		ci, cj, ck = int(ci), int(cj), int(ck)
-		lo = self.cell2cart(ci, cj, ck)
-		hi = self.cell2cart(ci + 1, cj + 1, ck + 1)
+		_checkdims(c)
+		c = tuple(int(cv) for cv in c)
+		lo = self.cell2cart(*c)
+		hi = self.cell2cart(*(cv + 1 for cv in c))
 		return Box3D(lo, hi)
 
 	def allIndices(self):
@@ -502,8 +455,7 @@ class Box3D(object):
 		Return a generator that produces every 3-D cell index within
 		the grid defined by the ncell property in row-major order.
 		'''
-		ni, nj, nk = self.ncell
-		return iproduct(xrange(ni), xrange(nj), xrange(nk))
+		return iproduct(*(xrange(n) for n in self.ncell))
 
 	def allCells(self, enum=False):
 		'''

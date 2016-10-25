@@ -5,7 +5,7 @@ General-purpose numerical routines used in other parts of the module.
 # Copyright (c) 2015 Andrew J. Hesford. All rights reserved.
 # Restrictions are listed in the LICENSE file distributed with this package.
 
-import math, operator
+import sys, math, operator
 from itertools import izip, count
 
 
@@ -355,6 +355,15 @@ def rotate(x, y = 1):
 	y = y % len(x)
 
 	return x[y:] + x[:y]
+
+
+def almosteq(x, y, eps=sys.float_info.epsilon):
+	'''
+	Return True iff the difference between x and y is less than or equal to
+	M * eps, where M = max(abs(x), abs(y), 1.0f). The value eps should be
+	positive, but this is never enforced.
+	'''
+	return abs(x - y) <= eps * max(abs(x), abs(y), 1.0)
 
 
 def mse (x, y):
