@@ -5,9 +5,7 @@ General-purpose numerical routines used in other parts of the module.
 # Copyright (c) 2015 Andrew J. Hesford. All rights reserved.
 # Restrictions are listed in the LICENSE file distributed with this package.
 
-import numpy, math, operator
-from numpy import linalg as la, ma, fft
-from scipy import special as spec, ndimage
+import math, operator
 from itertools import izip, count
 
 
@@ -39,7 +37,9 @@ def asarray(a, rank=None, tailpad=True):
 	'''
 	if a is None: return None
 
-	a = numpy.asarray(a)
+	from numpy import asarray as npasarray, newaxis
+
+	a = npasarray(a)
 	nrank = a.ndim
 
 	if rank is None or rank == nrank: return a
@@ -47,7 +47,7 @@ def asarray(a, rank=None, tailpad=True):
 	if rank < nrank:
 		raise ValueError('Rank must not be less than "natural" rank of a')
 
-	sl = [slice(None)] * nrank + [numpy.newaxis] * (rank - nrank)
+	sl = [slice(None)] * nrank + [newaxis] * (rank - nrank)
 	if not tailpad: sl = list(reversed(sl))
 	return a[sl]
 
@@ -94,18 +94,18 @@ def vecnormalize(x, ord=None, axis=None):
 
 	The norm will be broadcast to the proper shape for normalization of x.
 	'''
-	# Grab the dtype of x (ensuring x is array-compatible
-	try: dtype = x.dtype
-	except AttributeError:
-		x = numpy.array(x)
-		dtype = x.dtype
+	from numpy import asarray as npasarray, finfo, fmax
+	from numpy.linalg import norm
+
+	# Grab the dtype of x (ensuring x is array-compatible)
+	x = npasarray(x)
 
 	# Find the smallest representable number for the dtype
-	try: eps = numpy.finfo(dtype).eps
+	try: eps = finfo(x.dtype).eps
 	except ValueError: eps = 1.0
 
 	# Find the norm, but don't allow it to fall below epsilon
-	n = numpy.fmax(la.norm(x, ord, axis), eps)
+	n = fmax(norm(x, ord, axis), eps)
 
 	if axis is None:
 		# If no axis was specified, n is a scalar;
@@ -118,7 +118,7 @@ def vecnormalize(x, ord=None, axis=None):
 	except ValueError: axis = [int(ax) for ax in axis]
 
 	# Prepare the list of slice objects for proper broadcasting
-	slicers = [slice(None) for i in range(numpy.ndim(x))]
+	slicers = [slice(None) for i in range(x.ndim)]
 	# Create a new axis for each axis reduced by the norm
 	for ax in axis: slicers[ax] = None
 
@@ -196,6 +196,8 @@ def fuzzyimg(img, nbr):
 	image. Assign to the center pixel a uniformly distributed random value
 	between the maximum and minimum of the neighborhood.
 	'''
+	from numpy import fmax, fmin
+	from numpy.random import rand
 	if nbr % 2 != 1: raise ValueError('Neighborhood must have odd dimensions')
 	half = (nbr - 1) / 2
 	ndim = len(img.shape)
@@ -212,12 +214,12 @@ def fuzzyimg(img, nbr):
 			lsl[d] = slice(i, None)
 			rsl[d] = slice(None, -i)
 			# Grab the max and min in the shifted regions
-			nmax[lsl] = numpy.fmax(nmax[lsl], img[rsl])
-			nmax[rsl] = numpy.fmax(nmax[rsl], img[lsl])
-			nmin[lsl] = numpy.fmin(nmin[lsl], img[rsl])
-			nmin[rsl] = numpy.fmin(nmin[rsl], img[lsl])
+			nmax[lsl] = fmax(nmax[lsl], img[rsl])
+			nmax[rsl] = fmax(nmax[rsl], img[lsl])
+			nmin[lsl] = fmin(nmin[lsl], img[rsl])
+			nmin[rsl] = fmin(nmin[rsl], img[lsl])
 
-	return numpy.random.rand(*img.shape).astype(img.dtype) * (nmax - nmin) + nmin
+	return rand(*img.shape).astype(img.dtype) * (nmax - nmin) + nmin
 
 
 def commongrid(lgrid, rgrid):
@@ -241,9 +243,9 @@ def commongrid(lgrid, rgrid):
 	and right grids, respectively.
 	'''
 
-	cgrid = [min(lv, rv) for lv, rv in zip(lgrid, rgrid)]
-	loff = [max(0, (lv - rv) / 2) for lv, rv in zip(lgrid, rgrid)]
-	roff = [max(0, (rv - lv) / 2) for lv, rv in zip(lgrid, rgrid)]
+	cgrid = [min(lv, rv) for lv, rv in izip(lgrid, rgrid)]
+	loff = [max(0, (lv - rv) / 2) for lv, rv in izip(lgrid, rgrid)]
+	roff = [max(0, (rv - lv) / 2) for lv, rv in izip(lgrid, rgrid)]
 	return cgrid, loff, roff
 
 
@@ -260,14 +262,17 @@ def smoothkern(w, s, n = 3):
 
 	with sigma = s.
 	'''
+	from numpy import zeros, sum as npsum
+	from scipy.ndimage import gaussian_filter
+
 	if w % 2 != 1: raise ValueError('Kernel width must be odd.')
 	lw = (w - 1) / 2
 	# Compute the restricted Gaussian kernel
-	k = numpy.zeros([w]*n)
+	k = zeros([w]*n)
 	sl = [slice(lw, lw+1)]*n
 	k[sl] = 1.
-	k = ndimage.gaussian_filter(k, s, mode='constant')
-	return k / numpy.sum(k)
+	k = gaussian_filter(k, s, mode='constant')
+	return k / npsum(k)
 
 
 def ceilpow2(x):
@@ -311,7 +316,7 @@ def hadamard(x, y):
 	'''
 	Compute the Hadamard product of iterables x and y.
 	'''
-	return map(operator.mul, x, y)
+	return tuple(xv * yv for xv, yv in izip(x, y))
 
 
 def prod(a):
@@ -325,7 +330,14 @@ def dot(x, y):
 	'''
 	Compute the dot product of two iterables.
 	'''
-	return sum(hadamard(x, y))
+	return sum(xv * yv for xv, yv in izip(x, y))
+
+
+def norm(x):
+	'''
+	Compute the norm of a vector x.
+	'''
+	return math.sqrt(sum(abs(xv)**2 for xv in x))
 
 
 def rotate(x, y = 1):
@@ -345,20 +357,12 @@ def rotate(x, y = 1):
 	return x[y:] + x[:y]
 
 
-def complexmax (a):
-	'''
-	Compute the maximum element of a complex array like MATLAB does.
-	'''
-	# Return the maximum value of a numpy matrix.
-	a = numpy.asarray(a)
-	return a.flat[numpy.argmax(numpy.abs(a))]
-
-
 def mse (x, y):
 	'''
-	Report the mean squared error between the matrix x and the matrix y.
+	Report the mean squared error between the sequences x and y.
 	'''
-	err = numpy.sum(numpy.abs(x - y)**2)
-	err /= numpy.sum(numpy.abs(y)**2)
-
-	return math.sqrt(err)
+	n = d = 0.
+	for xv, yv in izip(x, y):
+		n += abs(xv - yv)**2
+		d += abs(yv)**2
+	return math.sqrt(n / d)

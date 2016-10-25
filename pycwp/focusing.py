@@ -104,7 +104,6 @@ def focusfield (k, x, z, coeffs, theta, normalize=False):
 		fld += c * numpy.exp(1j * k * (x * math.sin(t) + z * math.cos(t)))
 
 	# Normalize the field if desired
-	if normalize:
-		fld /= cutil.complexmax(fld)
+	if normalize: fld /= max(fld.flat, key=abs)
 
 	return fld
