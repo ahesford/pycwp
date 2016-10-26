@@ -268,11 +268,7 @@ class Triangle3D(object):
 		'''
 		Returns True iff the Box3D b overlaps with this triangle.
 		'''
-		# If any node is in the box, the triangle overlaps
-		for node in self.nodes:
-			if b.overlaps(node): return True
-
-		# Otherwise, if any segment intersects the box, the triangle overlaps
+		# Check edge intersections with box
 		for edge in self.edges:
 			if b.intersection(edge): return True
 
@@ -475,23 +471,11 @@ class Box3D(object):
 		'''
 		Returns True iff the Box3D b overlaps with this box.
 		'''
-		al, ah = self.lo, self.hi
-		bl, bh = b.lo, b.hi
+		(alx, aly, alz), (ahx, ahy, ahz) = self.lo, self.hi
+		(blx, bly, blz), (bhx, bhy, bhz) = b.lo, b.hi
 
-		# Self is completely behind b
-		if ah[0] < bl[0]: return False
-		# Self is completely in front of b
-		if al[0] > bh[0]: return False
-		# Self is completely left of b
-		if ah[1] < bl[1]: return False
-		# Self is completely right of b
-		if al[1] > bh[1]: return False
-		# Self is completely below b
-		if ah[2] < bl[2]: return False
-		# Self is completely above b
-		if al[2] > bh[2]: return False
-
-		return True
+		return not (ahx < blx or alx > bhx or ahy < bly or
+				aly > bhy or ahz < blz or alz > bhz)
 
 	def contains(self, p):
 		'''
@@ -643,10 +627,14 @@ class Octree(object):
 
 		Each octant cell will be the rootBox for one child, but
 		children are created lazily when leaves are added with the
-		addleaves method. When created, the children will be
-		accumulated in the children property of this object, which maps
-		octant indices (i, j, k), where each index can take the value 0
-		or 1, to an Octree instance at (level - 1).
+		Octree.addleaves.
+
+		When created, descendants will be accumulated in the children
+		property of this object. For levels greater than 0, children is
+		a dictionary that maps octant indices (i, j, k), where each
+		index can take the value 0 or 1, to an Octree instance that
+		represents a branch at (level - 1). For level-0 trees, children
+		is just a set of arbitrary objects.
 		'''
 		self.level = int(level)
 		if self.level != level:
@@ -655,13 +643,16 @@ class Octree(object):
 			raise ValueError('Argument level must be nonnegative')
 
 		self.rootbox = Box3D(box.lo, box.hi)
-		self.children = { }
 
-		# No further action is necessary at level 0
-		if self.level < 1: return
+		# At level 0, children (leaves) are stored in a set
+		if self.level < 1:
+			self.children = set()
+			return
 
-		# Subdivide the root into octants and assign children
+		# Subdivide the root into octants
 		self.rootbox.ncell = (2, 2, 2)
+		# Children of nonzero levels are stored in a dictionary
+		self.children = { }
 
 	def prune(self):
 		'''
@@ -683,26 +674,22 @@ class Octree(object):
 
 	def addleaves(self, leaves, predicate, multibox=False):
 		'''
-		Add leaves to the tree by populating the children property of
-		level-0 trees in the hierarchy that match the given predicate.
-		If any branches are missing from the tree, they will be created
-		as necessary.
+		From the iterable leaves, populate the children of all level-0
+		branches in the Octree hierarchy according to the value of the
+		given predicate. If any branches are missing from the tree,
+		they will be created as necessary. Leaf objects must be
+		hashable.
 
-		The leaves should be a mapping from some arbitrary global
-		identifier to an some arbitrary leaf object. The keys and
-		values of the level-0 children maps will be the keys and
-		values, respectively, of the provided leaves.
-
-		The predicate should be a callable that takes positional
-		arguments box and leaf and returns True if the specified Box3D
-		box contains the object leaf. The predicate will be called for
+		The predicate must be a callable that takes two positional
+		arguments, box and leaf, and returns True iff the specified
+		Box3D box contains the leaf. The predicate will be called for
 		boxes at every level of the tree while drilling down.
 
-		If multibox is True, all level-0 boxes that match the predicate
-		for a given leaf will record the leaf as a child. Otherwise,
-		only the first box to satisfy the predicate will own the box.
-		The tree is walked depth-first, with children encountered in
-		the order determined by the method Box3D.allIndices.
+		If multibox is True, all level-0 boxes that satisfy the
+		predicate for a given leaf will record the leaf as a child.
+		Otherwise, only the first box to satisfy the predicate will own
+		the box.  The tree is walked depth-first, with children
+		encountered in the order determined by Box3D.allIndices.
 
 		If no box contains an entry in leaves, that entry will be
 		silently ignored.
@@ -713,18 +700,17 @@ class Octree(object):
 		rbox = self.rootbox
 		added = False
 
-		for k, v in leaves.iteritems():
+		for leaf in leaves:
 			# Check whether the leaf belongs in this tree
-			if not predicate(rbox, v): continue
+			if not predicate(rbox, leaf): continue
 
 			if self.level < 1:
 				# Just add the children at the finest level
-				self.children[k] = v
+				self.children.add(leaf)
 				added = True
 				continue
 
 			# At higher levels, try to add the leaf to children
-			kv = { k: v }
 			for idx in rbox.allIndices():
 				# Grab or create a child tree
 				try:
@@ -734,7 +720,7 @@ class Octree(object):
 					ctree = Octree(self.level - 1, cbox)
 
 				# Add the leaf to the child tree, if possible
-				if ctree.addleaves(kv, predicate, multibox):
+				if ctree.addleaves((leaf,), predicate, multibox):
 					added = True
 					# Make sure the child is recorded
 					self.children.setdefault(idx, ctree)
@@ -742,43 +728,46 @@ class Octree(object):
 
 		return added
 
-	def search(self, predicate, leafpred=None):
+	def search(self, boxpred, leafpred=None):
 		'''
-		Perform a depth-first search of the tree. The order in which
-		children are followed is arbitrary.
+		Perform a depth-first search of the tree to identify matching
+		leaves. A leaf is said to match the search iff the value of
+		Boolean value of leafpred(leaf) is True and the Boolean value
+		of boxpred(box) is True for the level-0 box that contains the
+		leaf and for all of its ancestors.
 
-		The callable predicate should take a single Box3D argument,
-		which will be the root of some branch of the Octree, and return
-		True to continue searching down the branch. If the predicate
-		evaluates to False, searching terminates along that branch.
+		The order in which children are followed is arbitrary.
+
+		The callable boxpred should take a single Box3D argument, which
+		will be the root of some branch of the Octree. If the Boolean
+		value of boxpred(box) for some box, the branch rooted on the
+		box will be further searched. Otherwise, searching will
+		terminate without checking descendants.
 
 		The optional callable leafpred should take as its sole argument
-		a leaf previously assigned to the tree using addleaves(). Any
-		leaf of a level-0 box that satisfies the predicate (along with
-		all of its parents) will be included in the search results if
-		leafpred(leaf) is True and ignored if leafpred(leaf) is False.
-		If leafpred is not specified, the default implementation always
-		returns True.
+		a leaf object previously assigned to the tree using the method
+		Octree.addleaves. If leafpred is not defined, the default
+		implementation returns True for every leaf.
 
-		*** NOTE: The semantics of the queries imply that no leaf will
-		be included in the results unless it satisfies leafpred and
-		*ALL* of its ancestor boxes satisfy predicate.
-
-		The return value is a dictionary composed of the keys and
-		values of all matching leaves.
+		The return value will be a dictionary mapping all leaf objects
+		that match the search to the value returned by leafpred(leaf).
 		'''
-		# Match is empty if the predicate fails
-		if not predicate(self.rootbox): return { }
+		# Match is empty if the box predicate fails
+		if not boxpred(self.rootbox): return { }
 
 		if self.level > 0:
 			# Recursively check branches
 			results = { }
 			for ctree in self.children.itervalues():
-				results.update(ctree.search(predicate, leafpred))
+				results.update(ctree.search(boxpred, leafpred))
 			return results
 
 		# With no leaf predicate, all leaves match
-		if not leafpred: return dict(self.children)
+		if not leafpred: return { c: True for c in self.children }
 
 		# Otherwise, filter leaves by the leaf predicate
-		return { k: v for k, v in self.children.iteritems() if leafpred(v) }
+		results = { }
+		for c in self.children:
+			lp = leafpred(c)
+			if lp: results[c] = lp
+		return results
