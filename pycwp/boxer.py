@@ -59,11 +59,6 @@ class Segment3D(object):
 		self._start = tuple(float(x) for x in start)
 		self._end = tuple(float(x) for x in end)
 
-		# Compute the line length
-		self._length = norm(x - y for x, y in izip(self._start, self._end))
-		if almosteq(self._length, 0.0):
-			raise ValueError('Segment must have nonzero length')
-
 	@property
 	def start(self):
 		'''The starting point of the segment'''
@@ -74,17 +69,24 @@ class Segment3D(object):
 		'''The ending point of the segment'''
 		return self._end
 
-	@property
+	@lazy_property
 	def length(self):
 		'''
 		The length of the line segment.
 		'''
-		return self._length
+		return norm(x - y for x, y in izip(self._start, self._end))
 
 	@lazy_property
 	def direction(self):
-		# Compute the normalized direction lazily
+		'''
+		The direction of the segment, normalized if the length is
+		nonzero.
+
+		In the special case that the length of the segment is
+		(approximately) zero, the direction will be (0., 0., 0.).
+		'''
 		length = self.length
+		if almosteq(length, 0.0): return (0., 0., 0.)
 		return tuple((e - s) / length for s,e in izip(self.start, self.end))
 
 	@lazy_property
@@ -96,6 +98,13 @@ class Segment3D(object):
 	@lazy_property
 	def majorAxis(self):
 		return max(enumerate(self.direction), key=lambda x: abs(x[1]))[0]
+
+	def bbox(self):
+		'''
+		A Box3D instance that bounds the segment.
+		'''
+		return Box3D(*zip(*((min(j), max(j))
+			for j in izip(self.start, self.end))))
 
 	def cartesian(self, t):
 		'''
@@ -172,16 +181,6 @@ class Triangle3D(object):
 		return self._area
 
 	@lazy_property
-	def edges(self):
-		'''
-		Return a list of line segments that define the sides of the
-		triangle, with segment i starting at self.node[i] and ending at
-		self.node[(i + 1) % 3] for i in range(3).
-		'''
-		nodes = self.nodes
-		return tuple(Segment3D(nodes[i], nodes[(i + 1) % 3]) for i in xrange(3))
-
-	@lazy_property
 	def qrbary(self):
 		'''
 		Returns, as (q, r), a representation of the thin QR
@@ -217,6 +216,22 @@ class Triangle3D(object):
 		q1 = tuple(v / r[2] for v in q1)
 
 		return (q0, q1), r
+
+	def edges(self):
+		'''
+		A generator that yields the three edges of the triangle as
+		Segment3D instances. The start node of edge i is self.node[i]
+		and the end node is self.node[(i+1) % 3].
+		'''
+		nodes = self.nodes
+		for i in xrange(3):
+			yield Segment3D(nodes[i], nodes[(i+1) % 3])
+
+	def bbox(self):
+		'''
+		A Box3D instance that bounds the triangle.
+		'''
+		return Box3D(*zip(*((min(j), max(j)) for j in izip(*self.nodes))))
 
 	def barycentric(self, p, project=False):
 		'''
@@ -269,11 +284,7 @@ class Triangle3D(object):
 		Returns True iff the Box3D b overlaps with this triangle.
 		'''
 		# Check edge intersections with box
-		for edge in self.edges:
-			if b.intersection(edge): return True
-
-		return False
-
+		return any(b.intersection(edge) for edge in self.edges())
 
 	def intersection(self, seg):
 		'''
@@ -342,8 +353,8 @@ class Box3D(object):
 		self._hi = tuple(float(x) for x in hi)
 
 		eps = sys.float_info.epsilon
-		if any(hv - lv <= eps for lv, hv in izip(self._lo, self._hi)):
-			raise ValueError('Coordinates of hi must be larger than those of lo')
+		if any(hv < lv for lv, hv in izip(self._lo, self._hi)):
+			raise ValueError('Coordinates of hi must be no less than those of lo')
 
 	@property
 	def lo(self):
