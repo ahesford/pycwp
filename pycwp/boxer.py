@@ -12,7 +12,7 @@ import sys, math, itertools
 from itertools import izip, product as iproduct
 
 from .util import lazy_property
-from .cutil import dot, norm, almosteq
+from .cutil import cross, dot, norm, almosteq
 
 def _checkdims(p, d=3):
 	'''
@@ -148,9 +148,9 @@ class Triangle3D(object):
 			n0 = self.nodes[i]
 			n1 = self.nodes[(i + 1) % 3]
 			n2 = self.nodes[(i + 2) % 3]
-			vx, vy, vz = [rv - lv for rv, lv in izip(n1, n0)]
-			wx, wy, wz = [rv - lv for rv, lv in izip(n2, n0)]
-			return vy * wz - vz * wy, vz * wx - vx * wz, vx * wy - vy * wx
+			v = [lv - rv for lv, rv in izip(n1, n0)]
+			w = [lv - rv for lv, rv in izip(n2, n0)]
+			return cross(v, w)
 
 		mag, nrm = max((norm(v), v)
 				for i in xrange(3) for v in [crosser(i)])
@@ -160,8 +160,11 @@ class Triangle3D(object):
 		if almosteq(self._area, 0.0):
 			raise ValueError('Triangle must have nonzero area')
 
-		# Scale the normal
-		self._normal = tuple(v / mag for v in nrm)
+		# Scale the normal and compute the distance to the origin
+		_normal = tuple(v / mag for v in nrm)
+		p = -dot(_normal, self.nodes[0])
+		# Store the normal and origin distance
+		self._normal = _normal + (p,)
 
 	def __repr__(self):
 		return self.__class__.__name__ + '(' + repr(self.nodes) + ')'
@@ -169,7 +172,11 @@ class Triangle3D(object):
 	@property
 	def normal(self):
 		'''
-		The unit normal to the plane containing the triangle.
+		A vector (a, b, c, d) such that n = (a, b, c) is the unit
+		normal of the plane containing the triangle and d is the
+		distance from the plane to the origin.
+
+		The resulting plane equation is ax + by + cz + d = 0.
 		'''
 		return self._normal
 
@@ -282,9 +289,51 @@ class Triangle3D(object):
 	def overlaps(self, b):
 		'''
 		Returns True iff the Box3D b overlaps with this triangle.
+		
+		This algorithm uses the method of Akenine-Moeller (2001) to
+		apply the separating axis theorem along the edges of the box
+		(this reduces to a bounding-box test), along the normal of the
+		facet (which determines whether the plane of the triangle cuts
+		the box), and along nine remaining axis formed as the cross
+		product of the edges of the box and edges of the triangle.
 		'''
-		# Check edge intersections with box
-		return any(b.intersection(edge) for edge in self.edges())
+		# Check bounding boxes first
+		if not b.overlaps(self.bbox()): return False
+
+		# Check if this plane intersects the cube
+		box = zip(b.lo, b.hi)
+		normal = self.normal
+		# Pick the p and n vertices of the cube
+		pvo, nvo = zip(*((int(v >= 0), int(v < 0)) for v in normal[:-1]))
+		pv, nv = zip(*((bl[pl], bl[nl]) for bl, pl, nl in izip(box, pvo, nvo)))
+		# p-vertex is in negative half space of triangle plane
+		if dot(normal, pv) < -normal[-1]: return False
+		# n-vertex is in positive half space of triangle plane
+		if dot(normal, nv) > -normal[-1]: return False
+
+		# Perform remaining SAT tests on 9 cross-product axes
+		nodes = self.nodes
+		center = b.midpoint
+		hlen = tuple(h / 2. for h in b.length)
+		# Shift coordinate origin to center of box
+		v = tuple(tuple(lv - rv for lv, rv in izip(node, center)) for node in nodes)
+
+		# Build the axes for each triangle edge
+		for j in xrange(3):
+			n0 = nodes[j]
+			n1 = nodes[(j + 1) % 3]
+			fx, fy, fz = tuple(lv - rv for lv, rv in izip(n1, n0))
+			# Expand cross products to leverage simple form
+			for a in ((0, -fz, fy), (fz, 0, -fx), (-fy, fx, 0)):
+				# Project edges onto new line
+				p = tuple(dot(a, vv) for vv in v)
+				# Project box onto new line
+				r = sum(hlv * abs(av) for hlv, av in izip(hlen, a))
+				# Test fails if no overlap exists
+				if min(p) > r or max(p) < -r: return False
+
+		# All tests pass; overlap detected
+		return True
 
 	def intersection(self, seg):
 		'''
@@ -699,7 +748,7 @@ class Octree(object):
 		If multibox is True, all level-0 boxes that satisfy the
 		predicate for a given leaf will record the leaf as a child.
 		Otherwise, only the first box to satisfy the predicate will own
-		the box.  The tree is walked depth-first, with children
+		the box. The tree is walked depth-first, with children
 		encountered in the order determined by Box3D.allIndices.
 
 		If no box contains an entry in leaves, that entry will be

@@ -333,6 +333,15 @@ def dot(x, y):
 	return sum(xv * yv for xv, yv in izip(x, y))
 
 
+def cross(x, y):
+	'''
+	Compute the cross product of two 3-element sequences.
+	'''
+	xx, xy, xz = x
+	yx, yy, yz = y
+	return xy * yz - xz * yy, xz * yx - xx * yz, xx * yy - xy * yx
+
+
 def norm(x):
 	'''
 	Compute the norm of a vector x.
