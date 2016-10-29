@@ -164,13 +164,13 @@ class Triangle3D(object):
 		_normal = tuple(v / mag for v in nrm)
 		p = -dot(_normal, self.nodes[0])
 		# Store the normal and origin distance
-		self._normal = _normal + (p,)
+		self._plane = _normal + (p,)
 
 	def __repr__(self):
 		return self.__class__.__name__ + '(' + repr(self.nodes) + ')'
 
 	@property
-	def normal(self):
+	def plane(self):
 		'''
 		A vector (a, b, c, d) such that n = (a, b, c) is the unit
 		normal of the plane containing the triangle and d is the
@@ -178,7 +178,7 @@ class Triangle3D(object):
 
 		The resulting plane equation is ax + by + cz + d = 0.
 		'''
-		return self._normal
+		return self._plane
 
 	@property
 	def area(self):
@@ -253,7 +253,7 @@ class Triangle3D(object):
 		d = tuple(v - w for v, w in izip(p, self.nodes[2]))
 
 		# Make sure the point is in the plane, if necessary
-		if not (project or almosteq(dot(d, self.normal), 0.0)):
+		if not (project or almosteq(dot(d, self.plane), 0.0)):
 			return None
 
 		# Invert the orthogonal part of the QR system
@@ -297,12 +297,18 @@ class Triangle3D(object):
 		the box), and along nine remaining axis formed as the cross
 		product of the edges of the box and edges of the triangle.
 		'''
-		# Check bounding boxes first
-		if not b.overlaps(self.bbox()): return False
-
-		# Check if this plane intersects the cube
+		# Group limits by axis as (lo, hi) for each
 		box = zip(b.lo, b.hi)
-		normal = self.normal
+		# Group nodes by axis as (x1, x2, x3), etc.
+		nodes = zip(*self.nodes)
+
+		# Out of bounds if all nodes are less than coordinate limits
+		if any(all(nv < lo for nv in ncrd) or
+				all(nv > hi for nv in ncrd)
+				for (lo, hi), ncrd in izip(box, nodes)):
+			return False
+
+		normal = self.plane
 		# Pick the p and n vertices of the cube
 		pvo, nvo = zip(*((int(v >= 0), int(v < 0)) for v in normal[:-1]))
 		pv, nv = zip(*((bl[pl], bl[nl]) for bl, pl, nl in izip(box, pvo, nvo)))
@@ -312,16 +318,13 @@ class Triangle3D(object):
 		if dot(normal, nv) > -normal[-1]: return False
 
 		# Perform remaining SAT tests on 9 cross-product axes
-		nodes = self.nodes
-		center = b.midpoint
 		hlen = tuple(h / 2. for h in b.length)
-		# Shift coordinate origin to center of box
-		v = tuple(tuple(lv - rv for lv, rv in izip(node, center)) for node in nodes)
+		# Shift node origin to box center, regroup by node
+		v = zip(*(tuple(lv - cv for lv in ncrd)
+			for ncrd, cv in izip(nodes, b.midpoint)))
 
 		# Build the axes for each triangle edge
-		for j in xrange(3):
-			n0 = nodes[j]
-			n1 = nodes[(j + 1) % 3]
+		for n0, n1 in izip(v, v[1:] + v[:1]):
 			fx, fy, fz = tuple(lv - rv for lv, rv in izip(n1, n0))
 			# Expand cross products to leverage simple form
 			for a in ((0, -fz, fy), (fz, 0, -fx), (-fy, fx, 0)):
@@ -365,7 +368,7 @@ class Triangle3D(object):
 
 		if almosteq(r5, 0.0):
 			# Line is parallel to facet
-			if almosteq(dot(y, self.normal), 0.0):
+			if almosteq(dot(y, self.plane), 0.0):
 				raise NotImplementedError('Segment seg is in plane of facet')
 			return None
 
