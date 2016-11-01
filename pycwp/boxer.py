@@ -289,7 +289,7 @@ class Triangle3D(object):
 	def overlaps(self, b):
 		'''
 		Returns True iff the Box3D b overlaps with this triangle.
-		
+
 		This algorithm uses the method of Akenine-Moeller (2001) to
 		apply the separating axis theorem along the edges of the box
 		(this reduces to a bounding-box test), along the normal of the
@@ -735,6 +735,58 @@ class Octree(object):
 			try: del self.children[idx]
 			except KeyError: pass
 
+	def branchForKey(self, *key):
+		'''
+		Query this tree for the branch (an Octree object) identified by
+		the provided key. The key, which must be a sequence, can be
+		provided as unpacked arguments or as a single argument.
+
+		The length of the key must be a multiple of three. If the key
+		is empty, self is returned. If the key is not empty, it is
+		split as
+
+			child = key[:3]
+			subkey = key[3:]
+
+		and a recursive result is returned by calling
+
+			self.children[child].branchForKey(subkey).
+
+		If a branch for the given child key does not exist, but the
+		child key represents a valid octant, the branch is created.
+
+		If the child key does not represent a valid octant, either
+		because the key has a length other than 0 or 3, or because the
+		child key contains values other than 0 or 1, a KeyError will be
+		raised. At level 0, any nonempty key will raise a KeyError.
+		'''
+		# Treat a single argument as a packed index
+		if len(key) == 1: key = key[0]
+
+		try:
+			child = tuple(key[:3])
+			subkey = key[3:]
+		except TypeError:
+			raise KeyError('Single argument must be a sequence')
+
+		if not len(child): return self
+
+		if self.level < 1:
+			raise KeyError('Key length greater than tree depth')
+		elif len(child) != 3:
+			raise KeyError('Key length must be a multiple of three')
+
+		if set(child).difference({ 0, 1 }):
+			raise KeyError('Indices of key must be 0 or 1')
+
+		try: ctree = self.children[child]
+		except KeyError:
+			cbox = self.rootbox.getCell(child)
+			ctree = Octree(self.level - 1, cbox)
+			self.children[child] = ctree
+
+		return ctree.branchForKey(subkey)
+
 	def addleaves(self, leaves, predicate, multibox=False):
 		'''
 		From the iterable leaves, populate the children of all level-0
@@ -776,20 +828,56 @@ class Octree(object):
 			# At higher levels, try to add the leaf to children
 			for idx in rbox.allIndices():
 				# Grab or create a child tree
-				try:
-					ctree = self.children[idx]
-				except KeyError:
-					cbox = rbox.getCell(idx)
-					ctree = Octree(self.level - 1, cbox)
-
+				ctree = self.branchForKey(idx)
 				# Add the leaf to the child tree, if possible
 				if ctree.addleaves((leaf,), predicate, multibox):
 					added = True
-					# Make sure the child is recorded
-					self.children.setdefault(idx, ctree)
 					if not multibox: break
 
 		return added
+
+	def mergeleaves(self, leaves):
+		'''
+		For each key-value pair leaves, a mapping from branch keys to
+		sets of leaf objects (in the same form produced by the method
+		Octree.getleaves), add all leaf objects in the set to the
+		level-0 branch indicated by the corresponding key.
+
+		A KeyError will be raised wihtout adding leaves if any keys
+		in the mapping fail to specify valid level-0 Octree branches.
+		Some intermediate branches may be added even if leaves are not
+		added, but the added branches will be empty in this case.
+
+		The same leaf object will be added to multiple level-0 branches
+		if the object is specified for multiple keys in the leaves
+		mapping.
+		'''
+		# Produce a list of (child, leaf-set) pairs for validation
+		bpairs = [ (self.branchForKey(key), set(lset))
+				for key, lset in leaves.iteritems() ]
+
+		# Ensure all branches are at level 0
+		if any(branch.level for branch, lset in bpairs):
+			raise KeyError('Branch keys in leaves mapping must idenify level-0 children')
+
+		# Add all of the children
+		for branch, lset in bpairs: branch.children.update(lset)
+
+	def getleaves(self):
+		'''
+		Return a mapping from addresses to leaf sets such that, for a
+		key-value pair (key, leaves) in the mapping, the branch
+		returned by self.branchForkey(key) is a level-0 Octree and
+		self.branchForKey(key).children == leaves.
+		'''
+		if self.level < 1:
+			# At the lowest level, The address is empty
+			return { (): set(self.children) }
+
+		# Build the mapping up for all children
+		return { tuple(key) + ck: cv
+			for key, ctree in self.children.iteritems()
+			for ck, cv in ctree.getleaves().iteritems() }
 
 	def search(self, boxpred, leafpred=None):
 		'''
