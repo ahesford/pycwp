@@ -10,7 +10,7 @@ solvers, Green's functions, and a split-step solver.
 import sys, math, cmath, numpy as np, scipy as sp
 from numpy import fft, linalg, random
 import scipy.special as spec, scipy.sparse.linalg as la, scipy.sparse as sparse
-from itertools import izip, product, repeat
+from itertools import izip, product as iproduct
 
 from . import cutil
 
@@ -292,7 +292,7 @@ def srcint(k, src, obs, cell, ifunc, n = 4, wts = None):
 	# Compute a sparse coordinate grid for sampling within the cell
 	coords = np.ogrid[[slice(n) for i in range(dim)]]
 	# Create an iterator factory to loop through coordinate pairs
-	enum = lambda c: product(*[cv.flat for cv in c])
+	enum = lambda c: iproduct(*[cv.flat for cv in c])
 
 	# Compute the cell-relative quadrature points
 	qpts = ([o + s * wts[i][0] for i, o, s in zip(c, src, sc)] for c in enum(coords))
@@ -836,3 +836,219 @@ class SplitPade(object):
 			outfld += pade.scatop(o, grid(x), self.dz, self.k0, 0., a)
 
 		return outfld
+
+
+class EikonalSweep(object):
+	'''
+	A class to represent a 3-D solution to the Eikonal equation on a
+	regular grid (as a pycwp.boxer.Box3D object) using the fast sweeping
+	method in Zhao, "A fast sweeping method for Eikonal equations", Math.
+	Comp. 74 (2005), 603--627.
+	'''
+	def __init__(self, box):
+		'''
+		Initialize the fast sweeping method on a pycwp.boxer.Box3D grid
+		box. The sweep object captures a reference to the box rather
+		than copying the box altogether.
+		'''
+		if any(ax < 2 for ax in box.ncell):
+			raise ValueError('Cell count in each dimension must exceed 1')
+		self.box = box
+
+
+	def _neighbor(self, t, pt, axis):
+		'''
+		Given a Numpy array t of shape self.box.ncell (the shape and
+		type of which are not checked), return the smaller of the
+		values that staddle index pt = (i, j, k) along the given axis.
+
+		If one neighbor value does not exist (because the point is on
+		an edge of the grid), the other neighbor is always returned.
+		'''
+		pt = tuple(pt)
+
+		lpt = pt[:axis] + (pt[axis] - 1,) + pt[axis+1:]
+		rpt = pt[:axis] + (pt[axis] + 1,) + pt[axis+1:]
+
+		if rpt[axis] >= self.box.ncell[axis]: return t[lpt]
+		if lpt[axis] < 0: return t[rpt]
+
+		return min(t[lpt], t[rpt])
+
+
+	def sweep(self, t, s, octant, inplace=False):
+		'''
+		Perform one fast sweep, with axial directions determined by the
+		quadrant argument (which must satisfy 0 <= octant < 8), to
+		update the Eikonal t for a slowness (inverse speed) s.
+
+		The return value is the tuple (nt, count), where nt is the
+		updated Eikonal and count is the number of modified grid
+		values; if count is 0, no values were changed in the sweep.
+
+		Both t and s must be 3-D Numpy arrays with a shape that matches
+		self.box.ncell, or compatible sequences that will be converted
+		as necessary.
+
+		The sweep uses a Godunov upwind difference scheme with
+		one-sided differences at the boundary. The directions of sweeps
+		along each axis are determined by decomposing the octant
+		bitfield (1 <= octant <= 8) into (x, y, z) bit values according
+		to the relationship
+
+			octant = (z << 2) & (y << 1) & x + 1
+
+		when 1 <= octant <= 8. The directions of the axial sweeps are
+		increasing (decreasing) when their respective bit values are 0
+		(1).
+
+		If inplace is True, the solution will be updated in place if
+		the input t is already a suitable array (i.e., the output of
+		asarray(t) is either t or a view on t). In this case, the first
+		return value of this method will be identical to t. The value
+		of inplace is ignored if asarray(t) creates a new array.
+		'''
+		if not 1 <= octant <= 9:
+			raise ValueError('Argument "octant" must satisfy 1 <= octant <= 8')
+
+		# Make sure s and t are properly shaped arrays
+		s = np.asarray(s)
+
+		grid = self.box.ncell
+
+		if grid != s.shape:
+			raise TypeError('Argument "s" must have shape %s' % (grid,))
+
+		# Always copy t if inplace is unwanted
+		if inplace: t = np.asarray(t)
+		else: t = np.array(t)
+
+		if grid != t.shape:
+			raise TypeError('Argument "t" must have shape %s' % (grid,))
+
+		# Offset octant to get a "zyx" bitfield, where the bit for
+		# each coordinate axis is 0 for forward and 1 for backward
+		octant -= 1
+
+		# Build the iterators for each axis
+		axiter = []
+		for nv in grid:
+			# Check the direction of the current axis
+			if not (octant & 0x1): axi = xrange(nv)
+			else: axi = xrange(nv - 1, -1, -1)
+			axiter.append(axi)
+			# Shift octant to pull the next axis
+			octant >>= 1
+
+		# Find scale factors for nonuniform grids
+		h = self.box.cell
+		hm = min(h)
+		h = tuple(hv / hm for hv in h)
+
+		# Perform the sweep and track updated values
+		updates = 0
+		for pt in iproduct(*axiter):
+			# Pull contributions along each axis, ordered by value
+			# Also note the step size along each axis
+			(a, b, c), (ha, hb, hc) = zip(*sorted(
+				(self._neighbor(t, pt, a), h[a]) for a in xrange(3)))
+
+			# First try a single-axis solution
+			fh = s[pt] * hm
+			nt = a + fh * ha
+
+			# If solution is too large, consider two axes
+			if nt > b:
+				# RHS and grid scales are only used squared
+				fh = fh**2
+				ha, hb = ha**2, hb**2
+				# Find terms in quadratic formula
+				Aq = ha + hb
+				Bq = hb * a + ha * b
+				Cq = hb * a**2 + ha * (b**2 - fh * hb)
+
+				nt = (Bq + math.sqrt(Bq**2 - Aq * Cq)) / Aq
+
+				# If solution is too large, need all three axes
+				if nt > c:
+					# Final axis scale was not previously squared
+					hc = hc**2
+					# Find terms in quadratic formula
+					Aq = hb * hc + ha * hc + ha * hb
+					Bq = hb * hc * a + ha * (hc * b + hb * c)
+					Cq = (hb * hc * (a**2 - fh * ha) +
+						ha * (hc * b**2 + hb * c**2))
+
+					nt = (Bq + math.sqrt(Bq**2 - Aq * Cq)) / Aq
+
+			if nt < t[pt]:
+				updates += 1
+				t[pt] = nt
+
+		return t, updates
+
+
+	def gauss(self, s, src, report=False):
+		'''
+		Given a slowness s, a 3-D Numpy array with shape self.box.ncell
+		or an array-compatible sequence, and a source location src in
+		natural coordinates, compute and return the Eikonal t (with the
+		same shape as s) that describes arrival times from the source
+		to every point in the domain according to the slowness map.
+		Gauss-Seidel iterations with alternating sweep directions are
+		applied until no updates are made to the arrival-time map.
+
+		For the purposes of initialization, boundary cells are assumed
+		to extend outward to infinity to provide "background" slowness
+		when a source falls outside of the grid.
+
+		If report is True, the total number of updated grid points will
+		be printed after each complete round of alternating sweeps.
+		'''
+		box = self.box
+		ncell = box.ncell
+
+		s = np.asarray(s)
+		if s.shape != ncell or not np.issubdtype(s.dtype, np.floating):
+			raise TypeError('Array "s" must be real with shape %s' % (ncell,))
+
+		src = np.asarray(src)
+		if src.ndim != 1 or len(src) != 3:
+			raise TypeError('Array "src" must be a three-element sequence')
+
+		# Find a (relaxed) upper bound on propagation distance
+		# First compute the distance from source to domain center
+		dmax = linalg.norm(src - box.midpoint)
+		# Now add the diameter of the sphere that encloses the domain
+		dmax += linalg.norm(box.length)
+
+		# Initialize arrival times to beyond-possible values
+		t = np.empty_like(s)
+		t[:,:,:] = np.max(s) * dmax
+
+		# Convert source to grid coords and find (extended) enclosing cell
+		src = np.array(box.cart2cell(*src))
+		sgrd = np.clip(src.astype(np.int64), (0,)*3, [n - 1 for n in ncell])
+
+		slw = s[tuple(sgrd)]
+		h = box.cell
+
+		# Assign arrival-time values to grid points surrounding cell
+		for inc in iproduct(xrange(2), repeat=3):
+			# Check that the grid point is valid
+			npt = tuple(sgrd + inc)
+			if any(x >= n for x, n in izip(npt, box.ncell)): continue
+			t[npt] = slw * linalg.norm((src - npt) * h)
+
+		it = 0
+		while True:
+			updates = 0
+			for octant in xrange(1, 9):
+				t, upc = self.sweep(t, s, octant, True)
+				if report:
+					print 'Iteration %d, octant %d: %d updates' % (it, octant, upc)
+				updates += upc
+			it += 1
+			if not updates: break
+
+		return t
