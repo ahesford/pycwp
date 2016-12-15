@@ -8,13 +8,10 @@ data.
 # Restrictions are listed in the LICENSE file distributed with this package.
 
 __all__ = [
-		'aca', 'boxer', 'cutil', 'cltools', 'fdtd', 'focusing',
+		'aca', 'boxer', 'cutil', 'cltools', 'cytools', 'fdtd', 'focusing',
 		'geom', 'harmonic', 'imgtools', 'mio', 'process', 'poly',
 		'quad', 'scattering', 'segmentation', 'shtransform', 'signal',
 		'stats', 'util', 'wavetools',
 	]
 
 from . import *
-
-# ftntools is not imported by default because it depends on external FFTW
-__all__.append('ftntools')

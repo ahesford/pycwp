@@ -25,9 +25,9 @@ def configuration(parent_package='', top_path=None):
 	return config
 
 if __name__ == '__main__': 
-	from numpy.distutils.core import setup, Extension
+	from numpy.distutils.core import setup
 
-	setup(name = "pycwp", version = "2.15",
+	setup(name = "pycwp", version = "3.0",
 		description = DOCLINES[0],
 		long_description = "\n".join(DOCLINES[2:]),
 		author = "Andrew J. Hesford", author_email = "ahesford@mac.com",
