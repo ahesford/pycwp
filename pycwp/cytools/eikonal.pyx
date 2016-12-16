@@ -61,7 +61,7 @@ class FastSweep(object):
 			unsigned int octant, inplace=False):
 		'''
 		Perform one fast sweep, with axial directions determined by the
-		quadrant argument (which must satisfy 1 <= octant < 8), to
+		quadrant argument (which must satisfy 0 <= octant <= 7), to
 		update the Eikonal rt for a slowness (inverse speed) rs.
 
 		The return value is the tuple (nt, count), where nt is the
@@ -75,13 +75,12 @@ class FastSweep(object):
 		The sweep uses a Godunov upwind difference scheme with
 		one-sided differences at the boundary. The directions of sweeps
 		along each axis are determined by decomposing the octant
-		bitfield (1 <= octant <= 8) into (x, y, z) bit values according
-		to the relationship
+		bitfield into (x, y, z) bit values using the relationship
 
-			octant = (z << 2) & (y << 1) & x + 1
+			octant = (z << 2) & (y << 1) & x.
 
-		when 1 <= octant <= 8. The directions of axial sweeps increase
-		(decrease) when their respective bit values are 0 (1).
+		The directions of axial sweeps increase (decrease) when their
+		respective bit values are 0 (1).
 
 		If inplace is True, the solution will be updated in place if
 		the input rt is already a suitable array (i.e., the output of
@@ -94,8 +93,8 @@ class FastSweep(object):
 		cdef long i, j, k, di, dj, dk
 		cdef double hm, fh, Aq, Bq, Cq, nt, a, b, c, hx, hy, hz
 
-		if not 1 <= octant <= 8:
-			raise ValueError('Argument "octant" must satisfy 1 <= octant <= 8')
+		if not octant < 8:
+			raise ValueError('Argument "octant" must satisfy 0 <= octant <= 7')
 
 		# Pull and check the grid sizes
 		nx, ny, nz = self.box.ncell
@@ -121,8 +120,6 @@ class FastSweep(object):
 		if hy < hm: hm = hy
 		if hz < hm: hm = hz
 		hx, hy, hz = hx / hm, hy / hm, hz / hm
-
-		octant -= 1
 
 		# Determine the direction of sweeps
 		di = 1 if not(octant & 0x1) else -1
@@ -229,6 +226,10 @@ class FastSweep(object):
 		if s.shape != ncell:
 			raise TypeError('Array "s" must have  shape %s' % (ncell,))
 
+		# Start sweeping in the dominant direction
+		mp = tuple(int(m < c) for c, m in izip(src, box.midpoint))
+		soct = (mp[2] << 2) | (mp[1] << 1) | mp[0]
+
 		# Convert source to grid coords and find (extended) enclosing cell
 		src = box.cart2cell(*src)
 		sgrd = tuple(max(0, min(int(c), n - 1)) for c, n in izip(src, ncell))
@@ -251,7 +252,8 @@ class FastSweep(object):
 		it = 0
 		while True:
 			updates = 0
-			for octant in xrange(1, 9):
+			for octant in xrange(soct, soct + 8):
+				octant = octant % 8
 				t, upc = self.sweep(t, s, octant, True)
 				if report:
 					print 'Iteration %d (%d): %d updates' % (it, octant, upc)
