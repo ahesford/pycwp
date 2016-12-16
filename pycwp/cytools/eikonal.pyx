@@ -8,48 +8,35 @@ from math import sqrt
 from libc.math cimport sqrt
 
 from itertools import izip, product as iproduct
-from numpy import linalg
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-@cython.nonecheck(False)
-cdef np.float64_t minnbr(np.ndarray[np.float64_t, ndim=3] t, unsigned int axis,
-		unsigned long i, unsigned long j, unsigned long k):
+cdef double minnbr(double[:] t, unsigned long i):
 	'''
-	Find the neighbor of t[i,j,k], along the specified axis, with minimum
-	value. When (i, j, k) is along a boundary, the neighbor away from the
-	boundary is always returned.
+	For a 1-D array t of length n, return
 
-	No safety check is performed to verify that at least one neighbor
-	exists (i.e., that the thickness of the array is at least 2 and that
-	(i, j, k) is a valid entry in the array.
+		min(t[i - 1], t[i + 1])
+
+	if both are legitimate indices into t. If only one is a valid index,
+	the corresponding value is returned. If neither is valid, a ValueError
+	will be raised.
 	'''
-	cdef unsigned long nx, ny, nz
-	cdef long ri, rj, rk, li, lj, lk
-	nx, ny, nz = t.shape[0], t.shape[1], t.shape[2]
+	cdef long l, r
 
-	ri, rj, rk = i, j, k
-	li, lj, lk = i, j, k
+	l, r = i - 1, i + 1
 
-	if axis == 0:
-		ri, li = i + 1, i - 1
-	elif axis == 1:
-		rj, lj = j + 1, j - 1
-	elif axis == 2:
-		rk, lk = k + 1, k - 1
-	else: raise ValueError('Value of "axis" must satisfy 0 <= axis <= 2')
+	if r >= t.shape[0]:
+		if l < 0: raise ValueError('No in-bounds neighbor exists')
+		return t[l]
 
-	if ri >= nx or rj >= ny or rk >= nz:
-		return t[li, lj, lk]
-	if li < 0 or lj < 0 or lk < 0:
-		return t[ri, rj, rk]
+	if l < 0: return t[r]
 
-	cdef double lt = t[li, lj, lk]
-	cdef double rt = t[ri, rj, rk]
+	cdef double lt = t[l]
+	cdef double rt = t[r]
 	if lt < rt: return lt
 	else: return rt
 
-class EikonalSweep(object):
+class FastSweep(object):
 	'''
 	A class to represent a 3-D solution to the Eikonal equation on a
 	regular grid (as a pycwp.boxer.Box3D object) using the fast sweeping
@@ -68,7 +55,10 @@ class EikonalSweep(object):
 
 	@cython.boundscheck(False)
 	@cython.wraparound(False)
-	def sweep(self, rt not None, rs not None, unsigned int octant, inplace=False):
+	@cython.cdivision(True)
+	@cython.embedsignature(True)
+	def sweep(self, rt not None, rs not None,
+			unsigned int octant, inplace=False):
 		'''
 		Perform one fast sweep, with axial directions determined by the
 		quadrant argument (which must satisfy 1 <= octant < 8), to
@@ -90,15 +80,15 @@ class EikonalSweep(object):
 
 			octant = (z << 2) & (y << 1) & x + 1
 
-		when 1 <= octant <= 8. The directions of the axial sweeps are
-		increasing (decreasing) when their respective bit values are 0
-		(1).
+		when 1 <= octant <= 8. The directions of axial sweeps increase
+		(decrease) when their respective bit values are 0 (1).
 
 		If inplace is True, the solution will be updated in place if
 		the input rt is already a suitable array (i.e., the output of
-		asarray(rt) is either rt or a view on rt). In this case, the
-		first return value of this method will be identical to rt. The
-		value of inplace is ignored if asarray(rt) creates a new array.
+		asarray(rt, dytpe=float64) is either rt or a view on rt). In
+		this case, the first return value of this method will be
+		identical to rt. The value of inplace is ignored if asarray
+		creates a new array.
 		'''
 		cdef unsigned long nx, ny, nz, updates
 		cdef long i, j, k, di, dj, dk
@@ -108,27 +98,25 @@ class EikonalSweep(object):
 			raise ValueError('Argument "octant" must satisfy 1 <= octant <= 8')
 
 		# Pull and check the grid sizes
-		grid = self.box.ncell
-		nx, ny, nz = grid[0], grid[1], grid[2]
+		nx, ny, nz = self.box.ncell
 		if nx < 2 or ny < 2 or nz < 2:
 			raise ValueError('Grid length must be at least 2 along all axes')
 
 		# Convert the arrays and check types
-		cdef np.ndarray[np.float64_t, ndim=3] t
+		cdef double[:,:,:] t
 		if inplace: t = np.asarray(rt, dtype=np.float64)
-		else: t = np.array(rt, dtype=np.float64)
+		else: t = np.array(rt, copy=True, dtype=np.float64)
 
 		if t.shape[0] != nx or t.shape[1] != ny or t.shape[2] != nz:
 			raise ValueError('Shape of "t" must match grid')
 
-		cdef np.ndarray[np.float64_t, ndim=3] s = np.asarray(rs, dtype=np.float64)
+		cdef double[:,:,:] s = np.asarray(rs, dtype=np.float64)
 
 		if s.shape[0] != nx or s.shape[1] != ny or s.shape[2] != nz:
 			raise ValueError('Shape of "s" must match grid')
 
 		# Find minimum step size and scale others
-		cell = self.box.cell
-		hx, hy, hz = cell[0], cell[1], cell[2]
+		hx, hy, hz = self.box.cell
 		hm = hx
 		if hy < hm: hm = hy
 		if hz < hm: hm = hz
@@ -141,17 +129,26 @@ class EikonalSweep(object):
 		dj = 1 if not(octant & 0x2) else -1
 		dk = 1 if not(octant & 0x4) else -1
 
+		# Accumulate a count of updated grid points
 		updates = 0
+
+		# k-slices of t are independent of the inner loop
+		# i- and j-slices depend on inner loop and cannot be cached
+		cdef double[:] tk
+
 		i = 0 if di > 0 else (nx - 1)
 		while 0 <= i < nx:
 			j = 0 if dj > 0 else (ny - 1)
 			while 0 <= j < ny:
+				# Pull the relevant k-slice of t
+				tk = t[i,j,:]
+
 				k = 0 if dk > 0 else (nz - 1)
 				while 0 <= k < nz:
 					# Find the neighbors
-					a = minnbr(t, 0, i, j, k)
-					b = minnbr(t, 1, i, j, k)
-					c = minnbr(t, 2, i, j, k)
+					a = minnbr(t[:,j,k], i)
+					b = minnbr(t[i,:,k], j)
+					c = minnbr(tk, k)
 
 					ha, hb, hc = hx, hy, hz
 
@@ -206,7 +203,7 @@ class EikonalSweep(object):
 				j += dj
 			i += di
 
-		return t, updates
+		return np.asarray(t), updates
 
 	def gauss(self, s, src, report=False):
 		'''
@@ -228,31 +225,28 @@ class EikonalSweep(object):
 		box = self.box
 		ncell = box.ncell
 
-		s = np.asarray(s)
-		if s.shape != ncell or not np.issubdtype(s.dtype, np.floating):
-			raise TypeError('Array "s" must be real with shape %s' % (ncell,))
-
-		src = np.asarray(src)
-		if src.ndim != 1 or len(src) != 3:
-			raise TypeError('Array "src" must be a three-element sequence')
-
-		# Initialize arrival times to beyond-possible values
-		t = np.empty_like(s)
-		t[:,:,:] = float('inf')
+		s = np.asarray(s, dtype=np.float64)
+		if s.shape != ncell:
+			raise TypeError('Array "s" must have  shape %s' % (ncell,))
 
 		# Convert source to grid coords and find (extended) enclosing cell
-		src = np.array(box.cart2cell(*src))
-		sgrd = np.clip(src.astype(np.int64), (0,)*3, [n - 1 for n in ncell])
+		src = box.cart2cell(*src)
+		sgrd = tuple(max(0, min(int(c), n - 1)) for c, n in izip(src, ncell))
 
-		slw = s[tuple(sgrd)]
+		slw = s[sgrd]
 		h = box.cell
+
+		# Initialize arrival times to beyond-possible values
+		t = np.empty(s.shape, dtype=np.float64, order='C')
+		t[:,:,:] = float('inf')
 
 		# Assign arrival-time values to grid points surrounding cell
 		for inc in iproduct(xrange(2), repeat=3):
 			# Check that the grid point is valid
-			npt = tuple(sgrd + inc)
-			if any(x >= n for x, n in izip(npt, box.ncell)): continue
-			t[npt] = slw * linalg.norm((src - npt) * h)
+			npt = tuple(c + i for c, i in izip(sgrd, inc))
+			if any(x >= n for x, n in izip(npt, ncell)): continue
+			t[npt] = slw * sqrt(sum((hv * (c - i))**2
+						for c, i, hv in izip(src, npt, h)))
 
 		it = 0
 		while True:
@@ -260,7 +254,7 @@ class EikonalSweep(object):
 			for octant in xrange(1, 9):
 				t, upc = self.sweep(t, s, octant, True)
 				if report:
-					print 'Iteration %d, octant %d: %d updates' % (it, octant, upc)
+					print 'Iteration %d (%d): %d updates' % (it, octant, upc)
 				updates += upc
 			it += 1
 			if not updates: break
