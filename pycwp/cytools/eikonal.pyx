@@ -1,6 +1,8 @@
 import cython
 cimport cython
 
+from cython cimport floating as real
+
 import numpy as np
 cimport numpy as np
 
@@ -11,28 +13,28 @@ from itertools import izip, product as iproduct
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-cdef double minnbr(double[:] t, unsigned long i):
+cdef real minnbr(real[:] t, unsigned long i):
 	'''
 	For a 1-D array t of length n, return
 
 		min(t[i - 1], t[i + 1])
 
 	if both are legitimate indices into t. If only one is a valid index,
-	the corresponding value is returned. If neither is valid, a ValueError
-	will be raised.
+	the corresponding value is returned. If neither is valid, infinity will
+	be returned.
 	'''
 	cdef long l, r
 
 	l, r = i - 1, i + 1
 
 	if r >= t.shape[0]:
-		if l < 0: raise ValueError('No in-bounds neighbor exists')
+		if l < 0: return <real>float('inf')
 		return t[l]
 
 	if l < 0: return t[r]
 
-	cdef double lt = t[l]
-	cdef double rt = t[r]
+	cdef real lt = t[l]
+	cdef real rt = t[r]
 	if lt < rt: return lt
 	else: return rt
 
@@ -43,6 +45,7 @@ class FastSweep(object):
 	method in Zhao, "A fast sweeping method for Eikonal equations", Math.
 	Comp. 74 (2005), 603--627.
 	'''
+	@cython.embedsignature(True)
 	def __init__(self, box):
 		'''
 		Initialize the fast sweeping method on a pycwp.boxer.Box3D grid
@@ -56,21 +59,22 @@ class FastSweep(object):
 	@cython.boundscheck(False)
 	@cython.wraparound(False)
 	@cython.cdivision(True)
-	@cython.embedsignature(True)
-	def sweep(self, rt not None, rs not None,
-			unsigned int octant, inplace=False):
+	def sweep(self, real[:,:,:] t not None, real[:,:,:] s not None,
+			unsigned int octant, bint inplace=False):
 		'''
+		FastSweep.sweep(t, s, octant, inplace=False)
+
 		Perform one fast sweep, with axial directions determined by the
 		quadrant argument (which must satisfy 0 <= octant <= 7), to
-		update the Eikonal rt for a slowness (inverse speed) rs.
+		update the Eikonal t for a slowness (inverse speed) s.
 
 		The return value is the tuple (nt, count), where nt is the
 		updated Eikonal and count is the number of modified grid
 		values; if count is 0, no values were changed in the sweep.
 
-		Both rt and rs must be 3-D Numpy arrays with a shape that
-		matches self.box.ncell, or compatible sequences that will be
-		converted as necessary.
+		Both t and s must be 3-D Numpy arrays with a shape that matches
+		self.box.ncell, or compatible sequences that will be converted
+		as necessary.
 
 		The sweep uses a Godunov upwind difference scheme with
 		one-sided differences at the boundary. The directions of sweeps
@@ -82,16 +86,14 @@ class FastSweep(object):
 		The directions of axial sweeps increase (decrease) when their
 		respective bit values are 0 (1).
 
-		If inplace is True, the solution will be updated in place if
-		the input rt is already a suitable array (i.e., the output of
-		asarray(rt, dytpe=float64) is either rt or a view on rt). In
-		this case, the first return value of this method will be
-		identical to rt. The value of inplace is ignored if asarray
-		creates a new array.
+		If inplace is True, the solution will be updated in place if t
+		is already a suitable floating-point array. In this case, the
+		returned nt will be identical to t. If inplace is False, a copy
+		of t will be made, updated, and returned.
 		'''
 		cdef unsigned long nx, ny, nz, updates
 		cdef long i, j, k, di, dj, dk
-		cdef double hm, fh, Aq, Bq, Cq, nt, a, b, c, hx, hy, hz
+		cdef real hm, fh, Aq, Bq, Cq, nt, a, b, c, hx, hy, hz
 
 		if not octant < 8:
 			raise ValueError('Argument "octant" must satisfy 0 <= octant <= 7')
@@ -101,18 +103,14 @@ class FastSweep(object):
 		if nx < 2 or ny < 2 or nz < 2:
 			raise ValueError('Grid length must be at least 2 along all axes')
 
-		# Convert the arrays and check types
-		cdef double[:,:,:] t
-		if inplace: t = np.asarray(rt, dtype=np.float64)
-		else: t = np.array(rt, copy=True, dtype=np.float64)
-
 		if t.shape[0] != nx or t.shape[1] != ny or t.shape[2] != nz:
 			raise ValueError('Shape of "t" must match grid')
 
-		cdef double[:,:,:] s = np.asarray(rs, dtype=np.float64)
-
 		if s.shape[0] != nx or s.shape[1] != ny or s.shape[2] != nz:
 			raise ValueError('Shape of "s" must match grid')
+
+		# Make a copy of the input Eikonal if desired
+		if not inplace: t = t.copy()
 
 		# Find minimum step size and scale others
 		hx, hy, hz = self.box.cell
@@ -131,7 +129,7 @@ class FastSweep(object):
 
 		# k-slices of t are independent of the inner loop
 		# i- and j-slices depend on inner loop and cannot be cached
-		cdef double[:] tk
+		cdef real[:] tk
 
 		i = 0 if di > 0 else (nx - 1)
 		while 0 <= i < nx:
@@ -202,6 +200,7 @@ class FastSweep(object):
 
 		return np.asarray(t), updates
 
+	@cython.embedsignature(True)
 	def gauss(self, s, src, report=False):
 		'''
 		Given a slowness s, a 3-D Numpy array with shape self.box.ncell
@@ -222,9 +221,9 @@ class FastSweep(object):
 		box = self.box
 		ncell = box.ncell
 
-		s = np.asarray(s, dtype=np.float64)
-		if s.shape != ncell:
-			raise TypeError('Array "s" must have  shape %s' % (ncell,))
+		s = np.asarray(s)
+		if s.shape != ncell or not np.issubdtype(s.dtype, np.floating):
+			raise TypeError('Array "s" must be real with shape %s' % (ncell,))
 
 		# Start sweeping in the dominant direction
 		mp = tuple(int(m < c) for c, m in izip(src, box.midpoint))
@@ -238,7 +237,7 @@ class FastSweep(object):
 		h = box.cell
 
 		# Initialize arrival times to beyond-possible values
-		t = np.empty(s.shape, dtype=np.float64, order='C')
+		t = np.empty_like(s, order='C')
 		t[:,:,:] = float('inf')
 
 		# Assign arrival-time values to grid points surrounding cell
