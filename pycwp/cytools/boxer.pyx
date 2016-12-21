@@ -392,7 +392,7 @@ cdef class Triangle3D:
 		iscal(1.0 / r0, &(qr[0]))
 
 		qr[1] = axpy(-1.0, self._nodes[2], self._nodes[1])
-		cdef double r1 = (qr[0], qr[1])
+		cdef double r1 = dot(qr[0], qr[1])
 		iaxpy(-1.0 / r1, qr[0], &(qr[1]))
 
 		cdef double r2 = ptnrm(qr[1])
@@ -506,7 +506,7 @@ cdef class Triangle3D:
 
 
 	@cython.embedsignature(True)
-	cpdef bint overlaps(self, Box3D b):
+	cpdef bint overlaps(self, Box3D b) except -1:
 		'''
 		Returns True iff the Box3D b overlaps with this triangle.
 
@@ -639,7 +639,7 @@ cdef class Triangle3D:
 		if ((0 <= v <= 1 and 0 <= u <= 1 and 0 <= t <= 1) and 0 <= u + t <= 1):
 			# v is the fraction of segment length
 			# t and u are normal barycentric coordinates in triangle
-			return v * seg._length, t, u, 1 - t - u
+			return v * seg.length, t, u, 1 - t - u
 		else:
 			# Intersection is not in segment or triangle
 			return None
@@ -812,7 +812,7 @@ cdef class Box3D:
 			else: yield ((i, j, k), box)
 
 	@cython.embedsignature(True)
-	cpdef bint overlaps(self, Box3D b):
+	cpdef bint overlaps(self, Box3D b) except -1:
 		'''
 		Returns True iff the Box3D b overlaps with this box.
 		'''
