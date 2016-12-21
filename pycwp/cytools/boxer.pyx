@@ -829,7 +829,7 @@ cdef class Box3D:
 
 
 	@cython.embedsignature(True)
-	cpdef bint contains(self, p):
+	cpdef bint contains(self, p) except -1:
 		'''
 		Returns True iff the 3-D point p is contained in the box.
 		'''
