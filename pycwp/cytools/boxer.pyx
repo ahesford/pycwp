@@ -73,7 +73,7 @@ cdef point * iscal(double a, point *x):
 	return x
 
 
-cdef double ptnrm(point x, int squared=0):
+cdef double ptnrm(point x, bint squared=0):
 	cdef double ns = x.x * x.x + x.y * x.y + x.z * x.z
 	if squared: return ns
 	else: return sqrt(ns)
@@ -142,6 +142,12 @@ cdef object frompoint(point a):
 	return (a.x, a.y, a.z)
 
 
+cdef void ptarr(double *arr, point pt):
+	arr[0] = pt.x
+	arr[1] = pt.y
+	arr[2] = pt.z
+
+
 cdef class Segment3D:
 	'''
 	A representation of a 3-D line segment.
@@ -151,13 +157,12 @@ cdef class Segment3D:
 
 	# Dependent properties (accessible from Python)
 	cdef readonly double length
-	cdef readonly int majorAxis
+	cdef readonly unsigned int majorAxis
 
 	# Dependent properties (hidden from Python)
 	cdef point _midpoint, _direction
 
 	@cython.cdivision(True)
-	@cython.embedsignature(True)
 	def __cinit__(self, start, end):
 		'''
 		Initialize a 3-D line segment that starts and ends at the
@@ -220,6 +225,7 @@ cdef class Segment3D:
 		return axpy(t, self._direction, self._start)
 
 
+	@cython.embedsignature(True)
 	def cartesian(self, double t):
 		'''
 		For a given signed length t, return the Cartesian point on the
@@ -248,13 +254,12 @@ cdef class Segment3D:
 			raise IndexError('Argument axis must be 0, 1 or 2')
 
 
-	@property
+	@cython.embedsignature(True)
 	def bbox(self):
 		'''
 		A Box3D instance that bounds the segment.
 		'''
 		cdef double lx, ly, lz, hx, hy, hz
-		cdef int i
 
 		# Populate the min-max values of each coordinate
 		lx = min(self._start.x, self._end.x)
@@ -285,7 +290,6 @@ cdef class Triangle3D:
 	cdef readonly double area
 
 	@cython.cdivision(True)
-	@cython.embedsignature(True)
 	def __cinit__(self, nodes):
 		'''
 		Initialize a triangle from nodes in the given sequence.
@@ -339,7 +343,7 @@ cdef class Triangle3D:
 	@property
 	def nodes(self):
 		'''The nodes of the triangle, as a 3-tuple of 3-tuples of floats'''
-		return (frompoint(self._nodes[0]), 
+		return (frompoint(self._nodes[0]),
 				frompoint(self._nodes[1]), frompoint(self._nodes[2]))
 
 	@property
@@ -403,6 +407,7 @@ cdef class Triangle3D:
 		return qr
 
 
+	@cython.embedsignature(True)
 	def bbox(self):
 		'''
 		A Box3D instance that bounds the triangle.
@@ -454,6 +459,7 @@ cdef class Triangle3D:
 		return x0, x1, 1 - x0 - x1
 
 
+	@cython.embedsignature(True)
 	def cartesian(self, p):
 		'''
 		For a point p in barycentric coordinates (a tuple of 3 floats),
@@ -470,6 +476,7 @@ cdef class Triangle3D:
 		return vx, vy, vz
 
 
+	@cython.embedsignature(True)
 	def contains(self, p):
 		'''
 		Returns True iff the 3-D point p is contained in this triangle.
@@ -488,7 +495,7 @@ cdef class Triangle3D:
 
 	@staticmethod
 	cdef bint sat_cross_test(point a, point v[3], point hlen):
-		cdef double px, py, pz, r 
+		cdef double px, py, pz, r
 
 		px = dot(a, v[0])
 		py = dot(a, v[1])
@@ -498,6 +505,7 @@ cdef class Triangle3D:
 		return not(min(px, py, pz) > r or max(px, py, pz) < -r)
 
 
+	@cython.embedsignature(True)
 	cpdef bint overlaps(self, Box3D b):
 		'''
 		Returns True iff the Box3D b overlaps with this triangle.
@@ -576,6 +584,7 @@ cdef class Triangle3D:
 
 
 	@cython.cdivision(True)
+	@cython.embedsignature(True)
 	def intersection(self, Segment3D seg):
 		'''
 		Return the intersection of the segment seg with this triangle
@@ -590,7 +599,7 @@ cdef class Triangle3D:
 		triangle do not intersect, or the QR factorizaton could not be
 		computed, None is returned.
 		'''
-		cpdef point *qr = self.qrbary()
+		cdef point *qr = self.qrbary()
 		if qr == <point *>NULL: return None
 
 		cdef double r2, r1, r0
@@ -730,6 +739,7 @@ cdef class Box3D:
 
 		return ptcell
 
+	@cython.embedsignature(True)
 	def cart2cell(self, double x, double y, double z):
 		'''
 		Convert the 3-D Cartesian coordinates (x, y, z) into grid
@@ -750,6 +760,7 @@ cdef class Box3D:
 
 		return ptcrd
 
+	@cython.embedsignature(True)
 	def cell2cart(self, double i, double j, double k):
 		'''
 		Convert the (possibly fractional) 3-D cell-index coordinates
@@ -758,32 +769,33 @@ cdef class Box3D:
 		'''
 		return frompoint(self._cart2cell(i, j, k))
 
-	def getCell(self, c):
+
+	@cython.embedsignature(True)
+	cpdef Box3D getCell(self, long i, long j, long k):
 		'''
 		Return a Box3D representing the cell that contains 3-D index c
 		based on the grid defined by the ncell property. Any fractional
 		part of the coordinates will be truncated.
 		'''
-		cdef double i, j, k
-		i, j, k = c
-
-		cdef double li, lj, lk
-		li = floor(i)
-		lj = floor(j)
-		lk = floor(k)
-
-		lo = self.cell2cart(li, lj, lk)
-		hi = self.cell2cart(li + 1, lj + 1, lk + 1)
-
+		lo = frompoint(self._cell2cart(i, j, k))
+		hi = frompoint(self._cell2cart(i + 1, j + 1, k + 1))
 		return Box3D(lo, hi)
 
+
+	@cython.embedsignature(True)
 	def allIndices(self):
 		'''
 		Return a generator that produces every 3-D cell index within
 		the grid defined by the ncell property in row-major order.
 		'''
-		return iproduct(*(xrange(n) for n in self.ncell))
+		cdef long i, j, k
+		for i in range(self._ncell.x):
+			for j in range(self._ncell.y):
+				for k in range(self._ncell.z):
+					yield i, j, k
 
+
+	@cython.embedsignature(True)
 	def allCells(self, enum=False):
 		'''
 		Return a generator that produces every cell in the grid defined
@@ -793,11 +805,13 @@ cdef class Box3D:
 		If enum is True, return a tuple (idx, box), where idx is the
 		three-dimensional index of the cell.
 		'''
-		for idx in self.allIndices():
-			box = self.getCell(idx)
+		cdef long i, j, k
+		for i, j, k in self.allIndices():
+			box = self.getCell(i, j, k)
 			if not enum: yield box
-			else: yield (idx, box)
+			else: yield ((i, j, k), box)
 
+	@cython.embedsignature(True)
 	cpdef bint overlaps(self, Box3D b):
 		'''
 		Returns True iff the Box3D b overlaps with this box.
@@ -814,6 +828,7 @@ cdef class Box3D:
 				aly > bhy or ahz < blz or alz > bhz)
 
 
+	@cython.embedsignature(True)
 	cpdef bint contains(self, p):
 		'''
 		Returns True iff the 3-D point p is contained in the box.
@@ -857,13 +872,14 @@ cdef class Box3D:
 		if tz2 < tmax: tmax = tz2
 		if tz1 > tmin: tmin = tz1
 
-		if tmax < max(0, tmin) or tmin > seglen: 
+		if tmax < max(0, tmin) or tmin > seglen:
 			return False
 
 		t[0] = tmin
 		t[1] = tmax
 		return True
 
+	@cython.embedsignature(True)
 	def intersection(self, Segment3D segment):
 		'''
 		Returns the lengths tmin and tmax along the given line segment
@@ -880,83 +896,137 @@ cdef class Box3D:
 		else: return None
 
 
-#	def raymarcher(self, segment):
-#		'''
-#		Marches along the given 3-D line segment (like Segment3D) to
-#		identify all cells in the grid (defined by the ncell property)
-#		that intersect the segment. Returns a list of tuples of the
-#		form (i, j, k, tmin, tmax), where (i, j, k) is a grid index of
-#		a cell, and (tmin, tmax) are the lengths along the segment of
-#		the entry and exit points, respectively, through the cell.
-#
-#		If the segment begins or ends in a cell, tmin or tmax may fall
-#		outside the range [0, segment.length].
-#		'''
-#		# March along the major axis
-#		axis = segment.majorAxis
-#		# Record the transverse axes as tx, ty
-#		tx, ty = (axis + 1) % 3, (axis + 2) % 3
-#
-#		# Pull grid parameters for efficiency
-#		ncell = self.ncell
-#		lo = self.lo[axis]
-#		dslab = self.cell[axis]
-#
-#		nax, ntx, nty = ncell[axis], ncell[tx], ncell[ty]
-#
-#		# Try to grab the intersection lengths, if they exist
-#		try: tmin, tmax = self.intersection(segment)
-#		except TypeError: return []
-#
-#		# Find the intersection points
-#		pmin = segment.cartesian(max(0., tmin))
-#		pmax = segment.cartesian(min(segment.length, tmax))
-#
-#		# Find the minimum and maximum slabs; ensure proper ordering
-#		slabmin = int((pmin[axis] - lo) / dslab)
-#		slabmax = int((pmax[axis] - lo) / dslab)
-#		if slabmin > slabmax: slabmin, slabmax = slabmax, slabmin
-#		# Ensure the slabs don't run off the end
-#		if slabmin < 0: slabmin = 0
-#		if slabmax >= nax: slabmax = nax - 1
-#
-#		# Compute the starting position of the first slab
-#		esc = lo + dslab * slabmin
-#
-#		# Build a list of slab indices and segment entry points
-#		# Add an extra slab to capture exit from the final slab
-#		slabs = []
-#		for slab in range(slabmin, slabmax + 2):
-#			# Figure the segment length at the edge of the slab
-#			t = segment.lengthToAxisPlane(esc, axis)
-#			# Shift the edge coordinate to the next slab
-#			esc += dslab
-#			# Find the coordinates of entry cell
-#			px, py, pz = segment.cartesian(t)
-#			idx = self.cart2cell(px, py, pz, False)
-#			# Add the cell coordinates to the list
-#			# Override axial index to correct rounding errors
-#			slabs.append(idx[:axis] + (slab,) + idx[axis+1:])
-#
-#		intersections = []
-#
-#		# Now enumerate all intersecting cells
-#		for entry, exit in izip(slabs, slabs[1:]):
-#			ranges = [(e,) for e in entry]
-#			# Check all cells in range spanned by transverse indices
-#			enx, eny = entry[tx], entry[ty]
-#			exx, exy = exit[tx], exit[ty]
-#			if enx != exx:
-#				mn, mx = (enx, exx) if (enx < exx) else (exx, enx)
-#				ranges[tx] = xrange(max(0, mn), min(ntx, mx + 1))
-#			if eny != exy:
-#				mn, mx = (eny, exy) if (eny < exy) else (exy, eny)
-#				ranges[ty] = xrange(max(0, mn), min(nty, mx + 1))
-#
-#			for i in ranges[0]:
-#				for j in ranges[1]:
-#					for k in ranges[2]:
-#						t = self.getCell((i, j, k)).intersection(segment)
-#						if t is not None:
-#							intersections.append((i, j, k, t[0], t[1]))
-#		return intersections
+	@cython.embedsignature(True)
+	def raymarcher(self, Segment3D segment):
+		'''
+		Marches along the given 3-D line segment (like Segment3D) to
+		identify all cells in the grid (defined by the ncell property)
+		that intersect the segment. Returns a list of tuples of the
+		form (i, j, k, tmin, tmax), where (i, j, k) is a grid index of
+		a cell, and (tmin, tmax) are the lengths along the segment of
+		the entry and exit points, respectively, through the cell.
+
+		If the segment begins or ends in a cell, tmin or tmax may fall
+		outside the range [0, segment.length].
+		'''
+		# March along the major axis
+		cdef unsigned int axis = segment.majorAxis
+		# Record the transverse axes as tx, ty
+		cdef unsigned long tx = (axis + 1) % 3
+		cdef unsigned long ty = (axis + 2) % 3
+
+		# Pull grid parameters for efficiency
+		cdef double lo, dslab
+
+		if axis == 0:
+			lo = self._lo.x
+			dslab = self._cell.x
+		elif axis == 1:
+			lo = self._lo.y
+			dslab = self._cell.y
+		elif axis == 2:
+			lo = self._lo.z
+			dslab = self._cell.z
+		else: raise ValueError('Major axis of segment must be 0, 1 or 2')
+
+		cdef long ncell[3]
+		cdef long nax, ntx, nty
+		ncell[0] = self._ncell.x
+		ncell[1] = self._ncell.y
+		ncell[2] = self._ncell.z
+
+		nax = ncell[axis]
+		ntx = ncell[tx]
+		nty = ncell[ty]
+
+		# Try to grab the intersection lengths, if they exist
+		cdef double tlims[2]
+		if not self._intersection(tlims, segment): return []
+
+		# Find the intersection points
+		cdef double pmin[3]
+		cdef double pmax[3]
+		ptarr(pmin, segment._cartesian(max(0., tlims[0])))
+		ptarr(pmax, segment._cartesian(min(segment.length, tlims[1])))
+
+		# Find the minimum and maximum slabs; ensure proper ordering
+		cdef long slabmin = <long>((pmin[axis] - lo) / dslab)
+		cdef long slabmax = <long>((pmax[axis] - lo) / dslab)
+		if slabmin > slabmax: slabmin, slabmax = slabmax, slabmin
+		# Ensure the slabs don't run off the end
+		if slabmin < 0: slabmin = 0
+		if slabmax >= nax: slabmax = nax - 1
+
+		# Compute the starting position of the first slab
+		cdef double esc = lo + dslab * slabmin
+
+		cdef long slab
+		cdef double t
+
+		cdef point p, pidx
+
+		# Build a list of slab indices and segment entry points
+		# Actual intersecting slab count is (slabmax + 1) - slabmin
+		# Need one more slab to capture exit from the final slab
+		cdef long nslab = 2 + slabmax - slabmin
+
+		cdef long *slabs
+		slabs = <long *>PyMem_Malloc(3 * nslab * sizeof(long))
+		if slabs == <long *>NULL:
+			raise MemoryError('Unable to allocate memory for list of slabs')
+
+		# Used when enumerating cells after slab search
+		cdef long enx, eny, exx, exy, mntx, mnty, mxtx, mxty, i, j
+		cdef long ijk[3]
+		cdef Box3D cell
+
+		try:
+			for slab in range(0, nslab):
+				# Figure the segment length at the edge of the slab
+				t = segment.lengthToAxisPlane(esc, axis)
+				# Shift the edge coordinate to the next slab
+				esc += dslab
+				# Find and truncate coordinates of entry cell
+				p = segment._cartesian(t)
+				pidx = self._cart2cell(p.x, p.y, p.z)
+				# Add cell coordinates to the list
+				slabs[3 * slab] = <long>pidx.x
+				slabs[3 * slab + 1] = <long>pidx.y
+				slabs[3 * slab + 2] = <long>pidx.z
+				# Override axial index to correct rounding errors
+				slabs[3 * slab + axis] = slab + slabmin
+
+			intersections = { }
+
+			# Enumerate all intersecting cells in the valid slabs
+			for slab in range(0, nslab - 1):
+				# Check neighboring cells in slab if transverse
+				# indices change when entering the next slab
+				enx = slabs[3 * slab + tx]
+				eny = slabs[3 * slab + ty]
+				exx = slabs[3 * (slab + 1) + tx]
+				exy = slabs[3 * (slab + 1) + ty]
+
+				# The major component of the axis is always unchanged
+				ijk[axis] = slabs[3 * slab + axis]
+
+				# Find the range of tx and ty indices
+				mntx = max(min(enx, exx), 0)
+				mxtx = min(max(enx, exx) + 1, ntx)
+				mnty = max(min(eny, exy), 0)
+				mxty = min(max(eny, exy) + 1, nty)
+
+				for i in range(mntx, mxtx):
+					ijk[tx] = i
+					for j in range(mnty, mxty):
+						ijk[ty] = j
+						cell = self.getCell(ijk[0], ijk[1], ijk[2])
+						if cell._intersection(tlims, segment):
+							key = ijk[0], ijk[1], ijk[2]
+							val = tlims[0], tlims[1]
+							intersections[key] = val
+		finally:
+			# Always release the slab list
+			PyMem_Free(<void *>slabs)
+
+		return intersections
