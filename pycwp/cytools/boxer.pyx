@@ -632,9 +632,9 @@ cdef class Triangle3D:
 		ny.x, ny.y, ny.z = dot(y, qr[0]), dot(y, qr[1]), dot(y, q2)
 
 		cdef double t, u, v
-		v = y.z / r5
-		u = (y.y - r4 * v) / r2
-		t = (y.x - r3 * v - r1 * u) / r0
+		v = ny.z / r5
+		u = (ny.y - r4 * v) / r2
+		t = (ny.x - r3 * v - r1 * u) / r0
 
 		if ((0 <= v <= 1 and 0 <= u <= 1 and 0 <= t <= 1) and 0 <= u + t <= 1):
 			# v is the fraction of segment length
