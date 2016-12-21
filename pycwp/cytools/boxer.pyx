@@ -393,7 +393,7 @@ cdef class Triangle3D:
 
 		qr[1] = axpy(-1.0, self._nodes[2], self._nodes[1])
 		cdef double r1 = dot(qr[0], qr[1])
-		iaxpy(-1.0 / r1, qr[0], &(qr[1]))
+		iaxpy(-r1, qr[0], &(qr[1]))
 
 		cdef double r2 = ptnrm(qr[1])
 		if almosteq(r2, 0.0):
