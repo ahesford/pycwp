@@ -11,6 +11,10 @@ from libc.math cimport sqrt
 
 from itertools import izip, product as iproduct
 
+# Copyright (c) 2016 Andrew J. Hesford. All rights reserved.
+# Restrictions are listed in the LICENSE file distributed with this package.
+
+@cython.cdivision(True)
 @cython.boundscheck(False)
 @cython.wraparound(False)
 cdef real minnbr(real[:] t, unsigned long i):
@@ -28,7 +32,7 @@ cdef real minnbr(real[:] t, unsigned long i):
 	l, r = i - 1, i + 1
 
 	if r >= t.shape[0]:
-		if l < 0: return <real>float('inf')
+		if l < 0: return 1.0 / 0.0
 		return t[l]
 
 	if l < 0: return t[r]
@@ -130,6 +134,7 @@ class FastSweep(object):
 		# k-slices of t are independent of the inner loop
 		# i- and j-slices depend on inner loop and cannot be cached
 		cdef real[:] tk
+		cdef real ha, hb, hc
 
 		i = 0 if di > 0 else (nx - 1)
 		while 0 <= i < nx:
@@ -200,14 +205,15 @@ class FastSweep(object):
 
 		return np.asarray(t), updates
 
+	@cython.boundscheck(False)
 	@cython.embedsignature(True)
-	def gauss(self, s, src, report=False):
+	def gauss(self, src, real[:,:,:] s, bint report=False):
 		'''
-		Given a slowness s, a 3-D Numpy array with shape self.box.ncell
-		or an array-compatible sequence, and a source location src in
-		natural coordinates, compute and return the Eikonal t (with the
-		same shape as s) that describes arrival times from the source
-		to every point in the domain according to the slowness map.
+		Given a source location src in Cartesian coordinates and a
+		slowness s, a 3-D real array with shape self.box.ncell, compute
+		and return the Eikonal t (a Numpy array with a shape matching
+		that of s) that describes arrival times from the source to
+		every point in the domain according to the slowness map.
 		Gauss-Seidel iterations with alternating sweep directions are
 		applied until no updates are made to the arrival-time map.
 
@@ -221,37 +227,71 @@ class FastSweep(object):
 		box = self.box
 		ncell = box.ncell
 
-		s = np.asarray(s)
-		if s.shape != ncell or not np.issubdtype(s.dtype, np.floating):
-			raise TypeError('Array "s" must be real with shape %s' % (ncell,))
+		cdef unsigned int nx, ny, nz
+		nx, ny, nz = ncell
 
-		# Start sweeping in the dominant direction
-		mp = tuple(int(m < c) for c, m in izip(src, box.midpoint))
-		soct = (mp[2] << 2) | (mp[1] << 1) | mp[0]
-
-		# Convert source to grid coords and find (extended) enclosing cell
-		src = box.cart2cell(*src)
-		sgrd = tuple(max(0, min(int(c), n - 1)) for c, n in izip(src, ncell))
-
-		slw = s[sgrd]
-		h = box.cell
+		if s.shape[0] != nx or s.shape[1] != ny or s.shape[2] != nz:
+			raise TypeError('Array "s" must have shape %s' % (ncell,))
 
 		# Initialize arrival times to beyond-possible values
-		t = np.empty_like(s, order='C')
+		if real is float: dtype = np.dtype('float32')
+		elif real is double: dtype = np.dtype('float64')
+		else: raise TypeError('Type of "s" must be float or double')
+
+		t = np.empty(ncell, dtype=dtype, order='C')
 		t[:,:,:] = float('inf')
 
+		cdef real sx, sy, sz
+		cdef real mx, my, mz
+		sx, sy, sz = src
+		mx, my, mz = box.midpoint
+
+		# Start sweeping in the dominant direction
+		cdef unsigned int soct
+		soct = <unsigned int>(mz < sz)
+		soct <<= 1
+		soct |= <unsigned int>(my < sy)
+		soct <<= 1
+		soct |= <unsigned int>(mx < sx)
+
+		# Convert source to grid coords and find (extended) enclosing cell
+		sx, sy, sz = box.cart2cell(sx, sy, sz)
+
+		cdef int si, sj, sk
+		si = max(0, min(<int>sx, nx - 1))
+		sj = max(0, min(<int>sy, ny - 1))
+		sk = max(0, min(<int>sz, nz - 1))
+
+		cdef real slw = s[si,sj,sk]
+		cdef real hx, hy, hz
+		hx, hy, hz = box.cell
+
 		# Assign arrival-time values to grid points surrounding cell
-		for inc in iproduct(xrange(2), repeat=3):
-			# Check that the grid point is valid
-			npt = tuple(c + i for c, i in izip(sgrd, inc))
-			if any(x >= n for x, n in izip(npt, ncell)): continue
-			t[npt] = slw * sqrt(sum((hv * (c - i))**2
-						for c, i, hv in izip(src, npt, h)))
+		cdef int i, j, k, ci, cj, ck
+		cdef real rx, ry, rz
+		for i in range(2):
+			ci = si + i
+			if ci >= nx: continue
+			rx = hx * (sx - <real>ci)
+			rx *= rx
+			for j in range(2):
+				cj = sj + j
+				if cj >= ny: continue
+				ry = hy * (sy - <real>cj)
+				ry *= ry
+				for k in range(2):
+					ck = sk + k
+					if ck >= nz: continue
+					rz = hz * (sz - <real>ck)
+					rz *= rz
+					t[ci,cj,ck] = slw * sqrt(rx + ry + rz)
+
+		cdef unsigned int octant
 
 		it = 0
 		while True:
 			updates = 0
-			for octant in xrange(soct, soct + 8):
+			for octant in range(soct, soct + 8):
 				octant = octant % 8
 				t, upc = self.sweep(t, s, octant, True)
 				if report:
