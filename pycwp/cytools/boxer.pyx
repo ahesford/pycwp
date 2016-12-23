@@ -588,8 +588,12 @@ cdef class Triangle3D:
 		'''
 		cdef double x, y, z
 
-		try: x, y, z = self.barycentric(p)
-		except TypeError: return False
+		# Make sure to raise an error for incompatible p
+		r = self.barycentric(p)
+
+		if r is None: return False
+
+		x, y, z = r
 
 		if x < 0 or 1 < x: return False
 		if y < 0 or 1 < y: return False
@@ -611,7 +615,7 @@ cdef class Triangle3D:
 
 
 	@cython.embedsignature(True)
-	cpdef bint overlaps(self, Box3D b) except -1:
+	def overlaps(self, Box3D b not None):
 		'''
 		Returns True iff the Box3D b overlaps with this triangle.
 
@@ -690,7 +694,7 @@ cdef class Triangle3D:
 
 	@cython.cdivision(True)
 	@cython.embedsignature(True)
-	def intersection(self, Segment3D seg):
+	def intersection(self, Segment3D seg not None):
 		'''
 		Return the intersection of the segment seg with this triangle
 		as (l, t, u, v), where l is the length along the segment seg
@@ -908,7 +912,7 @@ cdef class Box3D:
 
 
 	@cython.embedsignature(True)
-	def allCells(self, enum=False):
+	def allCells(self, bint enum=False):
 		'''
 		Return a generator that produces every cell in the grid defined
 		by the ncell property. Generation is done in the same order as
@@ -924,7 +928,7 @@ cdef class Box3D:
 			else: yield ((i, j, k), box)
 
 	@cython.embedsignature(True)
-	cpdef bint overlaps(self, Box3D b) except -1:
+	def overlaps(self, Box3D b not None):
 		'''
 		Returns True iff the Box3D b overlaps with this box.
 		'''
@@ -1002,7 +1006,7 @@ cdef class Box3D:
 		return True
 
 	@cython.embedsignature(True)
-	def intersection(self, Segment3D seg):
+	def intersection(self, Segment3D seg not None):
 		'''
 		Returns the lengths tmin and tmax along the given Segment3D seg
 		at which the segment enters and exits the box. If the box does
@@ -1022,7 +1026,7 @@ cdef class Box3D:
 	@cython.boundscheck(False)
 	@cython.wraparound(False)
 	@cython.embedsignature(True)
-	def descent(self, p, real[:,:,:] f, real atol=1e-8, real rtol=1e-6):
+	def descent(self, p, real[:,:,:] f not None, real atol=1e-8, real rtol=1e-6):
 		'''
 		Starting at a point p = x, y, z, where x, y, z are Cartesian
 		coordinates within the bounds of this box, perform a
@@ -1060,7 +1064,7 @@ cdef class Box3D:
 
 
 	@cython.embedsignature(True)
-	def raymarcher(self, Segment3D seg, double minlen=realeps):
+	def raymarcher(self, Segment3D seg not None, double minlen=realeps):
 		'''
 		Marches along the given Segment3D seg to identify cells in the
 		grid (defined by the ncell property) that intersect the
