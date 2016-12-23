@@ -11,9 +11,12 @@ import cython
 cimport cython
 
 from cpython.mem cimport PyMem_Malloc, PyMem_Free
+from cython cimport floating as real
 
 from math import sqrt
 from libc.math cimport sqrt, floor
+
+from collections import OrderedDict
 
 cdef extern from "float.h":
 	cdef double DBL_EPSILON
@@ -26,10 +29,6 @@ from itertools import izip, product as iproduct
 
 cdef struct point:
 	double x, y, z
-
-cdef struct grid:
-	long x, y, z
-
 
 cdef point axpy(double a, point x, point y):
 	'''
@@ -97,40 +96,38 @@ cdef point cross(point l, point r):
 	return o
 
 
-cdef bint almosteq(double x, double y):
+cdef bint almosteq(double x, double y, double eps=DBL_EPSILON):
 	'''
 	Returns True iff the difference between x and y is less than or equal
-	to M * EPS, where M = max(abs(x), abs(y), 1.0).
-
-	The value EPS is the value of DBL_EPSILON in the float.h.
+	to M * eps, where M = max(abs(x), abs(y), 1.0).
 	'''
 	cdef double mxy = max(abs(x), abs(y), 1.0)
-	return abs(x - y) <= DBL_EPSILON * mxy
+	return abs(x - y) <= eps * mxy
 
 
 @cython.cdivision(True)
-cdef double infdiv(double a, double b):
+cdef double infdiv(double a, double b, double eps=DBL_EPSILON):
 	'''
 	Return a / b with special handling of small values:
 
-	1. If |b| < epsilon * |a| for machine epsilon, return signed infinity,
-	2. Otherwise, if |a| < epsilon, return 0.
+	1. If |b| <= eps * |a|, return signed infinity,
+	2. Otherwise, if |a| <= eps, return 0.
 	'''
 	cdef double aa, bb
 	aa = abs(a)
 	ab = abs(b)
 
-	if ab <= DBL_EPSILON * aa:
+	if ab <= eps * aa:
 		if (a >= 0) == (b >= 0):
 			return infinity
 		else: return -infinity
-	elif aa <= DBL_EPSILON:
+	elif aa <= eps:
 		return 0.0
 
 	return a / b
 
 
-cdef point topoint(double x, double y, double z):
+cdef point packpt(double x, double y, double z):
 	cdef point r
 	r.x = x
 	r.y = y
@@ -138,14 +135,112 @@ cdef point topoint(double x, double y, double z):
 	return r
 
 
-cdef object frompoint(point a):
+cdef object pt2tup(point a):
 	return (a.x, a.y, a.z)
+
+
+cdef bint tup2pt(point *pt, object p) except -1:
+	cdef double x, y, z
+	x, y, z = p
+
+	if pt != <point *>NULL:
+		pt.x = x
+		pt.y = y
+		pt.z = z
+
+	return 0
 
 
 cdef void ptarr(double *arr, point pt):
 	arr[0] = pt.x
 	arr[1] = pt.y
 	arr[2] = pt.z
+
+
+@cython.cdivision(True)
+@cython.boundscheck(False)
+@cython.wraparound(False)
+cdef unsigned int grad(point *result, real[:,:,:] f, unsigned long i,
+		unsigned long j, unsigned long k, point h):
+	cdef unsigned long nx, ny, nz
+	cdef bint has_left, has_right
+	cdef unsigned int gdirs = 0
+	cdef real lval, rval, step
+
+	nx = f.shape[0]
+	ny = f.shape[1]
+	nz = f.shape[2]
+
+	# Ensure the point is in bounds
+	if i >= nx or j >= ny or k >= ny: return 0
+
+	# Find x derivative
+	has_left = (i > 1)
+	if has_left:
+		lval = f[i - 1, j, k]
+		step = h.x
+	else:
+		# No step to the left
+		lval = f[i, j, k]
+		step = 0
+
+	has_right = (i < (nx - 1))
+	if has_right:
+		lval = f[i + 1, j, k]
+		step += h.x
+	else:
+		# No step to the right
+		rval = f[i, j, k]
+
+	if has_left or has_right:
+		result.x = (rval - lval) / step
+		gdirs = 1
+
+	# Find y derivative
+	has_left = (j > 1)
+	if has_left:
+		lval = f[i, j - 1, k]
+		step = h.y
+	else:
+		# No step to the left
+		lval = f[i, j, k]
+		step = 0
+
+	has_right = (j < (ny - 1))
+	if has_right:
+		lval = f[i, j + 1, k]
+		step += h.y
+	else:
+		# No step to the right
+		rval = f[i, j, k]
+
+	if has_left or has_right:
+		result.y = (rval - lval) / step
+		gdirs |= 2
+
+	# Find z derivative
+	has_left = (k > 1)
+	if has_left:
+		lval = f[i, j, k - 1]
+		step = h.z
+	else:
+		# No step to the left
+		lval = f[i, j, k]
+		step = 0
+
+	has_right = (j < (nz - 1))
+	if has_right:
+		lval = f[i, j, k + 1]
+		step += h.z
+	else:
+		# No step to the right
+		rval = f[i, j, k]
+
+	if has_left or has_right:
+		result.z = (rval - lval) / step
+		gdirs |= 4
+
+	return gdirs
 
 
 cdef class Segment3D:
@@ -168,11 +263,8 @@ cdef class Segment3D:
 		Initialize a 3-D line segment that starts and ends at the
 		indicated points (3-tuples of float coordinates).
 		'''
-		cdef double x, y, z
-		x, y, z = start
-		self._start = topoint(x, y, z)
-		x, y, z = end
-		self._end = topoint(x, y, z)
+		tup2pt(&self._start, start)
+		tup2pt(&self._end, end)
 
 		# Initialize dependent properties
 		self._direction = axpy(-1.0, self._start, self._end)
@@ -202,22 +294,22 @@ cdef class Segment3D:
 	@property
 	def start(self):
 		'''The start of the segment, as a 3-tuple of floats'''
-		return frompoint(self._start)
+		return pt2tup(self._start)
 
 	@property
 	def end(self):
 		'''The end of the segment, as a 3-tuple of floats'''
-		return frompoint(self._end)
+		return pt2tup(self._end)
 
 	@property
 	def midpoint(self):
 		'''The midpoint of the segment, as a 3-tuple of floats'''
-		return frompoint(self._midpoint)
+		return pt2tup(self._midpoint)
 
 	@property
 	def direction(self):
 		'''The direction of the segment, as a 3-tuple of floats'''
-		return frompoint(self._direction)
+		return pt2tup(self._direction)
 
 
 	cdef point _cartesian(self, double t):
@@ -231,7 +323,7 @@ cdef class Segment3D:
 		For a given signed length t, return the Cartesian point on the
 		line through this segment which is a distance t from the start.
 		'''
-		return frompoint(self._cartesian(t))
+		return pt2tup(self._cartesian(t))
 
 
 	@cython.embedsignature(True)
@@ -273,8 +365,8 @@ cdef class Segment3D:
 
 
 	def __repr__(self):
-		start = frompoint(self._start)
-		end = frompoint(self._end)
+		start = pt2tup(self._start)
+		end = pt2tup(self._end)
 		return '%s(%r, %r)' % (self.__class__.__name__, start, end)
 
 
@@ -295,14 +387,11 @@ cdef class Triangle3D:
 		Initialize a triangle from nodes in the given sequence.
 		'''
 		if len(nodes) != 3:
-			raise TypeError('Length of nodes sequence must be 3')
+			raise ValueError('Length of nodes sequence must be 3')
 
-		cdef double x, y, z
 		cdef unsigned int i
-
 		for i in range(3):
-			x, y, z = nodes[i]
-			self._nodes[i] = topoint(x, y, z)
+			tup2pt(&(self._nodes[i]), nodes[i])
 
 		# Find maximum cross product to determine normal
 		cdef point l, r, v
@@ -343,13 +432,13 @@ cdef class Triangle3D:
 	@property
 	def nodes(self):
 		'''The nodes of the triangle, as a 3-tuple of 3-tuples of floats'''
-		return (frompoint(self._nodes[0]),
-				frompoint(self._nodes[1]), frompoint(self._nodes[2]))
+		return (pt2tup(self._nodes[0]),
+				pt2tup(self._nodes[1]), pt2tup(self._nodes[2]))
 
 	@property
 	def normal(self):
 		'''The normal of the triangle, as a 3-tuple of floats'''
-		return frompoint(self._normal)
+		return pt2tup(self._normal)
 
 	def __repr__(self):
 		return '%s(%r)' % (self.__class__.__name__, self.nodes)
@@ -401,7 +490,7 @@ cdef class Triangle3D:
 			return self._qr
 		iscal(1.0 / r2, &(qr[1]))
 
-		qr[2] = topoint(r0, r1, r2)
+		qr[2] = packpt(r0, r1, r2)
 
 		self._qr = qr
 		return qr
@@ -436,9 +525,9 @@ cdef class Triangle3D:
 		out of the plane and project is False, or because the QR
 		factorization cannot be computed), None will be returned.
 		'''
-		cdef double x, y, z
-		x, y, z = p
-		cdef point d = axpy(-1.0, self._nodes[2], topoint(x, y, z))
+		cdef point pp
+		tup2pt(&pp, p)
+		cdef point d = axpy(-1.0, self._nodes[2], pp)
 
 		# Make sure the point is in the plane, if necessary
 		if not (project or almosteq(dot(d, self._normal), 0.0)):
@@ -650,21 +739,17 @@ cdef class Box3D:
 	A representation of an axis-aligned 3-D bounding box.
 	'''
 	cdef point _lo, _hi, _midpoint, _length, _cell
-	cdef grid _ncell
+	cdef unsigned long nx, ny, nz
 
 	def __cinit__(self, lo, hi):
 		'''
 		Initialize a 3-D box with extreme corners lo and hi.
 		'''
-		cdef double x, y, z
-		x, y, z = lo
-		self._lo = topoint(x, y, z)
-		x, y, z = hi
-		self._hi = topoint(x, y, z)
+		tup2pt(&self._lo, lo)
+		tup2pt(&self._hi, hi)
 
-		if (self._lo.x > self._hi.x
-				or self._lo.y > self._hi.y
-				or self._lo.z > self._hi.z):
+		if (self._lo.x > self._hi.x or
+				self._lo.y > self._hi.y or self._lo.z > self._hi.z):
 			raise ValueError('Coordinates of hi must be no less than those of lo')
 
 		# Compute some dependent properties
@@ -673,39 +758,39 @@ cdef class Box3D:
 
 		self._length = axpy(-1.0, self._lo, self._hi)
 
-		self._ncell.x = self._ncell.y = self._ncell.z = 1
+		self.nx = self.ny = self.nz = 1
 		self._cell = self._length
 
 
 	@property
 	def lo(self):
 		'''The lower corner of the box'''
-		return frompoint(self._lo)
+		return pt2tup(self._lo)
 
 	@property
 	def hi(self):
 		'''The upper corner of the box'''
-		return frompoint(self._hi)
+		return pt2tup(self._hi)
 
 	@property
 	def midpoint(self):
 		'''The barycenter of the box'''
-		return frompoint(self._midpoint)
+		return pt2tup(self._midpoint)
 
 	@property
 	def length(self):
 		'''The length of the box edges'''
-		return frompoint(self._length)
+		return pt2tup(self._length)
 
 	@property
 	def cell(self):
 		'''The length of each cell into which the box is subdivided'''
-		return frompoint(self._cell)
+		return pt2tup(self._cell)
 
 	@property
 	def ncell(self):
 		'''The number of cells (nx, ny, nz) that subdivide the box'''
-		return self._ncell.x, self._ncell.y, self._ncell.z
+		return self.nx, self.ny, self.nz
 
 	@ncell.setter
 	def ncell(self, c):
@@ -715,14 +800,14 @@ cdef class Box3D:
 		if x < 1 or y < 1 or z < 1:
 			raise ValueError('Grid dimensions must all be positive')
 
-		self._ncell.x = <long>x
-		self._ncell.y = <long>y
-		self._ncell.z = <long>z
+		self.nx = <unsigned long>x
+		self.ny = <unsigned long>y
+		self.nz = <unsigned long>z
 
 		with cython.cdivision(True):
-			self._cell.x = self._length.x / <double>self._ncell.x
-			self._cell.y = self._length.y / <double>self._ncell.y
-			self._cell.z = self._length.z / <double>self._ncell.z
+			self._cell.x = self._length.x / <double>self.nx
+			self._cell.y = self._length.y / <double>self.ny
+			self._cell.z = self._length.z / <double>self.nz
 
 	def __repr__(self):
 		return '%s(%r, %r)' % (self.__class__.__name__, self.lo, self.hi)
@@ -747,7 +832,7 @@ cdef class Box3D:
 		coordinates will always be real-valued and may have a fraction
 		part to indicate relative positions within the cell.
 		'''
-		return frompoint(self._cart2cell(x, y, z))
+		return pt2tup(self._cart2cell(x, y, z))
 
 
 	@cython.cdivision
@@ -767,7 +852,7 @@ cdef class Box3D:
 		(i, j, k), defined by the box bounds and ncell property, into
 		Cartesian coordinates.
 		'''
-		return frompoint(self._cart2cell(i, j, k))
+		return pt2tup(self._cart2cell(i, j, k))
 
 
 	@cython.embedsignature(True)
@@ -777,8 +862,8 @@ cdef class Box3D:
 		based on the grid defined by the ncell property. Any fractional
 		part of the coordinates will be truncated.
 		'''
-		lo = frompoint(self._cell2cart(i, j, k))
-		hi = frompoint(self._cell2cart(i + 1, j + 1, k + 1))
+		lo = pt2tup(self._cell2cart(i, j, k))
+		hi = pt2tup(self._cell2cart(i + 1, j + 1, k + 1))
 		return Box3D(lo, hi)
 
 
@@ -789,9 +874,9 @@ cdef class Box3D:
 		the grid defined by the ncell property in row-major order.
 		'''
 		cdef long i, j, k
-		for i in range(self._ncell.x):
-			for j in range(self._ncell.y):
-				for k in range(self._ncell.z):
+		for i in range(self.nx):
+			for j in range(self.ny):
+				for k in range(self.nz):
 					yield i, j, k
 
 
@@ -828,51 +913,60 @@ cdef class Box3D:
 				aly > bhy or ahz < blz or alz > bhz)
 
 
+	cdef bint _contains(self, point p):
+		'''C backer for contains'''
+		return ((p.x >= self._lo.x) and (p.x <= self._hi.x)
+				and (p.y >= self._lo.y) and (p.y <= self._hi.y)
+				and (p.z >= self._lo.z) and (p.z <= self._hi.z))
+
 	@cython.embedsignature(True)
-	cpdef bint contains(self, p) except -1:
+	def contains(self, p):
 		'''
 		Returns True iff the 3-D point p is contained in the box.
 		'''
-		cdef double x, y, z
-		x, y, z = p
-		return ((x >= self._lo.x) and (x <= self._hi.x)
-				and (y >= self._lo.y) and (y <= self._hi.y)
-				and (z >= self._lo.z) and (z <= self._hi.z))
+		cdef point pp
+		tup2pt(&pp, p)
+		return self._contains(pp)
 
 
-	cdef bint _intersection(self, double *t, Segment3D segment):
-		'''C backer for intersection'''
-		cdef double sx, sy, sz, dx, dy, dz, seglen
+	@staticmethod
+	cdef bint _intersection(double *t, point l, point h, point s, point d, double sl):
+		'''
+		Low-level routine to compute intersection of a box, with low
+		and high corners l and h, respectively, with a ray or segment
+		that has starting point s, direction d, and a length sl
+		(infinite if ray intersections are desired).
 
-		sx, sy, sz = segment._start.x, segment._start.y, segment._start.z
-		dx, dy, dz = segment._direction.x, segment._direction.y, segment._direction.z
-		seglen = segment.length
+		If the segment or ray intersects the box, True is returned and
+		the values t[0] and t[1] represent, respectively, the minimum
+		and maximum lengths along the ray or segment (in
+		units of the magnitude of d) that describe the points of
+		intersection. The value t[0] may be negative if the ray or
+		segment starts within the box. The value t[1] may exceed the
+		length if a segment ends within the box.
 
-		cdef double lx, ly, lz, hx, hy, hz
-
-		lx, ly, lz = self._lo.x, self._lo.y, self._lo.z
-		hx, hy, hz = self._hi.x, self._hi.y, self._hi.z
-
+		If no intersection is found, False is returned.
+		'''
 		cdef double tmin, tmax, ty1, ty2, tz1, tz2
 
 		# Check, in turn, intersections with the x, y and z slabs
-		tmin = infdiv(lx - sx, dx)
-		tmax = infdiv(hx - sx, dx)
+		tmin = infdiv(l.x - s.x, d.x)
+		tmax = infdiv(h.x - s.x, d.x)
 		if tmax < tmin: tmin, tmax = tmax, tmin
 		# Check the y-slab
-		ty1 = infdiv(ly - sy, dy)
-		ty2 = infdiv(hy - sy, dy)
+		ty1 = infdiv(l.y - s.y, d.y)
+		ty2 = infdiv(h.y - s.y, d.y)
 		if ty2 < ty1: ty1, ty2 = ty2, ty1
 		if ty2 < tmax: tmax = ty2
 		if ty1 > tmin: tmin = ty1
 		# Check the z-slab
-		tz1 = infdiv(lz - sz, dz)
-		tz2 = infdiv(hz - sz, dz)
+		tz1 = infdiv(l.z - s.z, d.z)
+		tz2 = infdiv(h.z - s.z, d.z)
 		if tz2 < tz1: tz1, tz2 = tz2, tz1
 		if tz2 < tmax: tmax = tz2
 		if tz1 > tmin: tmin = tz1
 
-		if tmax < max(0, tmin) or tmin > seglen:
+		if tmax < max(0, tmin) or tmin > sl:
 			return False
 
 		t[0] = tmin
@@ -880,20 +974,61 @@ cdef class Box3D:
 		return True
 
 	@cython.embedsignature(True)
-	def intersection(self, Segment3D segment):
+	def intersection(self, Segment3D seg):
 		'''
-		Returns the lengths tmin and tmax along the given line segment
-		(like Segment3D) at which the segment enters and exits the box.
-		If the box does not intersect the segment, returns None.
+		Returns the lengths tmin and tmax along the given Segment3D seg
+		at which the segment enters and exits the box. If the box does
+		not intersect the segment, returns None.
 
 		If the segment starts within the box, tmin will be negative. If
 		the segment ends within the box, tmax will exceed the segment
 		length.
 		'''
 		cdef double tlims[2]
-		if self._intersection(tlims, segment):
+		if Box3D._intersection(tlims, self._lo, self._hi,
+				seg._start, seg._direction, seg.length):
 			return tlims[0], tlims[1]
 		else: return None
+
+
+	@cython.boundscheck(False)
+	@cython.wraparound(False)
+	@cython.embedsignature(True)
+	def descent(self, p, real[:,:,:] f, real atol=1e-8, real rtol=1e-6):
+		'''
+		Starting at a point p = x, y, z, where x, y, z are Cartesian
+		coordinates within the bounds of this box, perform a
+		steepest-descent walk (against the gradient) through the given
+		scalar field f. The walk ends when one of:
+
+		1. The path returns to a previously-encountered cell,
+		2. The path runs off the edge of the grid,
+		3. The magnitude of the gradient is less than atol, or
+		4. The magnitude | grad(f)(i,j,k) | < rtol * | f(i,j,k) |.
+
+		The return value is an OrderedDict mapping (i, j, k) cell
+		indices to the length of the path through that cell.
+
+		A ValueError will be raised if p is outside the grid or f is of
+		the wrong shape.
+		'''
+		cdef point pp, grid
+		tup2pt(&pp, p)
+
+		grid = self._cart2cell(pp.x, pp.y, pp.z)
+
+		if not (0 <= grid.x < self.nx and
+				0 <= grid.y < self.ny and 0 <= grid.z < self.nz):
+			raise ValueError('Point p must fall within box bounds')
+
+		if (f.shape[0] != self.nx or
+				f.shape[1] != self.ny or f.shape[2] != self.nz):
+			raise ValueError('Shape of field f must be %s' % (self.ncell,))
+
+		cdef long i, j, k
+
+		while True:
+			pass
 
 
 	@cython.embedsignature(True)
@@ -917,31 +1052,31 @@ cdef class Box3D:
 
 		# Pull grid parameters for efficiency
 		cdef double lo, dslab
+		cdef long nax, ntx, nty
 
 		if axis == 0:
 			lo = self._lo.x
 			dslab = self._cell.x
+			nax, ntx, nty = self.nx, self.ny, self.nz
 		elif axis == 1:
 			lo = self._lo.y
 			dslab = self._cell.y
+			nax, ntx, nty = self.ny, self.nz, self.nx
 		elif axis == 2:
 			lo = self._lo.z
 			dslab = self._cell.z
+			nax, ntx, nty = self.nz, self.nx, self.ny
 		else: raise ValueError('Major axis of segment must be 0, 1 or 2')
 
-		cdef long ncell[3]
-		cdef long nax, ntx, nty
-		ncell[0] = self._ncell.x
-		ncell[1] = self._ncell.y
-		ncell[2] = self._ncell.z
-
-		nax = ncell[axis]
-		ntx = ncell[tx]
-		nty = ncell[ty]
+		# Capture segment parameters for convenience
+		cdef point sst = segment._start
+		cdef point sdr = segment._direction
+		cdef double sl = segment.length
 
 		# Try to grab the intersection lengths, if they exist
 		cdef double tlims[2]
-		if not self._intersection(tlims, segment): return []
+		if not Box3D._intersection(tlims, self._lo, self._hi, sst, sdr, sl):
+			return { }
 
 		# Find the intersection points
 		cdef double pmin[3]
@@ -978,7 +1113,8 @@ cdef class Box3D:
 		# Used when enumerating cells after slab search
 		cdef long enx, eny, exx, exy, mntx, mnty, mxtx, mxty, i, j
 		cdef long ijk[3]
-		cdef Box3D cell
+		cdef long njk[3]
+		cdef point lc, hc
 
 		try:
 			for slab in range(0, nslab):
@@ -1009,6 +1145,7 @@ cdef class Box3D:
 
 				# The major component of the axis is always unchanged
 				ijk[axis] = slabs[3 * slab + axis]
+				njk[axis] = ijk[axis] + 1
 
 				# Find the range of tx and ty indices
 				mntx = max(min(enx, exx), 0)
@@ -1018,10 +1155,16 @@ cdef class Box3D:
 
 				for i in range(mntx, mxtx):
 					ijk[tx] = i
+					njk[tx] = i + 1
 					for j in range(mnty, mxty):
 						ijk[ty] = j
-						cell = self.getCell(ijk[0], ijk[1], ijk[2])
-						if cell._intersection(tlims, segment):
+						njk[ty] = j + 1
+						# Get low and high bounds of this cell
+						lc = self._cell2cart(ijk[0], ijk[1], ijk[2])
+						hc = self._cell2cart(njk[0], njk[1], njk[2])
+						# Check for intersection
+						if Box3D._intersection(tlims,
+								lc, hc, sst, sdr, sl):
 							key = ijk[0], ijk[1], ijk[2]
 							val = tlims[0], tlims[1]
 							intersections[key] = val
