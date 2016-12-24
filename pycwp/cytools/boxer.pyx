@@ -105,7 +105,7 @@ cdef bint almosteq(double x, double y, double eps=realeps):
 	Returns True iff the difference between x and y is less than or equal
 	to M * eps, where M = max(abs(x), abs(y), 1.0).
 	'''
-	cdef double mxy = max(abs(x) + abs(y), 1.0)
+	cdef double mxy = max(abs(x), abs(y), 1.0)
 	return abs(x - y) <= eps * mxy
 
 
@@ -966,16 +966,16 @@ cdef class Box3D:
 		'''
 		Low-level routine to compute intersection of a box, with low
 		and high corners l and h, respectively, with a ray or segment
-		that has starting point s, direction d, and a length sl
-		(infinite if ray intersections are desired).
+		that has starting point s, direction d, and a length sl (for
+		ray intersections, sl should be negative or infinite).
 
 		If the segment or ray intersects the box, True is returned and
 		the values t[0] and t[1] represent, respectively, the minimum
-		and maximum lengths along the ray or segment (in
-		units of the magnitude of d) that describe the points of
-		intersection. The value t[0] may be negative if the ray or
-		segment starts within the box. The value t[1] may exceed the
-		length if a segment ends within the box.
+		and maximum lengths along the ray or segment (in units of the
+		magnitude of d) that describe the points of intersection. The
+		value t[0] may be negative if the ray or segment starts within
+		the box. The value t[1] may exceed the length if a segment ends
+		within the box.
 
 		If no intersection is found, False is returned.
 		'''
@@ -998,7 +998,7 @@ cdef class Box3D:
 		if tz2 < tmax: tmax = tz2
 		if tz1 > tmin: tmin = tz1
 
-		if tmax < max(0, tmin) or tmin > sl:
+		if tmax < max(0, tmin) or (sl >= 0 and tmin > sl):
 			return False
 
 		t[0] = tmin
