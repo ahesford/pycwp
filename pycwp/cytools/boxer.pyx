@@ -155,12 +155,6 @@ cdef bint tup2pt(point *pt, object p) except -1:
 	return 0
 
 
-cdef void truncpt(long *i, long *j, long *k, point p):
-	i[0] = <long>p.x
-	j[0] = <long>p.y
-	k[0] = <long>p.z
-
-
 @cython.cdivision(True)
 @cython.boundscheck(False)
 @cython.wraparound(False)
@@ -169,14 +163,13 @@ cdef unsigned int grad(point *result, real[:,:,:] f, unsigned long i,
 	'''
 	Computes, in result, the gradient of the field f, using central
 	differencing away from boundaries and one-sided differencing at the
-	boundaries. This returns a bit field b, with value
+	boundaries. The return value is a bit field b, with value
 
 		b = (gz << 2) | (gy << 1) | gx,
 
-	where gx, gy, and gz are 1 if the respective x, y, or z components of
-	the gradient were computed. Each of these values should be 1 unless its
-	corresponding index is out of bounds or the dimension of the field
-	along that axis is unity. Thus, the normal return value should be 7.
+	where gx, gy, and gz are 0 if the respective x, y, or z components of
+	the gradient were computed and 1 otherwise (i.e., if the index is out
+	of bounds or the dimension of the field along that axis is unity).
 	'''
 	cdef unsigned long nx, ny, nz
 	cdef bint has_left, has_right
@@ -187,8 +180,8 @@ cdef unsigned int grad(point *result, real[:,:,:] f, unsigned long i,
 	ny = f.shape[1]
 	nz = f.shape[2]
 
-	# Ensure the point is in bounds
-	if i >= nx or j >= ny or k >= ny: return 0
+	# Ensure the point is in bounds or indicate no computation
+	if i >= nx or j >= ny or k >= ny: return 7
 
 	# Find x derivative
 	has_left = (i > 1)
@@ -210,7 +203,7 @@ cdef unsigned int grad(point *result, real[:,:,:] f, unsigned long i,
 
 	if has_left or has_right:
 		result.x = (rval - lval) / step
-		gdirs = 1
+	else: gdirs = 1
 
 	# Find y derivative
 	has_left = (j > 1)
@@ -232,7 +225,7 @@ cdef unsigned int grad(point *result, real[:,:,:] f, unsigned long i,
 
 	if has_left or has_right:
 		result.y = (rval - lval) / step
-		gdirs |= (1 << 1)
+	else: gdirs |= (1 << 1)
 
 	# Find z derivative
 	has_left = (k > 1)
@@ -254,7 +247,7 @@ cdef unsigned int grad(point *result, real[:,:,:] f, unsigned long i,
 
 	if has_left or has_right:
 		result.z = (rval - lval) / step
-		gdirs |= (1 << 2)
+	else: gdirs |= (1 << 2)
 
 	return gdirs
 
@@ -328,18 +321,13 @@ cdef class Segment3D:
 		return pt2tup(self._direction)
 
 
-	cdef point _cartesian(self, double t):
-		'''C backer for Segment3D.cartesian'''
-		return axpy(t, self._direction, self._start)
-
-
 	@cython.embedsignature(True)
 	def cartesian(self, double t):
 		'''
 		For a given signed length t, return the Cartesian point on the
 		line through this segment which is a distance t from the start.
 		'''
-		return pt2tup(self._cartesian(t))
+		return pt2tup(axpy(t, self._direction, self._start))
 
 
 	@cython.embedsignature(True)
@@ -872,7 +860,7 @@ cdef class Box3D:
 		(i, j, k), defined by the box bounds and ncell property, into
 		Cartesian coordinates.
 		'''
-		return pt2tup(self._cart2cell(i, j, k))
+		return pt2tup(self._cell2cart(i, j, k))
 
 
 	cdef void _boundsForCell(self, point *lo, point *hi, long i, long j, long k):
@@ -1026,45 +1014,111 @@ cdef class Box3D:
 	@cython.boundscheck(False)
 	@cython.wraparound(False)
 	@cython.embedsignature(True)
-	def descent(self, p, real[:,:,:] f not None, real atol=1e-8, real rtol=1e-6):
+	def descent(self, p, t, real[:,:,:] f not None,
+			double step=realeps, double rtol=1e-6):
 		'''
 		Starting at a point p = x, y, z, where x, y, z are Cartesian
 		coordinates within the bounds of this box, perform a
 		steepest-descent walk (against the gradient) through the given
 		scalar field f. The walk ends when one of:
 
-		1. The path returns to a previously-encountered cell,
+		1. The cell containing the destination point t is reached,
 		2. The path runs off the edge of the grid,
-		3. The magnitude of the gradient is less than atol, or
-		4. The magnitude | grad(f)(i,j,k) | < rtol * | f(i,j,k) |.
+		3. The path returns to a previously-encountered cell, or
+		4. The value |grad(f)| <= rtol * |f| in an encountered cell.
 
 		The return value is an OrderedDict mapping (i, j, k) cell
-		indices to the length of the path through that cell.
+		indices to the start and end points of the path through that
+		cell. If p is outside the grid, the mapping will be empty.
 
-		A ValueError will be raised if p is outside the grid or f is of
-		the wrong shape.
+		The argument step is interpreted as in Box3D.raymarcher; the
+		step is used (in adaptively increasing increments) to ensure
+		that the segment in each cell advances to a neighboring cell.
+
+		A ValueError will be raised if f is of the wrong shape.
 		'''
-		cdef point pp, grid
-		tup2pt(&pp, p)
-
-		grid = self._cart2cell(pp.x, pp.y, pp.z)
-
-		if not (0 <= grid.x < self.nx and
-				0 <= grid.y < self.ny and 0 <= grid.z < self.nz):
-			raise ValueError('Point p must fall within box bounds')
-
 		if (f.shape[0] != self.nx or
 				f.shape[1] != self.ny or f.shape[2] != self.nz):
 			raise ValueError('Shape of field f must be %s' % (self.ncell,))
 
-		cdef long i, j, k
+		# Convert the start and end to points
+		cdef point pp, tp
+		tup2pt(&pp, p)
+		tup2pt(&tp, t)
+
+		# The maximum step through any cell cannot exceed cell diagonal
+		cdef double hmax
+		hmax = sqrt(self._cell.x**2 + self._cell.y**2 + self._cell.z**2)
+
+		cdef point lo, hi, gf, np
+		cdef double mgf
+		cdef double tlims[2]
+		cdef long i, j, k, ti, tj, tk
+
+		# Record the paths encountered in the walk
+		hits = { }
+
+		# Find cell containing starting point
+		self._cellForPoint(&i, &j, &k, pp)
+
+		# Find cell containing ending point (may be out of bounds)
+		self._cellForPoint(&ti, &tj, &tk, tp)
+
+		# For convenience
+		cdef long nx, ny, nz
+		nx, ny, nz = self.nx, self.ny, self.nz
+
+		intersections = { }
 
 		while True:
-			pass
+			if not (0 <= i < nx and 0 <= j < ny and 0 <= k < nz):
+				# Walk has left the bounds of the box
+				break
+
+			key = i, j, k
+
+			# Encountered a cell previously encountered
+			if key in intersections: break
+
+			if i == ti and j == tj and k == tk:
+				# Boundary cell has been encountered
+				# Walk ends at destination point
+				hits[key] = (pp.x, pp.y, pp.z), (tp.x, tp.y, tp.z)
+				break
+
+			# Find the boundaries of the current cell
+			self._boundsForCell(&lo, &hi, i, j, k)
+
+			# Find the direction of travel in this cell
+			if grad(&gf, f, i, j, k, self._cell) != 0:
+				raise ValueError('Gradient does not exist at %r' % (key,))
+			mgf = ptnrm(gf)
+			if mgf < rtol * abs(f[i,j,k]):
+				# Stationary point has been encountered
+				# Walk ends, start and end points are the same
+				hits[key] = (pp.x, pp.y, pp.z), (pp.x, pp.y, pp.z)
+				break
+			iscal(-1.0 / mgf, &gf)
+
+			# Cast a ray through the cell (negative length is ignored)
+			if not Box3D._intersection(tlims, lo, hi, pp, gf, -1):
+				raise ValueError('Segment fails to intersect cell %s' % (key,))
+
+			# Record start and end points in this cell
+			np = axpy(tlims[1], gf, pp)
+
+			intersections[key] = (pp.x, pp.y, pp.z), (np.x, np.y, np.z)
+
+			# Advance the point and find the next cell
+			pp = np
+			# Step into next box should never exceed cell diagonal
+			self._advance(&i, &j, &k, 0.0, step, hmax, pp, gf)
+
+		return intersections
 
 
 	@cython.embedsignature(True)
-	def raymarcher(self, Segment3D seg not None, double minlen=realeps):
+	def raymarcher(self, Segment3D seg not None, double step=realeps):
 		'''
 		Marches along the given Segment3D seg to identify cells in the
 		grid (defined by the ncell property) that intersect the
@@ -1077,14 +1131,13 @@ cdef class Box3D:
 		segment is taken to advance into another intersecting cell. The
 		length of the step will be
 
-			minlen * sum(2**i for i in range(q)),
+			step * sum(2**i for i in range(q)),
 
-		where the q is chosen at each step as the minimum integer that
-		guarantees advancement to another cell.
-
-		Because the step is never less than minlen, cells which
-		intersect the segment over a total length less than minlen may
-		be excluded from the intersection map.
+		where the q is chosen at each step as the minimum nonnegative
+		integer that guarantees advancement to another cell. Because
+		this step may be nonzero, cells which intersect the segment
+		over a total length less than step may be excluded from the
+		intersection map.
 
 		If the segment begins or ends in a cell, tmin or tmax for that
 		cell may fall outside the range [0, seg.length].
@@ -1099,8 +1152,7 @@ cdef class Box3D:
 		if not Box3D._intersection(tlims, self._lo, self._hi, sst, sdr, sl):
 			return { }
 
-		if not minlen <= 0:
-			raise ValueError('Length minlen must be positive')
+		if step <= 0: raise ValueError('Length step must be positive')
 
 		intersections = { }
 
@@ -1108,12 +1160,11 @@ cdef class Box3D:
 		cdef double t = max(0, tlims[0])
 		cdef double tmax = min(tlims[1], seg.length)
 
-		cdef point lo, hi, p
-		cdef long i, j, k, ni, nj, nk, q
+		cdef point lo, hi
+		cdef long i, j, k
 
 		# Find the cell that contains the current test point
-		p = seg._cartesian(t)
-		truncpt(&i, &j, &k, self._cart2cell(p.x, p.y, p.z))
+		self._cellForPoint(&i, &j, &k, axpy(t, seg._direction, seg._start))
 
 		while t < tmax:
 			self._boundsForCell(&lo, &hi, i, j, k)
@@ -1126,21 +1177,58 @@ cdef class Box3D:
 				val = tlims[0], tlims[1]
 				intersections[key] = val
 
-			# Advance to the next cell
-			t = tlims[1] + minlen
-			q = 1
-			while t < tmax:
-				# Try stepping into the next cell
-				p = seg._cartesian(t)
-				truncpt(&ni, &nj, &nk, self._cart2cell(p.x, p.y, p.z))
-
-				if ni == i and nj == j and nk == k:
-					# Stuck in same cell; take a larger step
-					q *= 2
-					t += (<double>q * minlen)
-				else:
-					# In new cell; stop taking steps
-					i, j, k = ni, nj, nk
-					break
+			# Advance to next cell or run off end of segment
+			t = self._advance(&i, &j, &k, tlims[1], step,
+					tmax, seg._start, seg._direction)
 
 		return intersections
+
+
+	cdef void _cellForPoint(self, long *i, long *j, long *k, point p):
+		'''
+		Compute, in i, j and k, the coordinates of the cell that
+		contains the point p.
+		'''
+		cdef point c = self._cart2cell(p.x, p.y, p.z)
+		i[0] = <long>c.x
+		j[0] = <long>c.y
+		k[0] = <long>c.z
+
+
+	cdef double _advance(self, long *i, long *j, long *k, double t,
+			double step, double tmax, point start, point direction):
+		'''
+		For a point with coordinates (start + t * direction), compute a
+		new distance tp such that (start + tp * direction) belongs to a
+		cell distinct from the provided (i, j, k), the distance
+
+		    tp = t + step * sum(2**i for i in range(q))
+
+		where q is the smallest nonnegative integer that guarantees
+		that the point will reside in a distinct cell, and tp < tmax.
+
+		The indices of the cell containing the advanced point will be
+		stored in i, j and k and the new value tp will be returned.
+
+		If no tp satisfies all three criteria, the values of i, j and k
+		will remain unchanged, while some t >= tmax will be returned.
+		'''
+		cdef long ni, nj, nk
+
+		while t < tmax:
+			# Find the coordinates of the advanced point
+			self._cellForPoint(&ni, &nj, &nk, axpy(t, direction, start))
+
+			if ni != i[0] or nj != j[0] or nk != k[0]:
+				# Cell is different, terminate advancement
+				i[0] = ni
+				j[0] = nj
+				k[0] = nk
+				return t
+			# Cell is the same, take another step
+			t += step
+			# Increase step for next time
+			step *= 2
+
+		# No neighbor cell was found, just return too-large t
+		return t
