@@ -195,7 +195,7 @@ cdef unsigned int grad(point *result, real[:,:,:] f, unsigned long i,
 
 	has_right = (i < (nx - 1))
 	if has_right:
-		lval = f[i + 1, j, k]
+		rval = f[i + 1, j, k]
 		step += h.x
 	else:
 		# No step to the right
@@ -217,7 +217,7 @@ cdef unsigned int grad(point *result, real[:,:,:] f, unsigned long i,
 
 	has_right = (j < (ny - 1))
 	if has_right:
-		lval = f[i, j + 1, k]
+		rval = f[i, j + 1, k]
 		step += h.y
 	else:
 		# No step to the right
@@ -239,7 +239,7 @@ cdef unsigned int grad(point *result, real[:,:,:] f, unsigned long i,
 
 	has_right = (j < (nz - 1))
 	if has_right:
-		lval = f[i, j, k + 1]
+		rval = f[i, j, k + 1]
 		step += h.z
 	else:
 		# No step to the right
