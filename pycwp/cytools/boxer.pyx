@@ -18,6 +18,8 @@ from libc.math cimport sqrt, floor
 
 from collections import OrderedDict
 
+from itertools import izip, product as iproduct
+
 cdef extern from "float.h":
 	cdef double FLT_EPSILON
 	cdef double DBL_EPSILON
@@ -27,9 +29,6 @@ with cython.cdivision(True):
 	infinity = 1.0 / 0.0
 
 cdef double realeps = sqrt(FLT_EPSILON * DBL_EPSILON)
-realeps = FLT_EPSILON
-
-from itertools import izip, product as iproduct
 
 cdef struct point:
 	double x, y, z
@@ -1015,9 +1014,9 @@ cdef class Box3D:
 	@cython.wraparound(False)
 	@cython.embedsignature(True)
 	def descent(self, p, t, real[:,:,:] f not None,
-			double step=realeps, double rtol=1e-6):
+			bint report=False, double step=realeps, double rtol=1e-6):
 		'''
-		Starting at a point p = x, y, z, where x, y, z are Cartesian
+		Starting at a point p = (x, y, z), where x, y, z are Cartesian
 		coordinates within the bounds of this box, perform a
 		steepest-descent walk (against the gradient) through the given
 		scalar field f. The walk ends when one of:
@@ -1030,6 +1029,12 @@ cdef class Box3D:
 		The return value is an OrderedDict mapping (i, j, k) cell
 		indices to the start and end points of the path through that
 		cell. If p is outside the grid, the mapping will be empty.
+
+		If the argument report is True, a second return value, a
+		string with the value 'destination', 'boundary', 'stationary',
+		'cycle' or 'stationary', corresponding to each of the above
+		four reasons for termination, will indicate the reason for
+		terminating the walk.
 
 		The argument step is interpreted as in Box3D.raymarcher; the
 		step is used (in adaptively increasing increments) to ensure
@@ -1055,9 +1060,6 @@ cdef class Box3D:
 		cdef double tlims[2]
 		cdef long i, j, k, ti, tj, tk
 
-		# Record the paths encountered in the walk
-		hits = { }
-
 		# Find cell containing starting point
 		self._cellForPoint(&i, &j, &k, pp)
 
@@ -1068,22 +1070,28 @@ cdef class Box3D:
 		cdef long nx, ny, nz
 		nx, ny, nz = self.nx, self.ny, self.nz
 
-		intersections = { }
+		# Record the paths encountered in the walk
+		hits = OrderedDict()
+		reason = None
 
 		while True:
 			if not (0 <= i < nx and 0 <= j < ny and 0 <= k < nz):
 				# Walk has left the bounds of the box
+				reason = 'boundary'
 				break
 
 			key = i, j, k
 
-			# Encountered a cell previously encountered
-			if key in intersections: break
+			if key in hits:
+				# Encountered a cell previously encountered
+				reason = 'cycle'
+				break
 
 			if i == ti and j == tj and k == tk:
 				# Boundary cell has been encountered
 				# Walk ends at destination point
 				hits[key] = (pp.x, pp.y, pp.z), (tp.x, tp.y, tp.z)
+				reason = 'destination'
 				break
 
 			# Find the boundaries of the current cell
@@ -1097,6 +1105,7 @@ cdef class Box3D:
 				# Stationary point has been encountered
 				# Walk ends, start and end points are the same
 				hits[key] = (pp.x, pp.y, pp.z), (pp.x, pp.y, pp.z)
+				reason = 'stationary'
 				break
 			iscal(-1.0 / mgf, &gf)
 
@@ -1107,14 +1116,15 @@ cdef class Box3D:
 			# Record start and end points in this cell
 			np = axpy(tlims[1], gf, pp)
 
-			intersections[key] = (pp.x, pp.y, pp.z), (np.x, np.y, np.z)
+			hits[key] = (pp.x, pp.y, pp.z), (np.x, np.y, np.z)
 
 			# Advance the point and find the next cell
 			pp = np
 			# Step into next box should never exceed cell diagonal
 			self._advance(&i, &j, &k, 0.0, step, hmax, pp, gf)
 
-		return intersections
+		if report: return hits, reason
+		else: return hits
 
 
 	@cython.embedsignature(True)
@@ -1193,6 +1203,15 @@ cdef class Box3D:
 		i[0] = <long>c.x
 		j[0] = <long>c.y
 		k[0] = <long>c.z
+
+	def cellForPoint(self, double x, double y, double z):
+		'''
+		Compute the cell (i, j, k) that contains the point with
+		Cartesian coordinates (x, y, z).
+		'''
+		cdef long i, j, k
+		self._cellForPoint(&i, &j, &k, packpt(x, y, z))
+		return i, j, k
 
 
 	cdef double _advance(self, long *i, long *j, long *k, double t,
