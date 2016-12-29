@@ -17,7 +17,7 @@ from itertools import izip, product as iproduct
 @cython.cdivision(True)
 @cython.boundscheck(False)
 @cython.wraparound(False)
-cdef real minnbr(real[:] t, unsigned long i):
+cdef real minnbr(real[:] t, unsigned long i) nogil:
 	'''
 	For a 1-D array t of length n, return
 
@@ -227,7 +227,7 @@ class FastSweep(object):
 		box = self.box
 		ncell = box.ncell
 
-		cdef unsigned int nx, ny, nz
+		cdef unsigned long nx, ny, nz
 		nx, ny, nz = ncell
 
 		if s.shape[0] != nx or s.shape[1] != ny or s.shape[2] != nz:
@@ -247,7 +247,7 @@ class FastSweep(object):
 		mx, my, mz = box.midpoint
 
 		# Start sweeping in the dominant direction
-		cdef unsigned int soct
+		cdef unsigned long soct
 		soct = <unsigned int>(mz < sz)
 		soct <<= 1
 		soct |= <unsigned int>(my < sy)
@@ -257,17 +257,17 @@ class FastSweep(object):
 		# Convert source to grid coords and find (extended) enclosing cell
 		sx, sy, sz = box.cart2cell(sx, sy, sz)
 
-		cdef int si, sj, sk
-		si = max(0, min(<int>sx, nx - 1))
-		sj = max(0, min(<int>sy, ny - 1))
-		sk = max(0, min(<int>sz, nz - 1))
+		cdef unsigned long si, sj, sk
+		si = min(<unsigned long>max(<long>sx, 0), nx - 1)
+		sj = min(<unsigned long>max(<long>sy, 0), ny - 1)
+		sk = min(<unsigned long>max(<long>sz, 0), nz - 1)
 
 		cdef real slw = s[si,sj,sk]
 		cdef real hx, hy, hz
 		hx, hy, hz = box.cell
 
 		# Assign arrival-time values to grid points surrounding cell
-		cdef int i, j, k, ci, cj, ck
+		cdef long i, j, k, ci, cj, ck
 		cdef real rx, ry, rz
 		for i in range(2):
 			ci = si + i
@@ -286,7 +286,7 @@ class FastSweep(object):
 					rz *= rz
 					t[ci,cj,ck] = slw * sqrt(rx + ry + rz)
 
-		cdef unsigned int octant
+		cdef unsigned long octant
 
 		it = 0
 		while True:

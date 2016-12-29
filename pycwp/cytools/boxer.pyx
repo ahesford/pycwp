@@ -14,7 +14,7 @@ from cpython.mem cimport PyMem_Malloc, PyMem_Free
 from cython cimport floating as real
 
 from math import sqrt
-from libc.math cimport sqrt, floor
+from libc.math cimport sqrt, floor, fabs
 
 from collections import OrderedDict
 
@@ -33,7 +33,7 @@ cdef double realeps = sqrt(FLT_EPSILON * DBL_EPSILON)
 cdef struct point:
 	double x, y, z
 
-cdef point axpy(double a, point x, point y):
+cdef point axpy(double a, point x, point y) nogil:
 	'''
 	Return a point struct equal to (a * x + y).
 	'''
@@ -44,7 +44,7 @@ cdef point axpy(double a, point x, point y):
 	return r
 
 
-cdef point * iaxpy(double a, point x, point *y):
+cdef point * iaxpy(double a, point x, point *y) nogil:
 	'''
 	Store, in y, the value of (a * x + y).
 	'''
@@ -54,7 +54,7 @@ cdef point * iaxpy(double a, point x, point *y):
 	return y
 
 
-cdef point scal(double a, point x):
+cdef point scal(double a, point x) nogil:
 	'''
 	Scale the point x by a.
 	'''
@@ -65,7 +65,7 @@ cdef point scal(double a, point x):
 	return r
 
 
-cdef point * iscal(double a, point *x):
+cdef point * iscal(double a, point *x) nogil:
 	'''
 	Scale the point x, in place, by a.
 	'''
@@ -75,20 +75,20 @@ cdef point * iscal(double a, point *x):
 	return x
 
 
-cdef double ptnrm(point x, bint squared=0):
+cdef double ptnrm(point x, bint squared=0) nogil:
 	cdef double ns = x.x * x.x + x.y * x.y + x.z * x.z
 	if squared: return ns
 	else: return sqrt(ns)
 
 
-cdef double dot(point l, point r):
+cdef double dot(point l, point r) nogil:
 	'''
 	Return the inner product of two point structures.
 	'''
 	return l.x * r.x + l.y * r.y + l.z * r.z
 
 
-cdef point cross(point l, point r):
+cdef point cross(point l, point r) nogil:
 	'''
 	Return the cross product of two Point3D objects.
 	'''
@@ -99,17 +99,17 @@ cdef point cross(point l, point r):
 	return o
 
 
-cdef bint almosteq(double x, double y, double eps=realeps):
+cdef bint almosteq(double x, double y, double eps=realeps) nogil:
 	'''
 	Returns True iff the difference between x and y is less than or equal
 	to M * eps, where M = max(abs(x), abs(y), 1.0).
 	'''
-	cdef double mxy = max(abs(x), abs(y), 1.0)
-	return abs(x - y) <= eps * mxy
+	cdef double mxy = max(fabs(x), fabs(y), 1.0)
+	return fabs(x - y) <= eps * mxy
 
 
 @cython.cdivision(True)
-cdef double infdiv(double a, double b, double eps=realeps):
+cdef double infdiv(double a, double b, double eps=realeps) nogil:
 	'''
 	Return a / b with special handling of small values:
 
@@ -117,8 +117,8 @@ cdef double infdiv(double a, double b, double eps=realeps):
 	2. Otherwise, if |a| <= eps, return 0.
 	'''
 	cdef double aa, bb
-	aa = abs(a)
-	ab = abs(b)
+	aa = fabs(a)
+	ab = fabs(b)
 
 	if ab <= eps * aa:
 		if (a >= 0) == (b >= 0):
@@ -130,7 +130,7 @@ cdef double infdiv(double a, double b, double eps=realeps):
 	return a / b
 
 
-cdef point packpt(double x, double y, double z):
+cdef point packpt(double x, double y, double z) nogil:
 	cdef point r
 	r.x = x
 	r.y = y
@@ -142,7 +142,7 @@ cdef object pt2tup(point a):
 	return (a.x, a.y, a.z)
 
 
-cdef bint tup2pt(point *pt, object p) except -1:
+cdef int tup2pt(point *pt, object p) except -1:
 	cdef double x, y, z
 	x, y, z = p
 
@@ -153,12 +153,11 @@ cdef bint tup2pt(point *pt, object p) except -1:
 
 	return 0
 
-
 @cython.cdivision(True)
 @cython.boundscheck(False)
 @cython.wraparound(False)
 cdef unsigned int grad(point *result, real[:,:,:] f, unsigned long i,
-		unsigned long j, unsigned long k, point h):
+		unsigned long j, unsigned long k, point h) nogil:
 	'''
 	Computes, in result, the gradient of the field f, using central
 	differencing away from boundaries and one-sided differencing at the
@@ -251,28 +250,102 @@ cdef unsigned int grad(point *result, real[:,:,:] f, unsigned long i,
 	return gdirs
 
 
+cdef class Interpolator3D:
+	'''
+	A class to manage a function sampled on a 3-D grid and provide routines
+	for interpolating the function and the gradient.
+	'''
+	@staticmethod
+	cdef void bswt(double *w, double t) nogil:
+		'''
+		Compute, in the four-element array w, the weights for cubic
+		b-spline interpolation for a normalized fractional coordinate
+		t. These coordinates will be invalid unless 0 <= t <= 1.
+
+		If Phi is the standard unnormalized cubic b-spline [i.e.,
+		Phi(0) = 4 and Phi(1) = Phi(-1) = 1], the weights have values
+
+		  w[0] = Phi(-t - 1), w[1] = Phi(-t),
+		  w[2] = Phi(1 - t), w[3] = Phi(2 - t).
+
+		If a point x falls in the interval [x_i, x_{i+1}) of a
+		uniformly spaced grid, then the normalized fractional
+		coordinate is
+
+		  t = (x - x_i) / (x_{i+1} - x_i)
+
+		and the value at x of an interpolated function f with spline
+		coefficients c[i] is
+
+		  f(x) = c[i-1] * w[0] + c[i] * w[1]
+				+ c[i+1] * w[2] + c[i+2]*w[3].
+		'''
+		cdef double ts
+		ts = 1 - t
+		w[0] = ts * ts * ts
+		w[1] = 4 - 3 * t * t * (2 - t)
+		w[2] = 4 - 3 * ts * ts * (1 + t)
+		w[3] = t * t * t
+
+
+	@staticmethod
+	cdef void dbswt(double *w, double t) nogil:
+		'''
+		Compute, in the four-element array w, the weights for the
+		derivative of a cubic b-spline interpolation for a normalized
+		fractional coordinate t. The weights in w are the derivatives,
+		with respect to t, of the weights from bswt(); thus
+
+		  w[0] = Phi'(-t - 1), w[1] = Phi'(-t),
+		  w[2] = Phi'(1 - t), w[3] = Phi'(2 - t).
+
+		As with bswt, the weights will be invalid unless 0 <= t <= 1.
+		'''
+		cdef double ts
+		ts = 1 - t
+		w[0] = -3 * ts * ts
+		w[1] = 3 * t * (3 * t - 4)
+		w[2] = 3 * ts * (3 * t + 1)
+		w[3] = 3 * t * t
+
+
 cdef class Segment3D:
 	'''
 	A representation of a 3-D line segment.
+
+	Initialize as Segment3D(start, end), where start and end are three-
+	element sequences providing the Cartesian coordinates of the respective
+	start and end points of the segment.
 	'''
 	# Intrinsic properties of the segment
 	cdef point _start, _end
 
 	# Dependent properties (accessible from Python)
 	cdef readonly double length
-	cdef readonly unsigned int majorAxis
 
 	# Dependent properties (hidden from Python)
 	cdef point _midpoint, _direction
 
-	@cython.cdivision(True)
-	def __cinit__(self, start, end):
+	def __init__(self, start, end):
 		'''
 		Initialize a 3-D line segment that starts and ends at the
 		indicated points (3-tuples of float coordinates).
 		'''
-		tup2pt(&self._start, start)
-		tup2pt(&self._end, end)
+		cdef point s, e
+		tup2pt(&s, start)
+		tup2pt(&e, end)
+		self.setends(s, e)
+
+
+	@cython.cdivision(True)
+	cdef void setends(self, point start, point end):
+		'''
+		Initialize a 3-D line segment that starts and ends at the
+		indicated points.
+		'''
+		# Copy the start and end points
+		self._start = start
+		self._end = end
 
 		# Initialize dependent properties
 		self._direction = axpy(-1.0, self._start, self._end)
@@ -283,20 +356,6 @@ cdef class Segment3D:
 
 		self._midpoint = axpy(1.0, self._start, self._end)
 		iscal(0.5, &(self._midpoint))
-
-		cdef double ma, ca
-		self.majorAxis = 0
-		ma = abs(self._direction.x)
-
-		ca = abs(self._direction.y)
-		if ca > ma:
-			ma = ca
-			self.majorAxis = 1
-
-		ca = abs(self._direction.z)
-		if ca > ma:
-			ma = ca
-			self.majorAxis = 2
 
 
 	@property
@@ -376,6 +435,10 @@ cdef class Segment3D:
 cdef class Triangle3D:
 	'''
 	A representation of a triangle embedded in 3-D space.
+
+	Initialize as Triangle3D(nodes), where nodes is a sequence of three
+	node descriptors, each of which is a three-element sequence which
+	provides the Cartesian coordinates of the node.
 	'''
 	cdef point _nodes[3]
 	cdef point _normal
@@ -384,17 +447,36 @@ cdef class Triangle3D:
 	cdef readonly double offset
 	cdef readonly double area
 
-	@cython.cdivision(True)
-	def __cinit__(self, nodes):
+	def __cinit__(self, *args, **kwargs):
 		'''
-		Initialize a triangle from nodes in the given sequence.
+		Make sure the QR pointer is NULL for proper management.
 		'''
+		self._qr = <point *>NULL
+
+	def __init__(self, nodes):
+		'''
+		Initialize a triangle from the sequence of three nodes (each a
+		sequence of three floats).
+		'''
+		cdef point n1, n2, n3
 		if len(nodes) != 3:
 			raise ValueError('Length of nodes sequence must be 3')
 
-		cdef unsigned int i
-		for i in range(3):
-			tup2pt(&(self._nodes[i]), nodes[i])
+		tup2pt(&n1, nodes[0])
+		tup2pt(&n2, nodes[1])
+		tup2pt(&n3, nodes[2])
+
+		self.setnodes(n1, n2, n3)
+
+
+	@cython.cdivision(True)
+	cdef int setnodes(self, point n1, point n2, point n3) except -1:
+		'''
+		Initialize a triangle from the given nodes.
+		'''
+		self._nodes[0] = n1
+		self._nodes[1] = n2
+		self._nodes[2] = n3
 
 		# Find maximum cross product to determine normal
 		cdef point l, r, v
@@ -403,6 +485,7 @@ cdef class Triangle3D:
 
 		mag = -1
 
+		cdef int i
 		for i in range(3):
 			j = (i + 1) % 3
 			l = axpy(-1, self._nodes[i], self._nodes[j])
@@ -426,7 +509,12 @@ cdef class Triangle3D:
 		iscal(1. / mag, &(self._normal))
 		self.offset = -dot(self._normal, self._nodes[0])
 
-		self._qr = <point *>NULL
+		if self._qr != <point *>NULL:
+			# Make sure any existing QR decomposition is cleared
+			PyMem_Free(<void *>self._qr)
+			self._qr = <point *>NULL
+
+		return 0
 
 	def __dealloc__(self):
 		if self._qr != <point *>NULL:
@@ -472,7 +560,9 @@ cdef class Triangle3D:
 
 		# Here, self._qr will be NULL until the end
 		qr = <point *>PyMem_Malloc(3 * sizeof(point));
-		if qr == self._qr: return self._qr
+		if qr == self._qr:
+			# Allocation failed, nothing more to do
+			return self._qr
 
 		# Perform Gram-Schmidt orthogonalization to build Q and R
 		qr[0] = axpy(-1.0, self._nodes[2], self._nodes[0])
@@ -590,14 +680,14 @@ cdef class Triangle3D:
 
 
 	@staticmethod
-	cdef bint sat_cross_test(point a, point v[3], point hlen):
+	cdef bint sat_cross_test(point a, point v[3], point hlen) nogil:
 		cdef double px, py, pz, r
 
 		px = dot(a, v[0])
 		py = dot(a, v[1])
 		pz = dot(a, v[2])
 
-		r = hlen.x * abs(a.x) + hlen.y * abs(a.y) + hlen.z * abs(a.z)
+		r = hlen.x * fabs(a.x) + hlen.y * fabs(a.y) + hlen.z * fabs(a.z)
 		return not(min(px, py, pz) > r or max(px, py, pz) < -r)
 
 
@@ -744,16 +834,32 @@ cdef class Triangle3D:
 cdef class Box3D:
 	'''
 	A representation of an axis-aligned 3-D bounding box.
+
+	Initialize as Box3D(lo, hi), where lo and hi are three-element
+	sequences that provide the Cartesian coordinates of the low and high
+	corners, respectively.
 	'''
 	cdef point _lo, _hi, _midpoint, _length, _cell
 	cdef unsigned long nx, ny, nz
 
-	def __cinit__(self, lo, hi):
+	def __init__(self, lo, hi):
+		'''
+		Initialize a 3-D box with extreme corners lo and hi (each a
+		3-tuple of floats).
+		'''
+		cdef point _lo, _hi
+		tup2pt(&_lo, lo)
+		tup2pt(&_hi, hi)
+		self.setbounds(_lo, _hi)
+
+
+	cdef int setbounds(self, point lo, point hi) except -1:
 		'''
 		Initialize a 3-D box with extreme corners lo and hi.
 		'''
-		tup2pt(&self._lo, lo)
-		tup2pt(&self._hi, hi)
+		# Copy the extreme corners
+		self._lo = lo
+		self._hi = hi
 
 		if (self._lo.x > self._hi.x or
 				self._lo.y > self._hi.y or self._lo.z > self._hi.z):
@@ -767,6 +873,8 @@ cdef class Box3D:
 
 		self.nx = self.ny = self.nz = 1
 		self._cell = self._length
+
+		return 0
 
 
 	@property
@@ -821,7 +929,7 @@ cdef class Box3D:
 
 
 	@cython.cdivision(True)
-	cdef point _cart2cell(self, double x, double y, double z):
+	cdef point _cart2cell(self, double x, double y, double z) nogil:
 		'''C backer for cart2cell'''
 		cdef point ptcell
 
@@ -843,7 +951,7 @@ cdef class Box3D:
 
 
 	@cython.cdivision
-	cdef point _cell2cart(self, double i, double j, double k):
+	cdef point _cell2cart(self, double i, double j, double k) nogil:
 		cdef point ptcrd
 
 		ptcrd.x = i * self._cell.x + self._lo.x
@@ -862,7 +970,8 @@ cdef class Box3D:
 		return pt2tup(self._cell2cart(i, j, k))
 
 
-	cdef void _boundsForCell(self, point *lo, point *hi, long i, long j, long k):
+	cdef void _boundsForCell(self, point *lo,
+			point *hi, long i, long j, long k) nogil:
 		'''
 		Compute, in lo and hi, the respective lower and upper corners
 		of the cell at index (i, j, k) in the grid defined for this box.
@@ -931,7 +1040,7 @@ cdef class Box3D:
 				aly > bhy or ahz < blz or alz > bhz)
 
 
-	cdef bint _contains(self, point p):
+	cdef bint _contains(self, point p) nogil:
 		'''C backer for contains'''
 		return ((p.x >= self._lo.x) and (p.x <= self._hi.x)
 				and (p.y >= self._lo.y) and (p.y <= self._hi.y)
@@ -949,7 +1058,7 @@ cdef class Box3D:
 
 
 	@staticmethod
-	cdef bint _intersection(double *t, point l, point h, point s, point d, double sl):
+	cdef bint _intersection(double *t, point l, point h, point s, point d, double sl) nogil:
 		'''
 		Low-level routine to compute intersection of a box, with low
 		and high corners l and h, respectively, with a ray or segment
@@ -1013,7 +1122,8 @@ cdef class Box3D:
 	@cython.boundscheck(False)
 	@cython.wraparound(False)
 	@cython.embedsignature(True)
-	def descent(self, p, t, real[:,:,:] f not None,
+	@cython.cdivision(True)
+	def descent(self, p, t, real[:,:,:] f not None, unsigned int cycles=1,
 			bint report=False, double step=realeps, double rtol=1e-6):
 		'''
 		Starting at a point p = (x, y, z), where x, y, z are Cartesian
@@ -1023,8 +1133,8 @@ cdef class Box3D:
 
 		1. The cell containing the destination point t is reached,
 		2. The path runs off the edge of the grid,
-		3. The path returns to a previously-encountered cell, or
-		4. The value |grad(f)| <= rtol * |f| in an encountered cell.
+		3. The value |grad(f)| <= rtol * |f| in an encountered cell, or
+		4. Any cell is encountered more than cycles times.
 
 		The return value is an OrderedDict mapping (i, j, k) cell
 		indices to the start and end points of the path through that
@@ -1032,9 +1142,8 @@ cdef class Box3D:
 
 		If the argument report is True, a second return value, a
 		string with the value 'destination', 'boundary', 'stationary',
-		'cycle' or 'stationary', corresponding to each of the above
-		four reasons for termination, will indicate the reason for
-		terminating the walk.
+		or 'cycle', corresponding to each of the above four reasons for
+		termination, will indicate the reason for terminating the walk.
 
 		The argument step is interpreted as in Box3D.raymarcher; the
 		step is used (in adaptively increasing increments) to ensure
@@ -1082,15 +1191,22 @@ cdef class Box3D:
 
 			key = i, j, k
 
-			if key in hits:
-				# Encountered a cell previously encountered
-				reason = 'cycle'
-				break
+			# Grab (or create) a hitlist for this cell
+			try:
+				hitlist = hits[key]
+			except KeyError:
+				hitlist = []
+				hits[key] = hitlist
+			else:
+				if len(hitlist) >= cycles:
+					# Too many hits in this cell
+					reason = 'cycle'
+					break
 
 			if i == ti and j == tj and k == tk:
 				# Boundary cell has been encountered
 				# Walk ends at destination point
-				hits[key] = (pp.x, pp.y, pp.z), (tp.x, tp.y, tp.z)
+				hitlist.append((pt2tup(pp), pt2tup(tp)))
 				reason = 'destination'
 				break
 
@@ -1101,10 +1217,10 @@ cdef class Box3D:
 			if grad(&gf, f, i, j, k, self._cell) != 0:
 				raise ValueError('Gradient does not exist at %r' % (key,))
 			mgf = ptnrm(gf)
-			if mgf < rtol * abs(f[i,j,k]):
+			if mgf < rtol * fabs(f[i,j,k]):
 				# Stationary point has been encountered
 				# Walk ends, start and end points are the same
-				hits[key] = (pp.x, pp.y, pp.z), (pp.x, pp.y, pp.z)
+				hitlist.append((pt2tup(pp), pt2tup(pp)))
 				reason = 'stationary'
 				break
 			iscal(-1.0 / mgf, &gf)
@@ -1115,8 +1231,7 @@ cdef class Box3D:
 
 			# Record start and end points in this cell
 			np = axpy(tlims[1], gf, pp)
-
-			hits[key] = (pp.x, pp.y, pp.z), (np.x, np.y, np.z)
+			hitlist.append((pt2tup(pp), pt2tup(np)))
 
 			# Advance the point and find the next cell
 			pp = np
@@ -1194,7 +1309,7 @@ cdef class Box3D:
 		return intersections
 
 
-	cdef void _cellForPoint(self, long *i, long *j, long *k, point p):
+	cdef void _cellForPoint(self, long *i, long *j, long *k, point p) nogil:
 		'''
 		Compute, in i, j and k, the coordinates of the cell that
 		contains the point p.
@@ -1215,7 +1330,7 @@ cdef class Box3D:
 
 
 	cdef double _advance(self, long *i, long *j, long *k, double t,
-			double step, double tmax, point start, point direction):
+			double step, double tmax, point start, point direction) nogil:
 		'''
 		For a point with coordinates (start + t * direction), compute a
 		new distance tp such that (start + tp * direction) belongs to a
