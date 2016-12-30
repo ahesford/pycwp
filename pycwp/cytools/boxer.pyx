@@ -89,6 +89,14 @@ cdef double ptnrm(point x, bint squared=0) nogil:
 	else: return sqrt(ns)
 
 
+cdef double ptdst(point x, point y) nogil:
+	cdef double dx, dy, dz
+	dx = x.x - y.x
+	dy = x.y - y.y
+	dz = x.z - y.z
+	return sqrt(dx * dx + dy * dy + dz * dz)
+
+
 cdef double dot(point l, point r) nogil:
 	'''
 	Return the inner product of two point structures.
@@ -1262,26 +1270,55 @@ cdef class Box3D:
 	def descent(self, p, t, Interpolator3D field, unsigned int cycles=1,
 			bint report=False, double step=realeps, double rtol=1e-6):
 		'''
-		Starting at a point p = (x, y, z), where x, y, z are Cartesian
-		coordinates within the bounds of this box, perform a
-		steepest-descent walk (against the gradient) through the given
-		scalar field, encapsulated in an Interpolator3D instance
+		Perform a steepest-descent walk from a point p towards
+		(hopefully) the point t, where each of t and p are 3-tuples of
+		Cartesian coordinates, through the given scalar field. The
+		field should be represented as an Interpolator3D instance
 		capable of evaluating the field, f, and its gradient at
-		arbitrary points within the box. The walk ends when one of:
+		arbitrary points in this box. No guarantee is made that the
+		target point t will be reached.
 
-		1. The cell containing the destination point t is reached,
+		The walk begins by evaluating the gradient of the field at the
+		starting point and moving in a constant direction, opposite the
+		evaluated gradient, until the path leaves the current grid
+		cell. At every point where the path exits a cell, the gradient
+		is reevaluated and the path continues in a constant direction
+		opposite the new gradient.
+
+		The walk ends when one of:
+
+		1. The end point of a path segment comes within a distance
+		   norm(self.cell) of the desired target,
 		2. The path runs off the edge of the grid,
-		3. The value |grad(f)| <= rtol * |f| in an encountered cell, or
-		4. Any cell is encountered more than cycles times.
+		3. The path intersects any cell more than cycles times, or
+		4. The value |grad(f)| <= rtol * |f| at an encountered point.
 
-		The return value is an OrderedDict mapping (i, j, k) cell
-		indices to the start and end points of the path through that
-		cell. If p is outside the grid, the mapping will be empty.
+		Each path segment is accumulated in an OrderedDict that maps
+		(i, j, k) cell indices to a list of (start, end) tuples that
+		each describe the entry and exit points of the segment in that
+		cell. The mapping, which may be empty if the starting point p
+		is outside this box, is always returned.
 
-		If the argument report is True, a second return value, a
-		string with the value 'destination', 'boundary', 'stationary',
-		or 'cycle', corresponding to each of the above four reasons for
-		termination, will indicate the reason for terminating the walk.
+		If the length of a path segment will be forced to have a
+		minimum length of rtol * norm(self.cell). Any segment extended
+		in this manner will only be recorded as a "hit" for the cell
+		containing the starting point. Conseqeuntly, the length of the
+		segment in the hit map for the starting cell will be longer
+		than the actual intersection of the segment and cell, while the
+		map will overlook the intersections of the segment with any
+		other cells actually encountered.
+
+		If the endpoint of a path segment comes within norm(self.cell)
+		of the desired target, a direct path from the endpoint to the
+		destination will become the final segment of the path without
+		regard to the behavior of the field gradient. As is the case
+		for minimum-length segments, this final segment only counts as
+		a "hit" in the cell containing its starting point.
+
+		If the argument "report" is True, a second return value, a
+		string with value 'destination', 'boundary', 'cycle' or
+		'stationary', corresponding to the above reasons for
+		termination, indicates the reason for terminating the walk.
 
 		The argument step is interpreted as in Box3D.raymarcher; the
 		step is used (in adaptively increasing increments) to ensure
@@ -1300,21 +1337,22 @@ cdef class Box3D:
 		tup2pt(&pp, p)
 		tup2pt(&tp, t)
 
-		# The maximum step through any cell cannot exceed cell diagonal
+		# Convert validated points to tuples
+		t = pt2tup(tp)
+		p = pt2tup(pp)
+
+		# Store a reference to the next endpoint
+		cdef object ept
+
+		# Cell-length parameters
 		cdef double hmax, hx, hy, hz
 		hx, hy, hz = self._cell.x, self._cell.y, self._cell.z
 		hmax = sqrt(hx * hx + hy * hy + hz * hz)
 
-		cdef point lo, hi, gf, ep, cp
+		cdef point lo, hi, gf, epp, cp
 		cdef double tlims[2]
 		cdef double mgf, f
 		cdef long i, j, k, ti, tj, tk
-
-		# Find cell containing starting point (may be out of bounds)
-		self._cellForPoint(&i, &j, &k, pp)
-
-		# Find cell containing ending point (may be out of bounds)
-		self._cellForPoint(&ti, &tj, &tk, tp)
 
 		# For convenience
 		nx, ny, nz = self.nx, self.ny, self.nz
@@ -1322,6 +1360,14 @@ cdef class Box3D:
 		# Record the paths encountered in the walk
 		hits = OrderedDict()
 		reason = None
+
+		# Gradients are in cell units, but should be in Cartesian units
+		# The scaling also satisfies the minimum path-length threshold
+		rtol = rtol * hmax
+
+		# Find cells for starting and target points (may be out of bounds)
+		self._cellForPoint(&i, &j, &k, pp)
+		self._cellForPoint(&ti, &tj, &tk, tp)
 
 		while True:
 			if not (0 <= i < nx and 0 <= j < ny and 0 <= k < nz):
@@ -1343,10 +1389,12 @@ cdef class Box3D:
 				hitlist = []
 				hits[key] = hitlist
 
-			if i == ti and j == tj and k == tk:
-				# Boundary cell has been encountered
-				# Walk ends at destination point
-				hitlist.append((pt2tup(pp), pt2tup(tp)))
+			# Convert the point to a tuple for recording
+			p = pt2tup(pp)
+
+			if ptdst(pp, tp) <= hmax or (ti == i and tj == j and tk == k):
+				# Close enough to destination to make a beeline
+				hitlist.append((p, t))
 				reason = 'destination'
 				break
 
@@ -1357,11 +1405,12 @@ cdef class Box3D:
 			cp = self._cart2cell(pp.x, pp.y, pp.z)
 			if not Interpolator3D._evaluate(&f, &gf, field.coeffs, cp):
 				raise ValueError('Cannot evaluate gradient at %s' % ((cp.x, cp.y, cp.z),))
+			# Search for stationary points
 			mgf = ptnrm(gf)
 			if mgf < rtol * fabs(f):
 				# Stationary point has been encountered
 				# Walk ends, start and end points are the same
-				hitlist.append((pt2tup(pp), pt2tup(pp)))
+				hitlist.append((p,p))
 				reason = 'stationary'
 				break
 			iscal(-1.0 / mgf, &gf)
@@ -1370,13 +1419,21 @@ cdef class Box3D:
 			if not Box3D._intersection(tlims, lo, hi, pp, gf, -1):
 				raise ValueError('Segment fails to intersect cell %s' % (key,))
 
-			# Record start and end points in this cell
-			ep = axpy(tlims[1], gf, pp)
-			hitlist.append((pt2tup(pp), pt2tup(ep)))
+			# Make sure minimum length is satisfied
+			if tlims[1] < rtol: tlims[1] = rtol
 
-			# Advance the point and find the next cell
-			pp = ep
-			# Step into next box should never exceed cell diagonal
+			# Compute endpoint as point and tuple
+			epp = axpy(tlims[1], gf, pp)
+			ept = pt2tup(epp)
+
+			# Record start and end points in this cell
+			hitlist.append((p, ept))
+
+			# Advance the point
+			pp = epp
+			p = ept
+
+			# Step into the next cell, but not by more than cell diagonal
 			self._advance(&i, &j, &k, 0.0, step, hmax, pp, gf)
 
 		if report: return hits, reason
