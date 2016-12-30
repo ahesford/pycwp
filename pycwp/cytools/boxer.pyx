@@ -10,8 +10,16 @@ algorithm.
 import cython
 cimport cython
 
+import numpy as np
+cimport numpy as np
+
+try:
+	from scipy.linalg import solve_banded
+except ImportError:
+	solve_banded = None
+
+
 from cpython.mem cimport PyMem_Malloc, PyMem_Free
-from cython cimport floating as real
 
 from math import sqrt
 from libc.math cimport sqrt, floor, fabs
@@ -156,7 +164,7 @@ cdef int tup2pt(point *pt, object p) except -1:
 @cython.cdivision(True)
 @cython.boundscheck(False)
 @cython.wraparound(False)
-cdef unsigned int grad(point *result, real[:,:,:] f, unsigned long i,
+cdef unsigned int grad(point *result, double[:,:,:] f, unsigned long i,
 		unsigned long j, unsigned long k, point h) nogil:
 	'''
 	Computes, in result, the gradient of the field f, using central
@@ -172,7 +180,7 @@ cdef unsigned int grad(point *result, real[:,:,:] f, unsigned long i,
 	cdef unsigned long nx, ny, nz
 	cdef bint has_left, has_right
 	cdef unsigned int gdirs = 0
-	cdef real lval, rval, step
+	cdef double lval, rval, step
 
 	nx = f.shape[0]
 	ny = f.shape[1]
@@ -255,6 +263,245 @@ cdef class Interpolator3D:
 	A class to manage a function sampled on a 3-D grid and provide routines
 	for interpolating the function and the gradient.
 	'''
+	cdef double[:,:,:] coeffs
+
+	def __init__(self, image=None):
+		'''
+		Create an interpolator instance capable of providing scalar
+		function values and the gradient of the function at arbitrary
+		points. If image is not None, associate the instance (i.e.,
+		calculate the spline coefficients) with the image by calling
+		self.setimage(image).
+		'''
+		self.setimage(image)
+
+
+	@staticmethod
+	def _rowcoeffs(np.ndarray[np.float64_t, ndim=2] c not None,
+			np.ndarray[np.float64_t, ndim=2] ab=None):
+		'''
+		Compute, along the rows of c, the coefficients for a 1-D
+		natural cubic b-spline interpolation. Coefficients will be
+		computed in place.
+
+		The shape of c should be (nx + 2, ny), where interpolation is
+		in the interval [0, nx - 1]. Coefficients in row i correspond
+		to the cubic b-spline centered at sample i for 0 <= i <= nx.
+		The coefficients corresponding to the spline centered at sample
+		-1 are placed in row (nx + 1).
+
+		If ab is provided, it should be a compressed banded matrix of
+		shape (3, nx - 2) whose first and last row are all ones and
+		whose middle row is all fours; this is the tridiagonal matrix
+		used to determine natural cubic spline coefficients. The number
+		of columns in ab may be greater than nx - 2; extra columns will
+		be ignored.
+		
+		If ab is None, it will be computed on demand.
+		'''
+		if not solve_banded:
+			raise ImportError('Interpolate3D depends on scipy.linalg.solve_banded')
+
+		nx2, ny = c.shape[0], c.shape[1]
+
+		if nx2 < 4: raise ValueError('Array "c" must have at least 4 rows')
+
+		nx = nx2 - 2
+		nl = nx - 1
+		nll = nx - 2
+
+		if ab is None:
+			ab = np.ones((3, nll), dtype=np.float64)
+			ab[1,:] = 4.
+		elif ab.shape[0] != 3 or ab.shape[1] < nll:
+			raise ValueError('Array "ab" must be None or have shape (3, %d)' % (nll,))
+
+		# Fix endpoint coefficients
+		c[0,:] /= 6.
+		c[nl,:] /= 6.
+
+		# Adjust first and last interior points in RHS
+		c[1,:] -= c[0,:]
+		c[nll,:] -= c[nl,:]
+
+		# Solve the tridiagonal system
+		c[1:nl,:] = solve_banded((1,1), ab[:,:nll], c[1:nl,:])
+
+		# Fill in the out-of-bounds coefficients for natural splines
+		# Rightmost edge
+		c[nx,:] = 2 * c[nl,:] - c[nll,:]
+		# Leftmost edge, wrapped around
+		c[nx+1,:] = 2 * c[0,:] - c[1,:]
+
+
+	@cython.embedsignature(True)
+	def setimage(self, image):
+		'''
+		Compute and store the natural b-spline interpolation
+		coefficients for the given image.
+		'''
+		if image is None:
+			self.coeffs = None
+			return
+
+		# Make sure the image is an array of doubles
+		image = np.asarray(image, dtype=np.float64)
+		if image.ndim != 3:
+			raise ValueError('Argument "image" must be a 3-D array or None')
+
+		nx, ny, nz = image.shape
+
+		if nx < 2 or ny < 2 or nz < 2:
+			raise ValueError('Size of image must be at least (2, 2, 2)')
+
+		# Allocate the coefficient storage
+		cfs = np.zeros((nx + 2, ny + 2, nz + 2), dtype=np.float64, order='C')
+		# Pre-fill the coefficients with the image values
+		cfs[:nx,:ny,:nz] = image
+
+		# Precompute tridiagonal matrix for largest dimension
+		# Elements are unity off the main diagonal, 4 on the main
+		ab = np.ones((3, max(nx,ny,nz) - 2), dtype=np.float64)
+		ab[1,:] = 4.
+
+		# Collapse y and z to find coefficients in x
+		cx = cfs.reshape((nx + 2, -1), order='C')
+		self._rowcoeffs(cx, ab)
+
+		# In case cx was copied instead of a view on cfs
+		cfs = cx.reshape(cfs.shape, order='C')
+
+		# Now find y coefficients slab-by-slab
+		for cx in cfs: self._rowcoeffs(cx, ab)
+
+		# Collapse x and y to find coefficients in z
+		cx = cfs.reshape((-1, nz + 2), order='C').T
+		self._rowcoeffs(cx, ab)
+
+		# Capture the memory view
+		self.coeffs = cx.T.reshape(cfs.shape, order='C')
+
+
+	@cython.embedsignature(True)
+	def getcoeffs(self):
+		'''
+		Return a copy of the 3-D cubic b-spline coefficients currently
+		associated with this interpolator, or None if no image was
+		previously associated with a call to setimage().
+		'''
+		if self.coeffs is not None:
+			return np.array(self.coeffs)
+		return None
+
+
+	@cython.wraparound(False)
+	@cython.boundscheck(False)
+	cdef int _evaluate(self, double *f, point *grad,
+			double x, double y, double z) nogil except -1:
+		'''
+		Evaluate, in f, the image and, in grad, its gradient
+		at grid coordinates (x, y, z). If the instance has not been
+		associated with an image by a call to setimage(), or if the
+		coordinates are out of bounds, a ValueError will be raised.
+		'''
+		if self.coeffs is None:
+			with gil:
+				raise ValueError('No image is associated with this instance')
+
+		cdef long nx, ny, nz
+
+		# Coefficient shape is (nx + 2, ny + 2, nz + 2)
+		nx = self.coeffs.shape[0] - 2
+		ny = self.coeffs.shape[1] - 2
+		nz = self.coeffs.shape[2] - 2
+
+		# Find the fractional and integer parts of the coordinates
+		cdef:
+			# Maximum interval indices are to left of last pixel
+			long i = max(0, min(<long>x, nx - 2))
+			long j = max(0, min(<long>y, ny - 2))
+			long k = max(0, min(<long>z, nz - 2))
+
+			double t = x - <double>i
+			double u = y - <double>j
+			double v = z - <double>k
+
+		if not (0 <= t <= 1.0 and 0 <= u <= 1.0 and 0 <= v <= 1.0):
+			with gil:
+				raise ValueError('Desired point is out of image bounds')
+
+		cdef:
+			double tw[4]
+			double uw[4]
+			double vw[4]
+			double dt[4]
+			double du[4]
+			double dv[4]
+
+			double tt, dtt, uu, duu, vv, c
+			long ii, jj, kk, si, sj, sk
+
+		# Find the interpolating weights for the interval
+		Interpolator3D.bswt(&(tw[0]), t)
+		Interpolator3D.bswt(&(uw[0]), u)
+		Interpolator3D.bswt(&(vw[0]), v)
+		# Find the derivative weights
+		Interpolator3D.dbswt(&(dt[0]), t)
+		Interpolator3D.dbswt(&(du[0]), u)
+		Interpolator3D.dbswt(&(dv[0]), v)
+
+		f[0] = 0.0
+		grad[0].x = grad[0].y = grad[0].z = 0.0
+
+		ii = 0
+		si = i - 1 if i > 0 else nx + 1
+		while ii < 4:
+			tt = tw[ii]
+			dtt = dt[ii]
+
+			jj = 0
+			sj = j - 1 if j > 0 else ny + 1
+			while jj < 4:
+				uu = uw[jj]
+				duu = du[jj]
+
+				kk = 0
+				sk = k - 1 if k > 0 else nz + 1
+				while kk < 4:
+					c = self.coeffs[si,sj,sk]
+					vv = vw[kk]
+					f[0] += c * tt * uu * vv
+					grad[0].x += c * dtt * uu * vv
+					grad[0].y += c * tt * duu * vv
+					grad[0].z += c * tt * uu * dv[kk]
+
+					kk += 1
+					sk = k + kk - 1
+				jj += 1
+				sj = j + jj - 1
+			ii += 1
+			si = i + ii - 1
+
+		return 0
+
+
+	@cython.embedsignature(True)
+	def evaluate(self, double x, double y, double z):
+		'''
+		Evaluate and return the value of the image and its gradient at
+		grid coordinates (x, y, z).
+
+		If the instance has not been associated with an image by a call
+		to setimage(), or if the coordinates are out of bounds, a
+		ValueError will be raised.
+		'''
+		cdef double f
+		cdef point g
+
+		self._evaluate(&f, &g, x, y, z)
+		return f, (g.x, g.y, g.z)
+
+
 	@staticmethod
 	cdef void bswt(double *w, double t) nogil:
 		'''
@@ -1121,15 +1368,15 @@ cdef class Box3D:
 
 	@cython.boundscheck(False)
 	@cython.wraparound(False)
-	@cython.embedsignature(True)
 	@cython.cdivision(True)
-	def descent(self, p, t, real[:,:,:] f not None, unsigned int cycles=1,
+	@cython.embedsignature(True)
+	def descent(self, p, t, field, unsigned int cycles=1,
 			bint report=False, double step=realeps, double rtol=1e-6):
 		'''
 		Starting at a point p = (x, y, z), where x, y, z are Cartesian
 		coordinates within the bounds of this box, perform a
 		steepest-descent walk (against the gradient) through the given
-		scalar field f. The walk ends when one of:
+		scalar field (f for short). The walk ends when one of:
 
 		1. The cell containing the destination point t is reached,
 		2. The path runs off the edge of the grid,
@@ -1149,8 +1396,10 @@ cdef class Box3D:
 		step is used (in adaptively increasing increments) to ensure
 		that the segment in each cell advances to a neighboring cell.
 
-		A ValueError will be raised if f is of the wrong shape.
+		A ValueError will be raised if the field has the wrong shape.
 		'''
+		# Make sure the field is double-array compatible
+		cdef double[:,:,:] f = np.asarray(field, dtype=np.float64)
 		if (f.shape[0] != self.nx or
 				f.shape[1] != self.ny or f.shape[2] != self.nz):
 			raise ValueError('Shape of field f must be %s' % (self.ncell,))
@@ -1164,7 +1413,7 @@ cdef class Box3D:
 		cdef double hmax
 		hmax = sqrt(self._cell.x**2 + self._cell.y**2 + self._cell.z**2)
 
-		cdef point lo, hi, gf, np
+		cdef point lo, hi, gf, ep
 		cdef double mgf
 		cdef double tlims[2]
 		cdef long i, j, k, ti, tj, tk
@@ -1192,16 +1441,16 @@ cdef class Box3D:
 			key = i, j, k
 
 			# Grab (or create) a hitlist for this cell
-			try:
+			if key in hits:
 				hitlist = hits[key]
-			except KeyError:
-				hitlist = []
-				hits[key] = hitlist
-			else:
+
 				if len(hitlist) >= cycles:
 					# Too many hits in this cell
 					reason = 'cycle'
 					break
+			else:
+				hitlist = []
+				hits[key] = hitlist
 
 			if i == ti and j == tj and k == tk:
 				# Boundary cell has been encountered
@@ -1230,11 +1479,11 @@ cdef class Box3D:
 				raise ValueError('Segment fails to intersect cell %s' % (key,))
 
 			# Record start and end points in this cell
-			np = axpy(tlims[1], gf, pp)
-			hitlist.append((pt2tup(pp), pt2tup(np)))
+			ep = axpy(tlims[1], gf, pp)
+			hitlist.append((pt2tup(pp), pt2tup(ep)))
 
 			# Advance the point and find the next cell
-			pp = np
+			pp = ep
 			# Step into next box should never exceed cell diagonal
 			self._advance(&i, &j, &k, 0.0, step, hmax, pp, gf)
 
