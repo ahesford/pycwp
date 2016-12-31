@@ -13,12 +13,6 @@ cimport cython
 import numpy as np
 cimport numpy as np
 
-try:
-	from scipy.linalg import solve_banded
-except ImportError:
-	solve_banded = None
-
-
 from cpython.mem cimport PyMem_Malloc, PyMem_Free
 
 from math import sqrt
@@ -177,48 +171,62 @@ cdef class Interpolator3D:
 	'''
 	cdef double[:,:,:] coeffs
 
+	@cython.wraparound(False)
+	@cython.boundscheck(False)
+	@cython.embedsignature(True)
 	def __init__(self, image):
 		'''
 		Create an interpolator instance capable of providing scalar
 		function values and the gradient of the given image function at
 		arbitrary points.
 		'''
-		# Make sure the image is an array of doubles
-		image = np.asarray(image, dtype=np.float64)
-		if image.ndim != 3:
-			raise ValueError('Argument "image" must be a 3-D array or None')
+		cdef np.ndarray[np.float64_t, ndim=3] img
+		img = np.asarray(image, dtype=np.float64)
 
-		nx, ny, nz = image.shape
+		if img.ndim != 3:
+			raise ValueError('Argument "image" must be a 3-D array')
+
+		cdef unsigned long nx, ny, nz, nx2, ny2, nz2
+		nx, ny, nz = img.shape[0], img.shape[1], img.shape[2]
 
 		if nx < 2 or ny < 2 or nz < 2:
 			raise ValueError('Size of image must be at least (2, 2, 2)')
 
-		# Allocate the coefficient storage
-		cfs = np.zeros((nx + 2, ny + 2, nz + 2), dtype=np.float64, order='C')
-		# Pre-fill the coefficients with the image values
-		cfs[:nx,:ny,:nz] = image
+		nx2, ny2, nz2 = nx + 2, ny + 2, nz + 2
 
-		# Precompute tridiagonal matrix for largest dimension
-		# Elements are unity off the main diagonal, 4 on the main
-		ab = np.ones((3, max(nx,ny,nz) - 2), dtype=np.float64)
-		ab[1,:] = 4.
+		# Allocate coefficients and prepopulate image
+		cdef double[:,:,:] coeffs
+		coeffs = np.empty((nx2, ny2, nz2), dtype=np.float64, order='C')
 
-		# Collapse y and z to find coefficients in x
-		cx = cfs.reshape((nx + 2, -1), order='C')
-		self._rowcoeffs(cx, ab)
+		# Allocate a work array for coefficient evaluation
+		cdef double[:] work
+		work = np.empty((max(nx, ny, nz) - 2,), dtype=np.float64, order='C')
 
-		# In case cx was copied instead of a view on cfs
-		cfs = cx.reshape(cfs.shape, order='C')
+		# Copy the image into the coefficient array
+		cdef unsigned long ix, iy, iz
+		for ix in range(nx):
+			for iy in range(ny):
+				for iz in range(nz):
+					coeffs[ix,iy,iz] = img[ix,iy,iz]
 
-		# Now find y coefficients slab-by-slab
-		for cx in cfs: self._rowcoeffs(cx, ab)
 
-		# Collapse x and y to find coefficients in z
-		cx = cfs.reshape((-1, nz + 2), order='C').T
-		self._rowcoeffs(cx, ab)
+		# Allocate a work array for coefficient evaluation
+		for ix in range(nx):
+			# Transform each z column independently
+			for iy in range(ny):
+				Interpolator3D.nscoeffs(coeffs[ix,iy,:], work)
+			# Transform each y row independently
+			# Remember to include extended, out-of-bounds coefficients
+			for iz in range(nz2):
+				Interpolator3D.nscoeffs(coeffs[ix,:,iz], work)
 
-		# Capture the memory view
-		self.coeffs = cx.T.reshape(cfs.shape, order='C')
+		# Now transform along the x axis
+		for iy in range(ny2):
+			for iz in range(nz2):
+				Interpolator3D.nscoeffs(coeffs[:,iy,iz], work)
+
+		# Retain the view globally
+		self.coeffs = coeffs
 
 
 	@property
@@ -227,75 +235,76 @@ cdef class Interpolator3D:
 		A grid (nx, ny, nz) representing the shape of the image being
 		interpolated.
 		'''
-		return (self.coeffs.shape[0] - 2,
-				self.coeffs.shape[1] - 2, self.coeffs.shape[2] - 2)
+		cdef double [:,:,:] coeffs = self.coeffs
+		return (coeffs.shape[0] - 2, coeffs.shape[1] - 2, coeffs.shape[2] - 2)
 
 
+	@cython.wraparound(False)
+	@cython.boundscheck(False)
+	@cython.cdivision(True)
 	@staticmethod
-	def _rowcoeffs(np.ndarray[np.float64_t, ndim=2] c not None,
-			np.ndarray[np.float64_t, ndim=2] ab=None):
+	cdef int nscoeffs(double[:] c, double[:] work) except -1:
 		'''
-		Compute, along the rows of c, the coefficients for a 1-D
-		natural cubic b-spline interpolation. Coefficients will be
-		computed in place.
+		Compute, in place, the coefficients for a 1-D natural cubic
+		b-spline interpolation of a function sampled in c.
 
-		The shape of c should be (nx + 2, ny), where interpolation is
-		in the interval [0, nx - 1]. Coefficients in row i correspond
-		to the cubic b-spline centered at sample i for 0 <= i <= nx.
-		The coefficients corresponding to the spline centered at sample
-		-1 are placed in row (nx + 1).
+		The length of c is (nx + 2), where c contains samples of the
+		function on the interval [0, nx - 1] on input. On output, the
+		coefficient at sample i corresponds to the cubic b-spline
+		centered on the same sample for 0 <= i <= nx. The coefficient
+		for the spline centered at sample -1 wraps to index (nx + 1).
 
-		If ab is provided, it should be a compressed banded matrix of
-		shape (3, nx - 2) whose first and last row are all ones and
-		whose middle row is all fours; this is the tridiagonal matrix
-		used to determine natural cubic spline coefficients. The number
-		of columns in ab may be greater than nx - 2; extra columns will
-		be ignored.
-
-		If ab is None, it will be computed on demand.
+		The array work should have a length of at least (nx - 2). The
+		contents of this array will be destroyed. A ValueError will be
+		raised if work does not have sufficient capacity.
 		'''
-		if not solve_banded:
-			raise ImportError('Interpolate3D depends on scipy.linalg.solve_banded')
+		cdef unsigned long nx2, nx, nl, nll, i
+		cdef double den
 
-		nx2, ny = c.shape[0], c.shape[1]
-
-		if nx2 < 4: raise ValueError('Array "c" must have at least 4 rows')
-
+		nx2 = c.shape[0]
 		nx = nx2 - 2
-		nl = nx - 1
-		nll = nx - 2
+		nl, nll = nx - 1, nx - 2
 
-		if ab is None:
-			ab = np.ones((3, nll), dtype=np.float64)
-			ab[1,:] = 4.
-		elif ab.shape[0] != 3 or ab.shape[1] < nll:
-			raise ValueError('Array "ab" must be None or have shape (3, %d)' % (nll,))
+		if work.shape[0] < nll:
+			raise ValueError('Array "work" must have length >= %d' % (nll,))
 
-		# Fix endpoint coefficients
-		c[0,:] /= 6.
-		c[nl,:] /= 6.
+		# Fix the endpoint coefficients
+		c[0] /= 6.
+		c[nl] /= 6.
 
 		# Adjust first and last interior points in RHS
-		c[1,:] -= c[0,:]
-		c[nll,:] -= c[nl,:]
+		c[1] -= c[0]
+		c[nll] -= c[nl]
 
-		# Solve the tridiagonal system
-		c[1:nl,:] = solve_banded((1,1), ab[:,:nll], c[1:nl,:])
+		# Solve the tridiagonal system using the Thomas algorithm
 
-		# Fill in the out-of-bounds coefficients for natural splines
-		# Rightmost edge
-		c[nx,:] = 2 * c[nl,:] - c[nll,:]
-		# Leftmost edge, wrapped around
-		c[nx+1,:] = 2 * c[0,:] - c[1,:]
+		# First pass: eliminate lower diagonals
+		# REMEMBER: shift c indices up by one to skip fixed first sample
 
+		# Scale first super-diagonal element [0] and RHS sample [1]
+		work[0] = 1. / 4.
+		c[1] /= 4.
 
-	@cython.embedsignature(True)
-	def getcoeffs(self):
-		'''
-		Return a copy of the 3-D cubic b-spline coefficients for this
-		interpolator.
-		'''
-		return np.array(self.coeffs)
+		# Eliminate lower diagonals from remaining equations
+		for i in range(1, nll):
+			den = (4. - work[i - 1])
+			# Adjust super-diagonal coefficients
+			work[i] = 1. / den
+			# Adjust RHS
+			c[i+1] -= c[i]
+			c[i+1] /= den
+
+		# Second pass: back substitution
+		# Output sample c[nll] is already correct
+		for i in range(nll - 1, 0, -1):
+			c[i] -= work[i - 1] * c[i + 1]
+
+		# Rightward out-of-bounds coefficient
+		c[nx] = 2 * c[nl] - c[nll]
+		# Leftward out-of-bounds coefficient (wrapped around)
+		c[nx+1] = 2 * c[0] - c[1]
+
+		return 0
 
 
 	@cython.wraparound(False)
@@ -1354,6 +1363,8 @@ cdef class Box3D:
 		cdef double mgf, f
 		cdef long i, j, k, ti, tj, tk
 
+		cdef double[:,:,:] coeffs = field.coeffs
+
 		# For convenience
 		nx, ny, nz = self.nx, self.ny, self.nz
 
@@ -1403,7 +1414,7 @@ cdef class Box3D:
 
 			# Find the direction of travel in this cell
 			cp = self._cart2cell(pp.x, pp.y, pp.z)
-			if not Interpolator3D._evaluate(&f, &gf, field.coeffs, cp):
+			if not Interpolator3D._evaluate(&f, &gf, coeffs, cp):
 				raise ValueError('Cannot evaluate gradient at %s' % ((cp.x, cp.y, cp.z),))
 			# Search for stationary points
 			mgf = ptnrm(gf)
