@@ -180,11 +180,7 @@ cdef class Interpolator3D:
 		function values and the gradient of the given image function at
 		arbitrary points.
 		'''
-		cdef np.ndarray[np.float64_t, ndim=3] img
-		img = np.asarray(image, dtype=np.float64)
-
-		if img.ndim != 3:
-			raise ValueError('Argument "image" must be a 3-D array')
+		cdef double[:,:,:] img = np.asarray(image, dtype=np.float64)
 
 		cdef unsigned long nx, ny, nz, nx2, ny2, nz2
 		nx, ny, nz = img.shape[0], img.shape[1], img.shape[2]
@@ -202,25 +198,17 @@ cdef class Interpolator3D:
 		cdef double[:] work
 		work = np.empty((max(nx, ny, nz) - 2,), dtype=np.float64, order='C')
 
-		# Copy the image into the coefficient array
 		cdef unsigned long ix, iy, iz
 		for ix in range(nx):
 			for iy in range(ny):
-				for iz in range(nz):
-					coeffs[ix,iy,iz] = img[ix,iy,iz]
-
-
-		# Allocate a work array for coefficient evaluation
-		for ix in range(nx):
-			# Transform each z column independently
-			for iy in range(ny):
+				# Populate the image and transform along z
+				for iz in range(nz): coeffs[ix,iy,iz] = img[ix,iy,iz]
 				Interpolator3D.nscoeffs(coeffs[ix,iy,:], work)
-			# Transform each y row independently
-			# Remember to include extended, out-of-bounds coefficients
+			# Transform along y, including out-of-bounds z coefficients
 			for iz in range(nz2):
 				Interpolator3D.nscoeffs(coeffs[ix,:,iz], work)
 
-		# Now transform along the x axis
+		# Transform along x axis
 		for iy in range(ny2):
 			for iz in range(nz2):
 				Interpolator3D.nscoeffs(coeffs[:,iy,iz], work)
@@ -406,6 +394,42 @@ cdef class Interpolator3D:
 		if not Interpolator3D._evaluate(&f, &g, self.coeffs, packpt(x, y, z)):
 			raise ValueError('Coordinates are out of bounds')
 		return f, (g.x, g.y, g.z)
+
+
+	@cython.embedsignature(True)
+	def gridimage(self, x, y, z):
+		'''
+		Evalute and return the interpolated image on the grid defined
+		as the product of the floating-point grid coordinates in 1-D
+		arrays x, y, and z.
+		'''
+		cdef double[:] cx, cy, cz
+		cx = np.asarray(x, dtype=np.float64)
+		cy = np.asarray(y, dtype=np.float64)
+		cz = np.asarray(z, dtype=np.float64)
+
+		cdef unsigned long nx, ny, nz, ix, iy, iz
+		nx = cx.shape[0]
+		ny = cy.shape[0]
+		nz = cz.shape[0]
+
+		cdef np.ndarray[np.float64_t, ndim=3] out
+		out = np.empty((nx, ny, nz), dtype=np.float64, order='C')
+
+		cdef double[:,:,:] coeffs = self.coeffs
+		cdef double f, xx, yy, zz
+		cdef point g, crd
+
+		for ix in range(nx):
+			crd.x = cx[ix]
+			for iy in range(ny):
+				crd.y = cy[iy]
+				for iz in range(nz):
+					crd.z = cz[iz]
+					Interpolator3D._evaluate(&f, &g, coeffs, crd)
+					out[ix,iy,iz] = f
+
+		return out
 
 
 	@staticmethod
