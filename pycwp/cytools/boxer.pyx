@@ -299,7 +299,7 @@ cdef class Interpolator3D:
 	@cython.boundscheck(False)
 	@cython.cdivision(True)
 	@cython.embedsignature(True)
-	def pathgrad(self, double[:,:] points not None, double h):
+	def pathgrad(self, double[:,:] points not None, double dl, double hmax = -1.0):
 		'''
 		Given control points specified as rows of an N-by-3 array of
 		grid coordinates, evaluate the gradient of the path integral as
@@ -310,8 +310,13 @@ cdef class Interpolator3D:
 		control points are 0.
 
 		Gradients are evaluated by a central finite-difference scheme,
-		taking a step h to each side of the varied coordinate. (Thus,
-		the total step size is 2h.)
+		taking a step dl to each side of the varied coordinate. (Thus,
+		the total step size is dl.) The sign of dl is ignored.
+
+		Because the gradient involves calculating differences of path
+		integrals, the parameter hmax is used as in self.pathint to
+		control the accuracy of the integrals over perturbed paths. If
+		hmax is not positive, abs(dl) will be used in its place.
 
 		If the second dimension of points does not have length three,
 		or if any control points fall outside the interpolation grid, a
@@ -330,38 +335,38 @@ cdef class Interpolator3D:
 
 		cdef unsigned long i, ip1
 		cdef unsigned int j
-		cdef point left, cen, right, dp
-		cdef double lval
-		cdef double ival[2]
-		cdef int step
+		cdef point l, c, r
+		cdef double lval, rval
+		cdef int ns
+
+		# Ensure steps are positive
+		if dl < 0: dl = -dl
+		# Handle default hmax
+		if hmax <= 0: hmax = dl
 
 		# Initialize the left and center points
-		left = packpt(points[0,0], points[0,1], points[0,2])
-		cen = packpt(points[1,0], points[1,1], points[1,2])
+		l = packpt(points[0,0], points[0,1], points[0,2])
+		c = packpt(points[1,0], points[1,1], points[1,2])
 
 		# No need to evaluate gradient at first or last points
 		for i in range(1, npts - 1):
 			# Evaluate the right point
 			ip1 = i + 1
-			right = packpt(points[ip1,0], points[ip1,1], points[ip1,2])
-
-			# Initialize the starting value of the function
-			if not Interpolator3D._evaluate(&lval, NULL, coeffs, left):
-				raise ValueError('Point %s is out of bounds' % (pt2tup(left),))
+			r = packpt(points[ip1,0], points[ip1,1], points[ip1,2])
 
 			for j in range(3):
 				# Compute the central or one-sided differences
-				step = Interpolator3D.perturb(&ival[0], j,
-						coeffs, left, cen, right, -h, &lval)
-				step += Interpolator3D.perturb(&ival[1], j,
-						coeffs, left, cen, right, +h, &lval)
-				if step == 0:
-					raise ValueError('Unable to differentiate path at point %s, axis %d' % (pt2tup(cen), j))
-				grad[i,j] = (ival[1] - ival[0]) / (h * step)
+				ns = Interpolator3D.perturb(&lval, j,
+						coeffs, l, c, r, -dl, hmax)
+				ns += Interpolator3D.perturb(&rval, j,
+						coeffs, l, c, r, +dl, hmax)
+				if ns < 1:
+					raise ValueError('Uncomputable derivative at %s (axis %d)' % (pt2tup(c), j))
+				grad[i,j] = (rval - lval) / (dl * ns)
 
 			# Cycle the points for the next round
-			left = cen
-			cen = right
+			l = c
+			c = r
 
 		return np.asarray(grad)
 
@@ -370,63 +375,54 @@ cdef class Interpolator3D:
 	@cython.cdivision(True)
 	@staticmethod
 	cdef int perturb(double *ival, unsigned int axis, double[:,:,:] coeffs,
-			point s, point c, point e, double h, double *f) except -1:
+			point s, point c, point e, double dl, double hmax) except -1:
 		'''
-		Given a path that starts at s, passes through c, and ends at e,
-		compute the the path integral (as computed by segint) over a
-		perturbed path obtained by offsetting the coordinate of c
-		specified by axis (0 => x, 1 => y, 2 => z) a distance h. The
-		result will overwrite the contents of ival.
-
-		If f is not NULL, it should store the value of of the function
-		at the point s. In this case, the function will not be
-		evaluated at this point. The contents of f will not be changed.
+		Store, in ival, the integral (as computed by segint) over a
+		two-segment path from s to c to e, perturbing c if possible
+		along the specified by axis (0 => x, 1 => y, 2 => z) by a
+		distance dl. The parameter hmax is passed to segint.
 
 		If axis is not 0, 1 or 2, a ValueError will be raised.
 
 		If the integration can be performed over the perturbed path, 1
-		will be returned. If the perturbation causes the path to step
-		outside of the function bounds, the contents of ival will hold
-		the integral of the unperturbed path and 0 will be returned.
+		will be returned.
 
-		If the unperturbed integral cannot be computed, a ValueError
-		will be raised.
+		If the perturbation causes the path to step outside of the
+		function bounds, the contents of ival will hold the integral of
+		the unperturbed path and 0 will be returned. If the unperturbed
+		integral cannot be computed, a ValueError will be raised.
 		'''
 		cdef point dp
-		cdef double cval, sval = 0.0
-		cdef int rval = 1
+		cdef double cval = 0.0, sval = 0.0
+		cdef int rv = 1
 
 		# Copy the starting point to avoid multiple evaluations
-		if f != <double *>NULL:
-			sval = f[0]
-		elif not Interpolator3D._evaluate(&sval, NULL, coeffs, s):
+		if not Interpolator3D._evaluate(&sval, NULL, coeffs, s):
 			raise ValueError('Point %s is out of bounds' % (pt2tup(s),))
 
 		# Perturb the central point
 		dp = c
 
-		if axis == 0: dp.x += h
-		elif axis == 1: dp.y += h
-		elif axis == 2: dp.z += h
+		if axis == 0: dp.x += dl
+		elif axis == 1: dp.y += dl
+		elif axis == 2: dp.z += dl
 		else: raise ValueError('Perturbed axis must be 0, 1 or 2')
 
 		# Try to integrate along the first half of the perturbed path
-		cval = sval
-		ival[0] = 0.0
-		if not Interpolator3D.segint(ival, coeffs, s, dp, h, &cval):
-			# Cannot integrate perturbation, revert to unperturbed path
+		if not Interpolator3D.segint(&cval, coeffs, s, dp, hmax, &sval):
+			# Perturbed integration failed; sval and cval uncorrupted
+			# Revert to integrating over unperturbed path
 			dp = c
-			ival[0] = 0.0
-			cval = sval
-			rval = 0
-			if not Interpolator3D.segint(ival, coeffs, s, dp, h, &cval):
+			rv = 0
+			if not Interpolator3D.segint(&cval, coeffs, s, dp, hmax, &sval):
 				raise ValueError('Path %s -> %s is out of bounds' % (pt2tup(s), pt2tup(dp)))
 
 		# Integrate along the second half of the path
-		if not Interpolator3D.segint(ival, coeffs, dp, e, h, &cval):
+		if not Interpolator3D.segint(&cval, coeffs, dp, e, hmax, &sval):
 			raise ValueError('Path %s -> %s is out of bounds' % (pt2tup(dp), pt2tup(e)))
 
-		return rval
+		ival[0] = cval
+		return rv
 
 
 	@cython.wraparound(False)
@@ -459,6 +455,9 @@ cdef class Interpolator3D:
 		cdef point ps, pe
 		cdef double ival = 0.0, sval = 0.0
 
+		# Make sure hmax has positive sign
+		if hmax < 0: hmax = -hmax
+
 		# Initialize the left point and its value
 		ps = packpt(points[0,0], points[0,1], points[0,2])
 		if not Interpolator3D._evaluate(&sval, NULL, coeffs, ps):
@@ -482,15 +481,15 @@ cdef class Interpolator3D:
 	@cython.wraparound(False)
 	@staticmethod
 	cdef bint segint(double *ival, double[:,:,:] c,
-			point s, point e, double h, double *f) nogil:
+			point s, point e, double hmax, double *f) nogil:
 		'''
 		Add to the value stored in ival the integral of the function
 		represented by the (nx + 2, ny + 2, nz + 2) cubic spline
 		coefficients c along the line from point s to point e, each in
-		grid coordinates, taking a maximum step h. If the length of the
-		line is longer than h, the line will be subdivided into as few
-		equal-length segments as possible to ensure that each segment
-		length is no more than h. Any sign on h is ignored.
+		grid coordinates. The integral is computed using the composite
+		Simpson's rule by dividing the segment into the smallest even
+		number of equal-length pieces that each have a length no longer
+		than hmax. The sign of hmax is ignored.
 
 		If f is not NULL, it must hold the result of a call to
 
@@ -511,43 +510,56 @@ cdef class Interpolator3D:
 		segment endpoints are outside of the grid
 
 			[0, nx - 1] x [0, ny - 1], [0, nz - 1].
+
+		If False is returned, neither ival nor f will have changed.
 		'''
 		cdef point dp, p
-		cdef double step, sval = 0.0, fval = 0.0
+		cdef double l, h, fval = 0.0, sval = 0.0
+		cdef unsigned long i, n
 
-		cdef unsigned long i, nstep
+		cdef double mpy[2]
+		mpy[0], mpy[1] = 2.0, 4.0
 
-		if h < 0: h = -h
+		if hmax < 0: hmax = -hmax
 
-		# Calculate the length of the step
+		# Calculate the length of the segment
 		dp = axpy(-1, s, e)
-		step = ptnrm(dp)
+		l = ptnrm(dp)
 
-		if step > h:
-			# Subdivide the path into segments of suitable length
-			nstep = <unsigned long>(step / h)
-			if nstep * h < step: nstep += 1
-			# Subdivide the steps in each direction
-			iscal(1.0 / <double>nstep, &dp)
-			step /= <double>nstep
-		else: nstep = 1
+		# Subdivide the step for the composite rule
+		n = max(<unsigned long>(l / hmax), 2)
+		# Step size must be less than h
+		if n * hmax < l: n += 1
+		# The step count must be even
+		if n % 2: n += 1
+
+		# Scale the walk direction and step size
+		h = l / n
+		iscal(h / l, &dp)
 
 		# Copy a pre-evaluated starting point or evaluate
-		if f != <double *>NULL: sval = f[0]
-		elif not Interpolator3D._evaluate(&sval, NULL, c, s): return False
+		if f != <double *>NULL: fval = f[0]
+		elif not Interpolator3D._evaluate(&fval, NULL, c, s): return False
 
-		for i in range(nstep):
-			# Calculate the next point and evaluate
-			p = axpy(i + 1, dp, s)
-			if not Interpolator3D._evaluate(&fval, NULL, c, p): return False
+		# Include the interior points
+		for i in range(1, n):
+			p = axpy(i, dp, s)
+			if not Interpolator3D._evaluate(&sval, NULL, c, p): return False
+			fval += mpy[i % 2] * sval
 
-			# Add the contribution from this segment
-			ival[0] += 0.5 * (sval + fval) * step
-			# Final value becomes the next start value
-			sval = fval
+		# Evaluate the endpoint
+		if not Interpolator3D._evaluate(&sval, NULL, c, e): return False
 
-		# Pass out the evaluated end-point
+		# Update f with the endpoint value
 		if f != <double *>NULL: f[0] = sval
+
+		# Include endpoint contribution and scale the sum
+		fval += sval
+		fval *= h / 3.0
+
+		# Augment the output
+		ival[0] += fval
+
 		return True
 
 
