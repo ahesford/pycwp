@@ -173,15 +173,19 @@ cdef class Interpolator3D:
 	cdef unsigned long ncx, ncy, ncz
 	cdef bint _usedef
 	cdef double _default
+	cdef bint _linear
 
 	@cython.wraparound(False)
 	@cython.boundscheck(False)
 	@cython.embedsignature(True)
-	def __init__(self, image):
+	def __init__(self, image, linear=False):
 		'''
 		Create an interpolator instance capable of providing scalar
 		function values and the gradient of the given image function at
 		arbitrary points.
+
+		If linear is True, trilinear interpolation is used; if linear
+		is False, tricubic interpolation is used.
 		'''
 		cdef double[:,:,:] img = np.asarray(image, dtype=np.float64)
 
@@ -191,22 +195,43 @@ cdef class Interpolator3D:
 		if nx < 2 or ny < 2 or nz < 2:
 			raise ValueError('Size of image must be at least (2, 2, 2)')
 
-		nx2, ny2, nz2 = nx + 2, ny + 2, nz + 2
-		self.ncx, self.ncy, self.ncz = nx2, ny2, nz2
+		# Copy the linear flag
+		self._linear = linear
 
+		# Disable default values for out-of-bounds evaluations
+		self._usedef = False
+		self._default = 0.0
+
+		if linear:
+			# In linear mode, each coefficient is just an image sample
+			nx2, ny2, nz2 = nx, ny, nz
+		else:
+			# In cubic mode, need to more coefficients per dimension
+			nx2, ny2, nz2 = nx + 2, ny + 2, nz + 2
+
+		self.ncx, self.ncy, self.ncz = nx2, ny2, nz2
 
 		# Allocate coefficients and prepopulate image
 		self.coeffs = <double *>PyMem_Malloc(nx2 * ny2 * nz2 * sizeof(double))
 		if self.coeffs == <double *>NULL:
 			raise MemoryError('Unable to allocate storage for coefficients')
 
-		cdef double[:] work
 		cdef double[:,:,:] coeffs
+		cdef double[:] work
 		cdef unsigned long ix, iy, iz
 
 		try:
 			# For convenience, treat the buffer as a 3-D array
 			coeffs = <double[:nx2,:ny2,:nz2:1]>self.coeffs
+
+			if self._linear:
+				# Just copy the linear interpolation coefficients
+				for ix in range(nx):
+					for iy in range(ny):
+						for iz in range(nz):
+							coeffs[ix,iy,iz] = img[ix,iy,iz]
+				return
+
 			# Allocate a work array for coefficient evaluation
 			work = np.empty((max(nx, ny, nz) - 2,), dtype=np.float64, order='C')
 
@@ -228,10 +253,6 @@ cdef class Interpolator3D:
 			self.coeffs = <double *>NULL
 			raise
 
-		# Disable default values for out-of-bounds evaluations
-		self._usedef = False
-		self._default = 0.0
-
 
 	def __dealloc__(self):
 		'''
@@ -246,6 +267,8 @@ cdef class Interpolator3D:
 		A grid (nx, ny, nz) representing the shape of the image being
 		interpolated.
 		'''
+		if self._linear: return (self.ncx, self.ncy, self.ncz)
+		# In cubic mode, discount the out-of-bounds coefficients
 		return (self.ncx - 2, self.ncy - 2, self.ncz - 2)
 
 
@@ -467,8 +490,8 @@ cdef class Interpolator3D:
 	def pathint(self, double[:,:] points not None, double hmax):
 		'''
 		Given control points specified as rows of an N-by-3 array of
-		grid coordinates, use the trapezoidal rule to integrate the
-		image associated with this interpolator instance along the
+		grid coordinates, use the composite Simpson's rule to integrate
+		the image associated with this interpolator instance along the
 		piecewise linear path between the points.
 
 		Each segment of the path will be subdivided into a minimum
@@ -611,10 +634,12 @@ cdef class Interpolator3D:
 
 		if self.coeffs == <double *>NULL: return False
 
-		# Coefficient shape is (nx + 2, ny + 2, nz + 2)
-		nx = self.ncx - 2
-		ny = self.ncy - 2
-		nz = self.ncz - 2
+		if self._linear:
+			# Linear coefficient shape is (nx, ny, nz)
+			nx, ny, nz = self.ncx, self.ncy, self.ncz
+		else:
+			# Cubic coefficient shape is (nx + 2, ny + 2, nz + 2)
+			nx, ny, nz = self.ncx - 2, self.ncy - 2, self.ncz - 2
 
 		# Find the fractional and integer parts of the coordinates
 		cdef:
@@ -645,6 +670,52 @@ cdef class Interpolator3D:
 			double tt, dtt, uu, duu, vv, cv
 			long ii, jj, kk, si, sj, sk, soi, soij
 
+		# Initialize the outputs
+		f[0] = 0.0
+
+		if dograd:
+			grad[0].x = grad[0].y = grad[0].z = 0.0
+
+		if self._linear:
+			# Interpolate the x face
+			ii = (i * self.ncy + j) * self.ncz + k
+			jj = ii + self.ncz * self.ncy
+			tt = 1.0 - t
+			tw[0] = tt * self.coeffs[ii] + t * self.coeffs[jj]
+			tw[1] = tt * self.coeffs[ii + 1] + t * self.coeffs[jj + 1]
+			if dograd:
+				dt[0] = self.coeffs[jj] - self.coeffs[ii]
+				dt[1] = self.coeffs[jj + 1] - self.coeffs[ii + 1]
+			ii += self.ncz
+			jj += self.ncz
+			tw[2] = tt * self.coeffs[ii] + t * self.coeffs[jj]
+			tw[3] = tt * self.coeffs[ii + 1] + t * self.coeffs[jj + 1]
+			if dograd:
+				dt[2] = self.coeffs[jj] - self.coeffs[ii]
+				dt[3] = self.coeffs[jj + 1] - self.coeffs[ii + 1]
+			# Interpolate the y line
+			uu = 1.0 - u
+			uw[0] = uu * tw[0] + u * tw[2]
+			uw[1] = uu * tw[1] + u * tw[3]
+			if dograd:
+				# These are the y derivatives at the line ends
+				du[0] = tw[2] - tw[0]
+				du[1] = tw[3] - tw[1]
+				# Interpolate the x derivatives at the line ends
+				dv[0] = uu * dt[0] + u * dt[2]
+				dv[1] = uu * dt[1] + u * dt[3]
+
+			# Interpolate the z value
+			vv = 1.0 - v
+			f[0] = vv * uw[0] + v * uw[1]
+
+			if dograd:
+				grad[0].z = uw[1] - uw[0]
+				grad[0].y = vv * du[0] + v * du[1]
+				grad[0].x = vv * dv[0] + v * dv[1]
+
+			return True
+
 		# Find the interpolating weights for the interval
 		Interpolator3D.bswt(&(tw[0]), t)
 		Interpolator3D.bswt(&(uw[0]), u)
@@ -655,10 +726,6 @@ cdef class Interpolator3D:
 			Interpolator3D.dbswt(&(dt[0]), t)
 			Interpolator3D.dbswt(&(du[0]), u)
 			Interpolator3D.dbswt(&(dv[0]), v)
-
-			grad[0].x = grad[0].y = grad[0].z = 0.0
-
-		f[0] = 0.0
 
 		ii = 0
 		si = i - 1 if i > 0 else nx + 1
@@ -700,18 +767,25 @@ cdef class Interpolator3D:
 
 
 	@cython.embedsignature(True)
-	def evaluate(self, double x, double y, double z):
+	def evaluate(self, double x, double y, double z, bint grad=True):
 		'''
-		Evaluate and return the value of the image and its gradient at
-		grid coordinates (x, y, z). If coordinates are out of bounds, a
-		ValueError will be raised unless self.default is not None.
+		Evaluate and return the value of the image and, if grad is
+		True, its gradient at grid coordinates (x, y, z).
+
+		If coordinates are out of bounds, a ValueError will be raised
+		unless self.default is not None.
 		'''
 		cdef double f
 		cdef point g
+		cdef point *gp
 
-		if not self._evaluate(&f, &g, packpt(x, y, z)):
+		if grad: gp = &g
+		else: gp = <point *>NULL
+
+		if not self._evaluate(&f, gp, packpt(x, y, z)):
 			raise ValueError('Coordinates are out of bounds')
-		return f, (g.x, g.y, g.z)
+		if grad: return f, pt2tup(g)
+		else: return f
 
 
 	@cython.embedsignature(True)
@@ -1618,62 +1692,38 @@ cdef class Box3D:
 	@cython.wraparound(False)
 	@cython.cdivision(True)
 	@cython.embedsignature(True)
-	def descent(self, p, t, Interpolator3D field, unsigned int cycles=1,
-			bint report=False, double step=realeps, double rtol=1e-6):
+	def descent(self, start, end, Interpolator3D field,
+			unsigned long cycles = 1,
+			double step=1.0, double tol=1e-3,
+			double c=0.5, double tau=0.5, bint report=False):
 		'''
-		Perform a steepest-descent walk from a point p towards
-		(hopefully) the point t, where each of t and p are 3-tuples of
-		Cartesian coordinates, through the given scalar field. The
-		field should be represented as an Interpolator3D instance
-		capable of evaluating the field, f, and its gradient at
-		arbitrary points in this box. No guarantee is made that the
-		target point t will be reached.
+		Perform a steepest-descent walk from a point p through the
+		given field as an Interpolator3D instance capable of evaluating
+		both the field, f, and its gradient at arbitrary points within
+		this box.
 
-		The walk begins by evaluating the gradient of the field at the
-		starting point and moving in a constant direction, opposite the
-		evaluated gradient, until the path leaves the current grid
-		cell. At every point where the path exits a cell, the gradient
-		is reevaluated and the path continues in a constant direction
-		opposite the new gradient.
+		The walk proceeds from some point p to another point q by
+		performing an Armijo backtracking line search along the
+		negative gradient of the field. Let h = norm(self.cell) be the
+		diameter of a cell in this box, g = grad(f)(p) be the gradent
+		of f at p, and m = |g| be the norm of the gradient. The search
+		will select the next point q = (p - alpha * g / m), where the
+		factor alpha = tau**k * step * h for the smallest integer k
+		such that
 
-		The walk ends when one of:
+			f(p - alpha * g / m) - f(p) <= -alpha * c * m.
 
-		1. The end point of a path segment comes within a distance
-		   norm(self.cell) of the desired target,
+		The walk terminates when one of:
+
+		1. A point q of the path comes within h of the point end,
 		2. The path runs off the edge of the grid,
-		3. The path intersects any cell more than cycles times, or
-		4. The value |grad(f)| <= rtol * |f| at an encountered point.
-
-		Each path segment is accumulated in an OrderedDict that maps
-		(i, j, k) cell indices to a list of (start, end) tuples that
-		each describe the entry and exit points of the segment in that
-		cell. The mapping, which may be empty if the starting point p
-		is outside this box, is always returned.
-
-		If the length of a path segment will be forced to have a
-		minimum length of rtol * norm(self.cell). Any segment extended
-		in this manner will only be recorded as a "hit" for the cell
-		containing the starting point. Conseqeuntly, the length of the
-		segment in the hit map for the starting cell will be longer
-		than the actual intersection of the segment and cell, while the
-		map will overlook the intersections of the segment with any
-		other cells actually encountered.
-
-		If the endpoint of a path segment comes within norm(self.cell)
-		of the desired target, a direct path from the endpoint to the
-		destination will become the final segment of the path without
-		regard to the behavior of the field gradient. As is the case
-		for minimum-length segments, this final segment only counts as
-		a "hit" in the cell containing its starting point.
+		3. The factor tau**k < tol when finding the next step, or
+		4. The same grid cell is encountered more than cycles times.
 
 		If the argument "report" is True, a second return value, a
-		string with value 'destination', 'boundary', 'cycle' or
-		'stationary', corresponding to the above reasons for
-		termination, indicates the reason for terminating the walk.
-
-		The argument step is interpreted as in Box3D.raymarcher; the
-		step is used (in adaptively increasing increments) to ensure
-		that the segment in each cell advances to a neighboring cell.
+		string with value 'destination', 'boundary', 'stationary', or
+		'cycle' will be returned to indicate the relevant termination
+		criterion (1, 2, 3 or 4, respectively).
 
 		A ValueError will be raised if the field has the wrong shape.
 		'''
@@ -1683,109 +1733,80 @@ cdef class Box3D:
 		if (nx != self.nx or ny != self.ny or nz != self.nz):
 			raise ValueError('Shape of field must be %s' % (self.ncell,))
 
-		# Convert the start and end to points
-		cdef point pp, tp
-		tup2pt(&pp, p)
-		tup2pt(&tp, t)
-
-		# Convert validated points to tuples
-		t = pt2tup(tp)
-		p = pt2tup(pp)
-
-		# Store a reference to the next endpoint
-		cdef object ept
-
-		# Cell-length parameters
-		cdef double hmax, hx, hy, hz
-		hx, hy, hz = self._cell.x, self._cell.y, self._cell.z
-		hmax = sqrt(hx * hx + hy * hy + hz * hz)
-
-		cdef point lo, hi, gf, epp, cp
-		cdef double tlims[2]
-		cdef double mgf, f
+		cdef point p, t, gf, pd, np
 		cdef long i, j, k, ti, tj, tk
+		cdef double fv, tv, m, lim, alpha
+		cdef unsigned long hc
 
-		# For convenience
-		nx, ny, nz = self.nx, self.ny, self.nz
+		# Make sure the provided start and end points are valid
+		tup2pt(&p, start)
+		tup2pt(&t, end)
 
-		# Record the paths encountered in the walk
-		hits = OrderedDict()
+		# Convert start and end points to grid coordinates
+		p = self._cart2cell(p.x, p.y, p.z)
+		t = self._cart2cell(t.x, t.y, t.z)
+
+		# Maximum permissible grid coordinates
+		nx, ny, nz = self.nx - 1, self.ny - 1, self.nz - 1
+
+		# Include the start point in the hit list
+		hits = [ self.cell2cart(p.x, p.y, p.z) ]
 		reason = None
 
-		# Gradients are in cell units, but should be in Cartesian units
-		# The scaling also satisfies the minimum path-length threshold
-		rtol = rtol * hmax
+		# Keep track of encountered cells for cycle breaks
+		hitct = { }
 
-		# Find cells for starting and target points (may be out of bounds)
-		self._cellForPoint(&i, &j, &k, pp)
-		self._cellForPoint(&ti, &tj, &tk, tp)
+		# Find cell for target points (may be out of bounds)
+		ti, tj, tk = <long>t.x, <long>t.y, <long>t.z
 
 		while True:
-			if not (0 <= i < nx and 0 <= j < ny and 0 <= k < nz):
-				# Walk has left the bounds of the box
-				reason = 'boundary'
+			# Find the cell for the current test point
+			i, j, k = <long>p.x, <long>p.y, <long>p.z
+
+			# Increment and check the cycle counter
+			hc = hitct.get((i,j,k), 0) + 1
+			if hc > cycles:
+				reason = 'cycle'
 				break
+			hitct[i,j,k] = hc
 
-			key = i, j, k
-
-			# Grab (or create) a hitlist for this cell
-			if key in hits:
-				hitlist = hits[key]
-
-				if len(hitlist) >= cycles:
-					# Too many hits in this cell
-					reason = 'cycle'
-					break
-			else:
-				hitlist = []
-				hits[key] = hitlist
-
-			# Convert the point to a tuple for recording
-			p = pt2tup(pp)
-
-			if ptdst(pp, tp) <= hmax or (ti == i and tj == j and tk == k):
+			if ptdst(p, t) <= 1.0 or (ti == i and tj == j and tk == k):
 				# Close enough to destination to make a beeline
-				hitlist.append((p, t))
+				hits.append(self.cell2cart(t.x, t.y, t.z))
 				reason = 'destination'
 				break
 
-			# Find the boundaries of the current cell
-			self._boundsForCell(&lo, &hi, i, j, k)
+			# Find the function and gradient at the current point
+			if not field._evaluate(&fv, &gf, p):
+				# Point is out of bounds
+				reason = 'boundary'
+				break
 
-			# Find the direction of travel in this cell
-			cp = self._cart2cell(pp.x, pp.y, pp.z)
-			if not field._evaluate(&f, &gf, cp):
-				raise ValueError('Cannot evaluate gradient at %s' % ((cp.x, cp.y, cp.z),))
-			# Search for stationary points
-			mgf = ptnrm(gf)
-			if mgf < rtol * fabs(f):
-				# Stationary point has been encountered
-				# Walk ends, start and end points are the same
-				hitlist.append((p,p))
+			# Find the magnitude of the gradient and the search direction
+			m = ptnrm(gf)
+			pd = scal(-1.0 / m, gf)
+
+			# Establish the baseline Armijo bound
+			lim = c * m
+			alpha = step
+
+			while alpha >= tol:
+				np = axpy(alpha, pd, p)
+				# Find the next value
+				if field._evaluate(&tv, NULL, np):
+					# Stop if Armijo condition is satisfied
+					if tv - fv <= -alpha * lim: break
+				# Test point out of bounds or failed to satisfy Armijo
+				alpha *= tau
+
+			if alpha < tol:
+				# Could not find suitable point
 				reason = 'stationary'
 				break
-			iscal(-1.0 / mgf, &gf)
 
-			# Cast a ray through the cell (negative length is ignored)
-			if not Box3D._intersection(tlims, lo, hi, pp, gf, -1):
-				raise ValueError('Segment fails to intersect cell %s' % (key,))
-
-			# Make sure minimum length is satisfied
-			if tlims[1] < rtol: tlims[1] = rtol
-
-			# Compute endpoint as point and tuple
-			epp = axpy(tlims[1], gf, pp)
-			ept = pt2tup(epp)
-
-			# Record start and end points in this cell
-			hitlist.append((p, ept))
-
-			# Advance the point
-			pp = epp
-			p = ept
-
-			# Step into the next cell, but not by more than cell diagonal
-			self._advance(&i, &j, &k, 0.0, step, hmax, pp, gf)
+			# Advance to and record the satisfactory test point
+			p = np
+			hits.append(self.cell2cart(p.x, p.y, p.z))
 
 		if report: return hits, reason
 		else: return hits
