@@ -164,51 +164,34 @@ cdef int tup2pt(point *pt, object p) except -1:
 	return 0
 
 
-cdef class Interpolator3D:
-	'''
-	A class to manage a function sampled on a 3-D grid and provide routines
-	for interpolating the function and the gradient.
-	'''
-	cdef double *coeffs
-	cdef unsigned long ncx, ncy, ncz
-	cdef bint _usedef
-	cdef double _default
-	cdef bint _linear
+# Forward declaration
+cdef class Interpolator3D
 
+
+cdef class CubicInterpolator3D(Interpolator3D):
+	'''
+	An Interpolator3D that implements tricubic interpolation with
+	b-splines.
+	'''
 	@cython.wraparound(False)
 	@cython.boundscheck(False)
-	@cython.embedsignature(True)
-	def __init__(self, image, linear=False):
+	def __init__(self, image):
 		'''
-		Create an interpolator instance capable of providing scalar
-		function values and the gradient of the given image function at
-		arbitrary points.
+		CubicInterpolator3D(image)
 
-		If linear is True, trilinear interpolation is used; if linear
-		is False, tricubic interpolation is used.
+		Construct a tricubic interpolator for the given 3-D
+		floating-point image.
 		'''
 		cdef double[:,:,:] img = np.asarray(image, dtype=np.float64)
-
-		cdef unsigned long nx, ny, nz, nx2, ny2, nz2
+		cdef unsigned long nx, ny, nz
 		nx, ny, nz = img.shape[0], img.shape[1], img.shape[2]
 
 		if nx < 2 or ny < 2 or nz < 2:
 			raise ValueError('Size of image must be at least (2, 2, 2)')
 
-		# Copy the linear flag
-		self._linear = linear
-
-		# Disable default values for out-of-bounds evaluations
-		self._usedef = False
-		self._default = 0.0
-
-		if linear:
-			# In linear mode, each coefficient is just an image sample
-			nx2, ny2, nz2 = nx, ny, nz
-		else:
-			# In cubic mode, need to more coefficients per dimension
-			nx2, ny2, nz2 = nx + 2, ny + 2, nz + 2
-
+		# Need two more coefficients than samples per dimension
+		cdef unsigned long nx2, ny2, nz2
+		nx2, ny2, nz2 = nx + 2, ny + 2, nz + 2
 		self.ncx, self.ncy, self.ncz = nx2, ny2, nz2
 
 		# Allocate coefficients and prepopulate image
@@ -224,41 +207,27 @@ cdef class Interpolator3D:
 			# For convenience, treat the buffer as a 3-D array
 			coeffs = <double[:nx2,:ny2,:nz2:1]>self.coeffs
 
-			if self._linear:
-				# Just copy the linear interpolation coefficients
-				for ix in range(nx):
-					for iy in range(ny):
-						for iz in range(nz):
-							coeffs[ix,iy,iz] = img[ix,iy,iz]
-				return
-
 			# Allocate a work array for coefficient evaluation
 			work = np.empty((max(nx, ny, nz) - 2,), dtype=np.float64, order='C')
 
 			for ix in range(nx):
 				for iy in range(ny):
 					# Populate the image and transform along z
-					for iz in range(nz): coeffs[ix,iy,iz] = img[ix,iy,iz]
-					Interpolator3D.nscoeffs(coeffs[ix,iy,:], work)
+					for iz in range(nz):
+						coeffs[ix,iy,iz] = img[ix,iy,iz]
+					CubicInterpolator3D.nscoeffs(coeffs[ix,iy,:], work)
 				# Transform along y, including out-of-bounds z coefficients
 				for iz in range(nz2):
-					Interpolator3D.nscoeffs(coeffs[ix,:,iz], work)
+					CubicInterpolator3D.nscoeffs(coeffs[ix,:,iz], work)
 
 			# Transform along x axis
 			for iy in range(ny2):
 				for iz in range(nz2):
-					Interpolator3D.nscoeffs(coeffs[:,iy,iz], work)
+					CubicInterpolator3D.nscoeffs(coeffs[:,iy,iz], work)
 		except Exception:
 			PyMem_Free(self.coeffs)
 			self.coeffs = <double *>NULL
 			raise
-
-
-	def __dealloc__(self):
-		'''
-		Clear coefficient storage.
-		'''
-		if self.coeffs != <double *>NULL: PyMem_Free(self.coeffs)
 
 
 	@property
@@ -267,28 +236,7 @@ cdef class Interpolator3D:
 		A grid (nx, ny, nz) representing the shape of the image being
 		interpolated.
 		'''
-		if self._linear: return (self.ncx, self.ncy, self.ncz)
-		# In cubic mode, discount the out-of-bounds coefficients
 		return (self.ncx - 2, self.ncy - 2, self.ncz - 2)
-
-
-	@property
-	def default(self):
-		'''
-		The default value to return when attempting to evaluate the
-		interpolated fumction outside the function bounds, or None if
-		out-of-bounds evaluations should raise an exception.
-		'''
-		if self._usedef: return self._default
-		else: return None
-
-	@default.setter
-	def default(self, val):
-		if val is None:
-			self._usedef = False
-			self._default = 0.0
-		self._default = float(val)
-		self._usedef = True
 
 
 	@cython.wraparound(False)
@@ -357,6 +305,374 @@ cdef class Interpolator3D:
 		c[nx+1] = 2 * c[0] - c[1]
 
 		return 0
+
+
+	@staticmethod
+	cdef void bswt(double *w, double t) nogil:
+		'''
+		Compute, in the four-element array w, the weights for cubic
+		b-spline interpolation for a normalized fractional coordinate
+		t. These coordinates will be invalid unless 0 <= t <= 1.
+
+		If Phi is the standard unnormalized cubic b-spline [i.e.,
+		Phi(0) = 4 and Phi(1) = Phi(-1) = 1], the weights have values
+
+		  w[0] = Phi(-t - 1), w[1] = Phi(-t),
+		  w[2] = Phi(1 - t), w[3] = Phi(2 - t).
+
+		If a point x falls in the interval [x_i, x_{i+1}) of a
+		uniformly spaced grid, then the normalized fractional
+		coordinate is
+
+		  t = (x - x_i) / (x_{i+1} - x_i)
+
+		and the value at x of an interpolated function f with spline
+		coefficients c[i] is
+
+		  f(x) = c[i-1] * w[0] + c[i] * w[1]
+				+ c[i+1] * w[2] + c[i+2]*w[3].
+		'''
+		cdef double ts
+		ts = 1 - t
+		w[0] = ts * ts * ts
+		w[1] = 4 - 3 * t * t * (2 - t)
+		w[2] = 4 - 3 * ts * ts * (1 + t)
+		w[3] = t * t * t
+
+
+	@staticmethod
+	cdef void dbswt(double *w, double t) nogil:
+		'''
+		Compute, in the four-element array w, the weights for the
+		derivative of a cubic b-spline interpolation for a normalized
+		fractional coordinate t. The weights in w are the derivatives,
+		with respect to t, of the weights from bswt(); thus
+
+		  w[0] = Phi'(-t - 1), w[1] = Phi'(-t),
+		  w[2] = Phi'(1 - t), w[3] = Phi'(2 - t).
+
+		As with bswt, the weights will be invalid unless 0 <= t <= 1.
+		'''
+		cdef double ts
+		ts = 1 - t
+		w[0] = -3 * ts * ts
+		w[1] = 3 * t * (3 * t - 4)
+		w[2] = 3 * ts * (3 * t + 1)
+		w[3] = 3 * t * t
+
+
+	@cython.wraparound(False)
+	@cython.boundscheck(False)
+	cdef bint _evaluate(self, double *f, point *grad, point p) nogil:
+		'''
+		Evaluate, in f, a function and, in grad, its gradient at a
+		point p. If grad is NULL, the gradient is not evaluated.
+
+		If the coordinates are out of bounds, evaluation will be
+		attempted by Interpolator3D._evaluate().
+
+		The method will always return True if evaluation was done
+		locally, or the return value of Interpolator3D._evaluate() if
+		the evaluation was delegated.
+		'''
+		cdef long nx, ny, nz
+		cdef bint dograd = (grad != <point *>NULL)
+
+		if self.coeffs == <double *>NULL:
+			return Interpolator3D._evaluate(self, f, grad, p)
+
+		# Cubic coefficient shape is (nx + 2, ny + 2, nz + 2)
+		nx, ny, nz = self.ncx - 2, self.ncy - 2, self.ncz - 2
+
+		# Find the fractional and integer parts of the coordinates
+		cdef:
+			# Maximum interval indices are to left of last pixel
+			long i = max(0, min(<long>p.x, nx - 2))
+			long j = max(0, min(<long>p.y, ny - 2))
+			long k = max(0, min(<long>p.z, nz - 2))
+
+			double t = p.x - <double>i
+			double u = p.y - <double>j
+			double v = p.z - <double>k
+
+		if not (0 <= t <= 1.0 and 0 <= u <= 1.0 and 0 <= v <= 1.0):
+			return Interpolator3D._evaluate(self, f, grad, p)
+
+		cdef:
+			double tw[4]
+			double uw[4]
+			double vw[4]
+			double dt[4]
+			double du[4]
+			double dv[4]
+
+			double tt, dtt, uu, duu, vv, cv
+			long ii, jj, kk, si, sj, sk, soi, soij
+
+		# Initialize the function value
+		f[0] = 0.0
+
+		# Find the interpolating weights for the interval
+		CubicInterpolator3D.bswt(&(tw[0]), t)
+		CubicInterpolator3D.bswt(&(uw[0]), u)
+		CubicInterpolator3D.bswt(&(vw[0]), v)
+
+		if dograd:
+			# Initialize gradient
+			grad[0].x = grad[0].y = grad[0].z = 0.0
+
+			# Find the derivative weights
+			CubicInterpolator3D.dbswt(&(dt[0]), t)
+			CubicInterpolator3D.dbswt(&(du[0]), u)
+			CubicInterpolator3D.dbswt(&(dv[0]), v)
+
+		ii = 0
+		si = i - 1 if i > 0 else nx + 1
+		while ii < 4:
+			tt = tw[ii]
+			dtt = dt[ii]
+
+			# Compute the coefficient offset in x
+			soi = self.ncy * si
+
+			jj = 0
+			sj = j - 1 if j > 0 else ny + 1
+			while jj < 4:
+				uu = uw[jj]
+				duu = du[jj]
+
+				# Compute the coefficient offset in x and y
+				soij = self.ncz * (sj + soi)
+
+				kk = 0
+				sk = k - 1 if k > 0 else nz + 1
+				while kk < 4:
+					cv = self.coeffs[soij + sk]
+					vv = vw[kk]
+					f[0] += cv * tt * uu * vv
+					if dograd:
+						grad[0].x += cv * dtt * uu * vv
+						grad[0].y += cv * tt * duu * vv
+						grad[0].z += cv * tt * uu * dv[kk]
+
+					kk += 1
+					sk = k + kk - 1
+				jj += 1
+				sj = j + jj - 1
+			ii += 1
+			si = i + ii - 1
+
+		return True
+
+
+cdef class LinearInterpolator3D(Interpolator3D):
+	'''
+	An Interpolator3D that implements trilinear interpolation.
+	'''
+	@cython.wraparound(False)
+	@cython.boundscheck(False)
+	def __init__(self, image):
+		'''
+		LinearInterpolator3D(image)
+
+		Construct a trilinear interpolator for the given 3-D
+		floating-point image.
+		'''
+		cdef double[:,:,:] img = np.asarray(image, dtype=np.float64)
+		cdef unsigned long nx, ny, nz
+		nx, ny, nz = img.shape[0], img.shape[1], img.shape[2]
+
+		if nx < 2 or ny < 2 or nz < 2:
+			raise ValueError('Size of image must be at least (2, 2, 2)')
+
+		self.ncx, self.ncy, self.ncz = nx, ny, nz
+
+		# Allocate coefficients and prepopulate image
+		self.coeffs = <double *>PyMem_Malloc(nx * ny * nz * sizeof(double))
+		if self.coeffs == <double *>NULL:
+			raise MemoryError('Unable to allocate storage for coefficients')
+
+		cdef double[:,:,:] coeffs
+		cdef unsigned long ix, iy, iz
+
+		try:
+			# For convenience, treat the buffer as a 3-D array
+			coeffs = <double[:nx,:ny,:nz:1]>self.coeffs
+
+			# Just copy the linear interpolation coefficients
+			for ix in range(nx):
+				for iy in range(ny):
+					for iz in range(nz):
+						coeffs[ix,iy,iz] = img[ix,iy,iz]
+		except Exception:
+			PyMem_Free(self.coeffs)
+			self.coeffs = <double *>NULL
+			raise
+
+	@property
+	def shape(self):
+		'''
+		A grid (nx, ny, nz) representing the shape of the image being
+		interpolated.
+		'''
+		return (self.ncx, self.ncy, self.ncz)
+
+
+	@cython.wraparound(False)
+	@cython.boundscheck(False)
+	cdef bint _evaluate(self, double *f, point *grad, point p) nogil:
+		'''
+		Evaluate, in f, a function and, in grad, its gradient at a
+		point p. If grad is NULL, the gradient is not evaluated.
+
+		If the coordinates are out of bounds, evaluation will be
+		attempted by Interpolator3D._evaluate().
+
+		The method will always return True if evaluation was done
+		locally, or the return value of Interpolator3D._evaluate() if
+		the evaluation was delegated.
+		'''
+		cdef long nx, ny, nz
+		cdef bint dograd = (grad != <point *>NULL)
+
+		if self.coeffs == <double *>NULL:
+			return Interpolator3D._evaluate(self, f, grad, p)
+
+		# Linear coefficient shape is (nx, ny, nz)
+		nx, ny, nz = self.ncx, self.ncy, self.ncz
+
+		# Find the fractional and integer parts of the coordinates
+		cdef:
+			# Maximum interval indices are to left of last pixel
+			long i = max(0, min(<long>p.x, nx - 2))
+			long j = max(0, min(<long>p.y, ny - 2))
+			long k = max(0, min(<long>p.z, nz - 2))
+
+			double t = p.x - <double>i
+			double u = p.y - <double>j
+			double v = p.z - <double>k
+
+		if not (0 <= t <= 1.0 and 0 <= u <= 1.0 and 0 <= v <= 1.0):
+			return Interpolator3D._evaluate(self, f, grad, p)
+
+		cdef:
+			double tw[4]
+			double uw[2]
+			double dt[4]
+			double du[2]
+			double dv[2]
+
+			double tt, uu, vv
+			long ii, jj
+
+		# Initialize the outputs
+		f[0] = 0.0
+
+		if dograd:
+			grad[0].x = grad[0].y = grad[0].z = 0.0
+
+		# Interpolate the x face
+		ii = (i * self.ncy + j) * self.ncz + k
+		jj = ii + self.ncz * self.ncy
+		tt = 1.0 - t
+		tw[0] = tt * self.coeffs[ii] + t * self.coeffs[jj]
+		tw[1] = tt * self.coeffs[ii + 1] + t * self.coeffs[jj + 1]
+		if dograd:
+			dt[0] = self.coeffs[jj] - self.coeffs[ii]
+			dt[1] = self.coeffs[jj + 1] - self.coeffs[ii + 1]
+		ii += self.ncz
+		jj += self.ncz
+		tw[2] = tt * self.coeffs[ii] + t * self.coeffs[jj]
+		tw[3] = tt * self.coeffs[ii + 1] + t * self.coeffs[jj + 1]
+		if dograd:
+			dt[2] = self.coeffs[jj] - self.coeffs[ii]
+			dt[3] = self.coeffs[jj + 1] - self.coeffs[ii + 1]
+		# Interpolate the y line
+		uu = 1.0 - u
+		uw[0] = uu * tw[0] + u * tw[2]
+		uw[1] = uu * tw[1] + u * tw[3]
+		if dograd:
+			# These are the y derivatives at the line ends
+			du[0] = tw[2] - tw[0]
+			du[1] = tw[3] - tw[1]
+			# Interpolate the x derivatives at the line ends
+			dv[0] = uu * dt[0] + u * dt[2]
+			dv[1] = uu * dt[1] + u * dt[3]
+
+		# Interpolate the z value
+		vv = 1.0 - v
+		f[0] = vv * uw[0] + v * uw[1]
+
+		if dograd:
+			grad[0].z = uw[1] - uw[0]
+			grad[0].y = vv * du[0] + v * du[1]
+			grad[0].x = vv * dv[0] + v * dv[1]
+
+		return True
+
+
+cdef class Interpolator3D:
+	'''
+	An abstract class to manage a function, sampled on a 3-D grid, that can
+	provide interpolated values of the function and its gradient anywhere
+	in the bounds of the grid.
+	'''
+	cdef double *coeffs
+	cdef unsigned long ncx, ncy, ncz
+	cdef bint _usedef
+	cdef double _default
+
+	def __cinit__(self, *args, **kwargs):
+		'''
+		By default, clear the default value and the coefficient
+		pointer.
+		'''
+		self._usedef = False
+		self._default = 0.0
+		self.ncx = self.ncy = self.ncz = 0
+		self.coeffs = <double *>NULL
+
+
+	def __init__(self, *args, **kwargs):
+		'''
+		Descendants must implement __init__ and not call this.
+		'''
+		raise NotImplementedError('Unable to initialize abstract Interpolator3D')
+
+
+	def __dealloc__(self):
+		'''
+		Clear coefficient storage.
+		'''
+		if self.coeffs != <double *>NULL: PyMem_Free(self.coeffs)
+
+
+	@property
+	def shape(self):
+		'''
+		A grid (nx, ny, nz) representing the shape of the image being
+		interpolated.
+		'''
+		raise NotImplementedError('Abstract Interpolator3D has no shape')
+
+
+	@property
+	def default(self):
+		'''
+		The default value to return when attempting to evaluate the
+		interpolated fumction outside the function bounds, or None if
+		out-of-bounds evaluations should raise an exception.
+		'''
+		if self._usedef: return self._default
+		else: return None
+
+	@default.setter
+	def default(self, val):
+		if val is None:
+			self._usedef = False
+			self._default = 0.0
+		self._default = float(val)
+		self._usedef = True
 
 
 	@cython.wraparound(False)
@@ -632,138 +948,12 @@ cdef class Interpolator3D:
 		cdef long nx, ny, nz
 		cdef bint dograd = (grad != <point *>NULL)
 
-		if self.coeffs == <double *>NULL: return False
-
-		if self._linear:
-			# Linear coefficient shape is (nx, ny, nz)
-			nx, ny, nz = self.ncx, self.ncy, self.ncz
-		else:
-			# Cubic coefficient shape is (nx + 2, ny + 2, nz + 2)
-			nx, ny, nz = self.ncx - 2, self.ncy - 2, self.ncz - 2
-
-		# Find the fractional and integer parts of the coordinates
-		cdef:
-			# Maximum interval indices are to left of last pixel
-			long i = max(0, min(<long>p.x, nx - 2))
-			long j = max(0, min(<long>p.y, ny - 2))
-			long k = max(0, min(<long>p.z, nz - 2))
-
-			double t = p.x - <double>i
-			double u = p.y - <double>j
-			double v = p.z - <double>k
-
-		if not (0 <= t <= 1.0 and 0 <= u <= 1.0 and 0 <= v <= 1.0):
-			if self._usedef:
-				f[0] = self._default
-				if dograd: grad[0].x = grad[0].y = grad[0].z = 0.0
-				return True
-			else: return False
-
-		cdef:
-			double tw[4]
-			double uw[4]
-			double vw[4]
-			double dt[4]
-			double du[4]
-			double dv[4]
-
-			double tt, dtt, uu, duu, vv, cv
-			long ii, jj, kk, si, sj, sk, soi, soij
-
-		# Initialize the outputs
-		f[0] = 0.0
-
-		if dograd:
-			grad[0].x = grad[0].y = grad[0].z = 0.0
-
-		if self._linear:
-			# Interpolate the x face
-			ii = (i * self.ncy + j) * self.ncz + k
-			jj = ii + self.ncz * self.ncy
-			tt = 1.0 - t
-			tw[0] = tt * self.coeffs[ii] + t * self.coeffs[jj]
-			tw[1] = tt * self.coeffs[ii + 1] + t * self.coeffs[jj + 1]
-			if dograd:
-				dt[0] = self.coeffs[jj] - self.coeffs[ii]
-				dt[1] = self.coeffs[jj + 1] - self.coeffs[ii + 1]
-			ii += self.ncz
-			jj += self.ncz
-			tw[2] = tt * self.coeffs[ii] + t * self.coeffs[jj]
-			tw[3] = tt * self.coeffs[ii + 1] + t * self.coeffs[jj + 1]
-			if dograd:
-				dt[2] = self.coeffs[jj] - self.coeffs[ii]
-				dt[3] = self.coeffs[jj + 1] - self.coeffs[ii + 1]
-			# Interpolate the y line
-			uu = 1.0 - u
-			uw[0] = uu * tw[0] + u * tw[2]
-			uw[1] = uu * tw[1] + u * tw[3]
-			if dograd:
-				# These are the y derivatives at the line ends
-				du[0] = tw[2] - tw[0]
-				du[1] = tw[3] - tw[1]
-				# Interpolate the x derivatives at the line ends
-				dv[0] = uu * dt[0] + u * dt[2]
-				dv[1] = uu * dt[1] + u * dt[3]
-
-			# Interpolate the z value
-			vv = 1.0 - v
-			f[0] = vv * uw[0] + v * uw[1]
-
-			if dograd:
-				grad[0].z = uw[1] - uw[0]
-				grad[0].y = vv * du[0] + v * du[1]
-				grad[0].x = vv * dv[0] + v * dv[1]
-
+		if self._usedef:
+			f[0] = self._default
+			if dograd: grad[0].x = grad[0].y = grad[0].z = 0.0
 			return True
 
-		# Find the interpolating weights for the interval
-		Interpolator3D.bswt(&(tw[0]), t)
-		Interpolator3D.bswt(&(uw[0]), u)
-		Interpolator3D.bswt(&(vw[0]), v)
-
-		if dograd:
-			# Find the derivative weights
-			Interpolator3D.dbswt(&(dt[0]), t)
-			Interpolator3D.dbswt(&(du[0]), u)
-			Interpolator3D.dbswt(&(dv[0]), v)
-
-		ii = 0
-		si = i - 1 if i > 0 else nx + 1
-		while ii < 4:
-			tt = tw[ii]
-			dtt = dt[ii]
-
-			# Compute the coefficient offset in x
-			soi = self.ncy * si
-
-			jj = 0
-			sj = j - 1 if j > 0 else ny + 1
-			while jj < 4:
-				uu = uw[jj]
-				duu = du[jj]
-
-				# Compute the coefficient offset in x and y
-				soij = self.ncz * (sj + soi)
-
-				kk = 0
-				sk = k - 1 if k > 0 else nz + 1
-				while kk < 4:
-					cv = self.coeffs[soij + sk]
-					vv = vw[kk]
-					f[0] += cv * tt * uu * vv
-					if dograd:
-						grad[0].x += cv * dtt * uu * vv
-						grad[0].y += cv * tt * duu * vv
-						grad[0].z += cv * tt * uu * dv[kk]
-
-					kk += 1
-					sk = k + kk - 1
-				jj += 1
-				sj = j + jj - 1
-			ii += 1
-			si = i + ii - 1
-
-		return True
+		return False
 
 
 	@cython.embedsignature(True)
@@ -822,60 +1012,6 @@ cdef class Interpolator3D:
 					out[ix,iy,iz] = f
 
 		return out
-
-
-	@staticmethod
-	cdef void bswt(double *w, double t) nogil:
-		'''
-		Compute, in the four-element array w, the weights for cubic
-		b-spline interpolation for a normalized fractional coordinate
-		t. These coordinates will be invalid unless 0 <= t <= 1.
-
-		If Phi is the standard unnormalized cubic b-spline [i.e.,
-		Phi(0) = 4 and Phi(1) = Phi(-1) = 1], the weights have values
-
-		  w[0] = Phi(-t - 1), w[1] = Phi(-t),
-		  w[2] = Phi(1 - t), w[3] = Phi(2 - t).
-
-		If a point x falls in the interval [x_i, x_{i+1}) of a
-		uniformly spaced grid, then the normalized fractional
-		coordinate is
-
-		  t = (x - x_i) / (x_{i+1} - x_i)
-
-		and the value at x of an interpolated function f with spline
-		coefficients c[i] is
-
-		  f(x) = c[i-1] * w[0] + c[i] * w[1]
-				+ c[i+1] * w[2] + c[i+2]*w[3].
-		'''
-		cdef double ts
-		ts = 1 - t
-		w[0] = ts * ts * ts
-		w[1] = 4 - 3 * t * t * (2 - t)
-		w[2] = 4 - 3 * ts * ts * (1 + t)
-		w[3] = t * t * t
-
-
-	@staticmethod
-	cdef void dbswt(double *w, double t) nogil:
-		'''
-		Compute, in the four-element array w, the weights for the
-		derivative of a cubic b-spline interpolation for a normalized
-		fractional coordinate t. The weights in w are the derivatives,
-		with respect to t, of the weights from bswt(); thus
-
-		  w[0] = Phi'(-t - 1), w[1] = Phi'(-t),
-		  w[2] = Phi'(1 - t), w[3] = Phi'(2 - t).
-
-		As with bswt, the weights will be invalid unless 0 <= t <= 1.
-		'''
-		cdef double ts
-		ts = 1 - t
-		w[0] = -3 * ts * ts
-		w[1] = 3 * t * (3 * t - 4)
-		w[2] = 3 * ts * (3 * t + 1)
-		w[3] = 3 * t * t
 
 
 cdef class Segment3D:
