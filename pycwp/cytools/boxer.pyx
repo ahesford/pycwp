@@ -169,7 +169,10 @@ cdef class Interpolator3D:
 	A class to manage a function sampled on a 3-D grid and provide routines
 	for interpolating the function and the gradient.
 	'''
-	cdef double[:,:,:] coeffs
+	cdef double *coeffs
+	cdef unsigned long ncx, ncy, ncz
+	cdef bint _usedef
+	cdef double _default
 
 	@cython.wraparound(False)
 	@cython.boundscheck(False)
@@ -189,32 +192,52 @@ cdef class Interpolator3D:
 			raise ValueError('Size of image must be at least (2, 2, 2)')
 
 		nx2, ny2, nz2 = nx + 2, ny + 2, nz + 2
+		self.ncx, self.ncy, self.ncz = nx2, ny2, nz2
+
 
 		# Allocate coefficients and prepopulate image
-		cdef double[:,:,:] coeffs
-		coeffs = np.empty((nx2, ny2, nz2), dtype=np.float64, order='C')
+		self.coeffs = <double *>PyMem_Malloc(nx2 * ny2 * nz2 * sizeof(double))
+		if self.coeffs == <double *>NULL:
+			raise MemoryError('Unable to allocate storage for coefficients')
 
-		# Allocate a work array for coefficient evaluation
 		cdef double[:] work
-		work = np.empty((max(nx, ny, nz) - 2,), dtype=np.float64, order='C')
-
+		cdef double[:,:,:] coeffs
 		cdef unsigned long ix, iy, iz
-		for ix in range(nx):
-			for iy in range(ny):
-				# Populate the image and transform along z
-				for iz in range(nz): coeffs[ix,iy,iz] = img[ix,iy,iz]
-				Interpolator3D.nscoeffs(coeffs[ix,iy,:], work)
-			# Transform along y, including out-of-bounds z coefficients
-			for iz in range(nz2):
-				Interpolator3D.nscoeffs(coeffs[ix,:,iz], work)
 
-		# Transform along x axis
-		for iy in range(ny2):
-			for iz in range(nz2):
-				Interpolator3D.nscoeffs(coeffs[:,iy,iz], work)
+		try:
+			# For convenience, treat the buffer as a 3-D array
+			coeffs = <double[:nx2,:ny2,:nz2:1]>self.coeffs
+			# Allocate a work array for coefficient evaluation
+			work = np.empty((max(nx, ny, nz) - 2,), dtype=np.float64, order='C')
 
-		# Retain the view globally
-		self.coeffs = coeffs
+			for ix in range(nx):
+				for iy in range(ny):
+					# Populate the image and transform along z
+					for iz in range(nz): coeffs[ix,iy,iz] = img[ix,iy,iz]
+					Interpolator3D.nscoeffs(coeffs[ix,iy,:], work)
+				# Transform along y, including out-of-bounds z coefficients
+				for iz in range(nz2):
+					Interpolator3D.nscoeffs(coeffs[ix,:,iz], work)
+
+			# Transform along x axis
+			for iy in range(ny2):
+				for iz in range(nz2):
+					Interpolator3D.nscoeffs(coeffs[:,iy,iz], work)
+		except Exception:
+			PyMem_Free(self.coeffs)
+			self.coeffs = <double *>NULL
+			raise
+
+		# Disable default values for out-of-bounds evaluations
+		self._usedef = False
+		self._default = 0.0
+
+
+	def __dealloc__(self):
+		'''
+		Clear coefficient storage.
+		'''
+		if self.coeffs != <double *>NULL: PyMem_Free(self.coeffs)
 
 
 	@property
@@ -223,8 +246,26 @@ cdef class Interpolator3D:
 		A grid (nx, ny, nz) representing the shape of the image being
 		interpolated.
 		'''
-		cdef double [:,:,:] coeffs = self.coeffs
-		return (coeffs.shape[0] - 2, coeffs.shape[1] - 2, coeffs.shape[2] - 2)
+		return (self.ncx - 2, self.ncy - 2, self.ncz - 2)
+
+
+	@property
+	def default(self):
+		'''
+		The default value to return when attempting to evaluate the
+		interpolated fumction outside the function bounds, or None if
+		out-of-bounds evaluations should raise an exception.
+		'''
+		if self._usedef: return self._default
+		else: return None
+
+	@default.setter
+	def default(self, val):
+		if val is None:
+			self._usedef = False
+			self._default = 0.0
+		self._default = float(val)
+		self._usedef = True
 
 
 	@cython.wraparound(False)
@@ -322,9 +363,6 @@ cdef class Interpolator3D:
 		or if any control points fall outside the interpolation grid, a
 		ValueError will be raised.
 		'''
-		# Capture a local reference to avoid repeated validity checks
-		cdef double[:,:,:] coeffs = self.coeffs
-
 		cdef unsigned long npts = points.shape[0]
 		if points.shape[1] != 3:
 			raise ValueError('Length of second dimension of points must be 3')
@@ -356,10 +394,8 @@ cdef class Interpolator3D:
 
 			for j in range(3):
 				# Compute the central or one-sided differences
-				ns = Interpolator3D.perturb(&lval, j,
-						coeffs, l, c, r, -dl, hmax)
-				ns += Interpolator3D.perturb(&rval, j,
-						coeffs, l, c, r, +dl, hmax)
+				ns = self.perturb(&lval, j, l, c, r, -dl, hmax)
+				ns += self.perturb(&rval, j, l, c, r, +dl, hmax)
 				if ns < 1:
 					raise ValueError('Uncomputable derivative at %s (axis %d)' % (pt2tup(c), j))
 				grad[i,j] = (rval - lval) / (dl * ns)
@@ -373,8 +409,7 @@ cdef class Interpolator3D:
 	@cython.wraparound(False)
 	@cython.boundscheck(False)
 	@cython.cdivision(True)
-	@staticmethod
-	cdef int perturb(double *ival, unsigned int axis, double[:,:,:] coeffs,
+	cdef int perturb(self, double *ival, unsigned int axis,
 			point s, point c, point e, double dl, double hmax) except -1:
 		'''
 		Store, in ival, the integral (as computed by segint) over a
@@ -397,7 +432,7 @@ cdef class Interpolator3D:
 		cdef int rv = 1
 
 		# Copy the starting point to avoid multiple evaluations
-		if not Interpolator3D._evaluate(&sval, NULL, coeffs, s):
+		if not self._evaluate(&sval, NULL, s):
 			raise ValueError('Point %s is out of bounds' % (pt2tup(s),))
 
 		# Perturb the central point
@@ -409,16 +444,16 @@ cdef class Interpolator3D:
 		else: raise ValueError('Perturbed axis must be 0, 1 or 2')
 
 		# Try to integrate along the first half of the perturbed path
-		if not Interpolator3D.segint(&cval, coeffs, s, dp, hmax, &sval):
+		if not self.segint(&cval, s, dp, hmax, &sval):
 			# Perturbed integration failed; sval and cval uncorrupted
 			# Revert to integrating over unperturbed path
 			dp = c
 			rv = 0
-			if not Interpolator3D.segint(&cval, coeffs, s, dp, hmax, &sval):
+			if not self.segint(&cval, s, dp, hmax, &sval):
 				raise ValueError('Path %s -> %s is out of bounds' % (pt2tup(s), pt2tup(dp)))
 
 		# Integrate along the second half of the path
-		if not Interpolator3D.segint(&cval, coeffs, dp, e, hmax, &sval):
+		if not self.segint(&cval, dp, e, hmax, &sval):
 			raise ValueError('Path %s -> %s is out of bounds' % (pt2tup(dp), pt2tup(e)))
 
 		ival[0] = cval
@@ -444,9 +479,6 @@ cdef class Interpolator3D:
 		or if any control point falls outside the interpolation grid,
 		a ValueError will be raised.
 		'''
-		# Capture a local reference to avoid repeated validity checks
-		cdef double[:,:,:] coeffs = self.coeffs
-
 		cdef unsigned long npts = points.shape[0]
 		if points.shape[1] != 3:
 			raise ValueError('Length of second dimension of points must be 3')
@@ -460,7 +492,7 @@ cdef class Interpolator3D:
 
 		# Initialize the left point and its value
 		ps = packpt(points[0,0], points[0,1], points[0,2])
-		if not Interpolator3D._evaluate(&sval, NULL, coeffs, ps):
+		if not self._evaluate(&sval, NULL, ps):
 			raise ValueError('Start point %s is out of bounds' % (pt2tup(ps),))
 
 		for i in range(1, npts):
@@ -468,7 +500,7 @@ cdef class Interpolator3D:
 			pe = packpt(points[i,0], points[i,1], points[i,2])
 			# Add the contribution from this segment
 			# This uses, then updates, the function value in sval
-			if not Interpolator3D.segint(&ival, coeffs, ps, pe, hmax, &sval):
+			if not self.segint(&ival, ps, pe, hmax, &sval):
 				raise ValueError('Path %s -> %s is out of bounds' % (pt2tup(ps), pt2tup(pe)))
 			# The next start point is the current end point
 			ps = pe
@@ -479,26 +511,24 @@ cdef class Interpolator3D:
 	@cython.cdivision(True)
 	@cython.boundscheck(False)
 	@cython.wraparound(False)
-	@staticmethod
-	cdef bint segint(double *ival, double[:,:,:] c,
-			point s, point e, double hmax, double *f) nogil:
+	cdef bint segint(self, double *ival, point s,
+			point e, double hmax, double *f) nogil:
 		'''
 		Add to the value stored in ival the integral of the function
-		represented by the (nx + 2, ny + 2, nz + 2) cubic spline
-		coefficients c along the line from point s to point e, each in
-		grid coordinates. The integral is computed using the composite
-		Simpson's rule by dividing the segment into the smallest even
-		number of equal-length pieces that each have a length no longer
-		than hmax. The sign of hmax is ignored.
+		represented by this interpolator along the line from point s to
+		point e, each in grid coordinates. The integral is computed
+		using the composite Simpson's rule by dividing the segment into
+		the smallest even number of equal-length pieces that each have
+		a length no longer than hmax. The sign of hmax is ignored.
 
 		If f is not NULL, it must hold the result of a call to
 
-			Interpolator3D._evaluate(f, NULL, c, s).
+			self._evaluate(f, NULL, s).
 
 		In this case, initial evaluation of function will not be
 		attempted. On output, the value of a call to
 
-			Interpolator3D._evaluate(f, NULL, c, e)
+			self._evaluate(f, NULL, e)
 
 		will be stored in f. This allows calls to segint to be chained
 		over multiple segments that share endpoints without multiple
@@ -506,10 +536,8 @@ cdef class Interpolator3D:
 
 		If f is NULL, the function will be evaluated everywhere.
 
-		Returns True if the integral was evaluated and False if the
-		segment endpoints are outside of the grid
-
-			[0, nx - 1] x [0, ny - 1], [0, nz - 1].
+		Returns True if the integral was evaluated and False if any
+		point along the line cannot be evaluated.
 
 		If False is returned, neither ival nor f will have changed.
 		'''
@@ -539,16 +567,16 @@ cdef class Interpolator3D:
 
 		# Copy a pre-evaluated starting point or evaluate
 		if f != <double *>NULL: fval = f[0]
-		elif not Interpolator3D._evaluate(&fval, NULL, c, s): return False
+		elif not self._evaluate(&fval, NULL, s): return False
 
 		# Include the interior points
 		for i in range(1, n):
 			p = axpy(i, dp, s)
-			if not Interpolator3D._evaluate(&sval, NULL, c, p): return False
+			if not self._evaluate(&sval, NULL, p): return False
 			fval += mpy[i % 2] * sval
 
 		# Evaluate the endpoint
-		if not Interpolator3D._evaluate(&sval, NULL, c, e): return False
+		if not self._evaluate(&sval, NULL, e): return False
 
 		# Update f with the endpoint value
 		if f != <double *>NULL: f[0] = sval
@@ -565,21 +593,28 @@ cdef class Interpolator3D:
 
 	@cython.wraparound(False)
 	@cython.boundscheck(False)
-	@staticmethod
-	cdef bint _evaluate(double *f, point *grad, double[:,:,:] c, point p) nogil:
+	cdef bint _evaluate(self, double *f, point *grad, point p) nogil:
 		'''
 		Evaluate, in f, a function and, in grad, its gradient at a
-		point p given cubic b-spline coefficients c. This method
-		returns False if the coordinates are out of bounds and True
-		otherwise.
+		point p given cubic b-spline coefficients c. If grad is NULL,
+		the gradient is not evaluated.
+
+		If the coordinates are out of bounds, self._default will be
+		substituted if self._usedef is True. The gradient will be zero
+		in this case.
+
+		This method returns False if the coordinates are out of bounds
+		and self._usedef is False, True otherwise.
 		'''
 		cdef long nx, ny, nz
 		cdef bint dograd = (grad != <point *>NULL)
 
+		if self.coeffs == <double *>NULL: return False
+
 		# Coefficient shape is (nx + 2, ny + 2, nz + 2)
-		nx = c.shape[0] - 2
-		ny = c.shape[1] - 2
-		nz = c.shape[2] - 2
+		nx = self.ncx - 2
+		ny = self.ncy - 2
+		nz = self.ncz - 2
 
 		# Find the fractional and integer parts of the coordinates
 		cdef:
@@ -593,7 +628,11 @@ cdef class Interpolator3D:
 			double v = p.z - <double>k
 
 		if not (0 <= t <= 1.0 and 0 <= u <= 1.0 and 0 <= v <= 1.0):
-			return False
+			if self._usedef:
+				f[0] = self._default
+				if dograd: grad[0].x = grad[0].y = grad[0].z = 0.0
+				return True
+			else: return False
 
 		cdef:
 			double tw[4]
@@ -604,7 +643,7 @@ cdef class Interpolator3D:
 			double dv[4]
 
 			double tt, dtt, uu, duu, vv, cv
-			long ii, jj, kk, si, sj, sk
+			long ii, jj, kk, si, sj, sk, soi, soij
 
 		# Find the interpolating weights for the interval
 		Interpolator3D.bswt(&(tw[0]), t)
@@ -627,16 +666,22 @@ cdef class Interpolator3D:
 			tt = tw[ii]
 			dtt = dt[ii]
 
+			# Compute the coefficient offset in x
+			soi = self.ncy * si
+
 			jj = 0
 			sj = j - 1 if j > 0 else ny + 1
 			while jj < 4:
 				uu = uw[jj]
 				duu = du[jj]
 
+				# Compute the coefficient offset in x and y
+				soij = self.ncz * (sj + soi)
+
 				kk = 0
 				sk = k - 1 if k > 0 else nz + 1
 				while kk < 4:
-					cv = c[si,sj,sk]
+					cv = self.coeffs[soij + sk]
 					vv = vw[kk]
 					f[0] += cv * tt * uu * vv
 					if dograd:
@@ -658,13 +703,13 @@ cdef class Interpolator3D:
 	def evaluate(self, double x, double y, double z):
 		'''
 		Evaluate and return the value of the image and its gradient at
-		grid coordinates (x, y, z). If the coordinates are out of
-		bounds, a ValueError will be raised.
+		grid coordinates (x, y, z). If coordinates are out of bounds, a
+		ValueError will be raised unless self.default is not None.
 		'''
 		cdef double f
 		cdef point g
 
-		if not Interpolator3D._evaluate(&f, &g, self.coeffs, packpt(x, y, z)):
+		if not self._evaluate(&f, &g, packpt(x, y, z)):
 			raise ValueError('Coordinates are out of bounds')
 		return f, (g.x, g.y, g.z)
 
@@ -689,7 +734,6 @@ cdef class Interpolator3D:
 		cdef np.ndarray[np.float64_t, ndim=3] out
 		out = np.empty((nx, ny, nz), dtype=np.float64, order='C')
 
-		cdef double[:,:,:] coeffs = self.coeffs
 		cdef double f = 0.0, xx, yy, zz
 		cdef point crd
 
@@ -699,7 +743,7 @@ cdef class Interpolator3D:
 				crd.y = cy[iy]
 				for iz in range(nz):
 					crd.z = cz[iz]
-					if not Interpolator3D._evaluate(&f, NULL, coeffs, crd):
+					if not self._evaluate(&f, NULL, crd):
 						raise ValueError('Cannot evaluate image at %s' % (pt2tup(crd),))
 					out[ix,iy,iz] = f
 
@@ -1661,8 +1705,6 @@ cdef class Box3D:
 		cdef double mgf, f
 		cdef long i, j, k, ti, tj, tk
 
-		cdef double[:,:,:] coeffs = field.coeffs
-
 		# For convenience
 		nx, ny, nz = self.nx, self.ny, self.nz
 
@@ -1712,7 +1754,7 @@ cdef class Box3D:
 
 			# Find the direction of travel in this cell
 			cp = self._cart2cell(pp.x, pp.y, pp.z)
-			if not Interpolator3D._evaluate(&f, &gf, coeffs, cp):
+			if not field._evaluate(&f, &gf, cp):
 				raise ValueError('Cannot evaluate gradient at %s' % ((cp.x, cp.y, cp.z),))
 			# Search for stationary points
 			mgf = ptnrm(gf)
