@@ -168,6 +168,332 @@ cdef int tup2pt(point *pt, object p) except -1:
 cdef class Interpolator3D
 
 
+cdef class HermiteInterpolator3D(Interpolator3D):
+	'''
+	An Interpolator3D that implements local interpolation with cubic
+	Hermite splines. A degree of monotonicity is enforced by forcing first
+	derivatives at each sample to match the smaller of the left and right
+	differences (if they are of the same sign; zero if they are of
+	different sizes). All cross derivatives (xy, xz, yz, xyz) are forced to
+	zero.
+
+	*** NOTE: These constraints do not guarantee global monotonicity. ***
+	'''
+	# THe number of values per sample (f, fx, fy, fz, ...)
+	cdef unsigned long nval
+
+	@cython.wraparound(False)
+	@cython.boundscheck(False)
+	@cython.embedsignature(True)
+	def __init__(self, image):
+		'''
+		Construct a constrained Hermite cubic interpolator for the
+		given 3-D floating-point image.
+		'''
+		cdef double [:,:,:] img = np.asarray(image, dtype=np.float64)
+		cdef unsigned long nx, ny, nz
+		nx, ny, nz = img.shape[0], img.shape[1], img.shape[2]
+
+		if nx < 2 or ny < 2 or nz < 2:
+			raise ValueError('Size of image must be at least (2, 2, 2)')
+
+		self.ncx, self.ncy, self.ncz = nx, ny, nz
+		# Each sample gets four values: function and first-order derivatives
+		self.nval = 4
+
+		# Allocate coefficients
+		self.coeffs = <double *>PyMem_Malloc(nx * ny * nz * self.nval * sizeof(double))
+		if self.coeffs == <double *>NULL:
+			raise MemoryError('Unable to allocate storage for coefficients')
+
+		# Capture a convenient view on the coefficient storage
+		cdef double[:,:,:,:] coeffs
+
+		try:
+			# Try to populate the coefficient matrix
+			coeffs = <double[:nx,:ny,:nz,:self.nval:1]>self.coeffs
+			HermiteInterpolator3D.img2coeffs(coeffs, img)
+		except Exception:
+			PyMem_Free(self.coeffs)
+			self.coeffs = <double *>NULL
+
+
+	@property
+	def shape(self):
+		'''
+		A grid (nx, ny, nz) representing the shape of the image being
+		interpolated.
+		'''
+		return (self.ncx, self.ncy, self.ncz)
+
+
+	@cython.wraparound(False)
+	@cython.boundscheck(False)
+	cdef bint _evaluate(self, double *f, point *grad, point p) nogil:
+		'''
+		Evaluate, in f, a function and, in grad if grad is not NULL,
+		its gradient at a point p.
+
+		If the coordinates are out of bounds, evaluation will be
+		attempted by Interpolator3D._evaluate().
+
+		The method will always return True if evaluation was done
+		locally, or the return value of Interpolator3D._evaluate() if
+		the evaluation was delegated.
+		'''
+		cdef long nx, ny, nz
+		cdef bint dograd = (grad != <point *>NULL)
+
+		if self.coeffs == <double *>NULL:
+			return Interpolator3D._evaluate(self, f, grad, p)
+
+		# Hermite coefficient shape is (nx, ny, nz, self.nval)
+		nx, ny, nz = self.ncx, self.ncy, self.ncz
+
+		# Find fractional and integer parts of the coordinates
+		cdef long i, j, k
+		cdef point t
+
+		if not Interpolator3D.crdfrac(&t, &i, &j, &k, p, nx, ny, nz):
+			return Interpolator3D._evaluate(self, f, grad, p)
+
+		cdef:
+			double hx[4]
+			double hy[4]
+			double hz[4]
+			double dhx[4]
+			double dhy[4]
+			double dhz[4]
+
+			unsigned long ii, jj, kk, dd, soi, soij, soijk
+			double cv, hxv, dhxv, hyv, dhyv, hzv, dhzv
+			double hxvp, dhxvp, hyvp, dhyvp, hzvp, dhzvp
+
+		# Initialize the function value
+		f[0] = 0.0
+
+		# Find the interpolator values in the interval
+		HermiteInterpolator3D.hermspl(hx, t.x)
+		HermiteInterpolator3D.hermspl(hy, t.y)
+		HermiteInterpolator3D.hermspl(hz, t.z)
+
+		if dograd:
+			# Initialize the gradient
+			grad.x = grad.y = grad.z = 0.0
+
+			# Find derivative values
+			HermiteInterpolator3D.hermdiff(dhx, t.x)
+			HermiteInterpolator3D.hermdiff(dhy, t.y)
+			HermiteInterpolator3D.hermdiff(dhz, t.z)
+
+		for ii in range(2):
+			soi = self.ncy * (i + ii)
+			hxv = hx[ii]
+			dhxv = hx[ii + 2]
+			hxvp = dhx[ii]
+			dhxvp = dhx[ii + 2]
+
+			for jj in range(2):
+				soij = self.ncz * (j + jj + soi)
+				hyv = hy[jj]
+				dhyv = hy[jj + 2]
+				hyvp = dhy[jj]
+				dhyvp = dhy[jj + 2]
+
+				for kk in range(2):
+					soijk = self.nval * (k + kk + soij)
+					hzv = hz[kk]
+					dhzv = hz[kk + 2]
+					hzvp = dhz[kk]
+					dhzvp = dhz[kk + 2]
+
+					# Add contribution from function value
+					cv = self.coeffs[soijk]
+					f[0] += cv * hxv * hyv * hzv
+					if dograd:
+						# Add contribution to gradient
+						grad.x += cv * hxvp * hyv * hzv
+						grad.y += cv * hxv * hyvp * hzv
+						grad.z += cv * hxv * hyv * hzvp
+
+					# Add contribution from x derivative
+					cv = self.coeffs[soijk + 1]
+					f[0] += cv * dhxv * hyv * hzv
+					if dograd:
+						# Add contribution to gradient
+						grad.x += cv * dhxvp * hyv * hzv
+						grad.y += cv * dhxv * hyvp * hzv
+						grad.z += cv * dhxv * hyv * hzvp
+
+					# Add contribution from y derivative
+					cv = self.coeffs[soijk + 2]
+					f[0] += cv * hxv * dhyv * hzv
+					if dograd:
+						# Add contribution to gradient
+						grad.x += cv * hxvp * dhyv * hzv
+						grad.y += cv * hxv * dhyvp * hzv
+						grad.z += cv * hxv * dhyv * hzvp
+
+					# Add contribution from z derivative
+					cv = self.coeffs[soijk + 3]
+					f[0] += cv * hxv * hyv * dhzv
+					if dograd:
+						# Add contribution to gradient
+						grad.x += cv * hxvp * hyv * dhzv
+						grad.y += cv * hxv * hyvp * dhzv
+						grad.z += cv * hxv * hyv * dhzvp
+
+		return True
+
+
+	@cython.wraparound(False)
+	@cython.boundscheck(False)
+	@staticmethod
+	cdef int img2coeffs(double[:,:,:,:] coeffs, double[:,:,:] img) except -1:
+		'''
+		Compute, in coeffs, the cubic Hermite spline coefficients for
+		the image img. If img has shape (nx, ny, nz), the coefficient
+		array should have shape at least (nx, ny, nz, 4).
+
+		The coefficients for sample (i, j, k) are:
+
+			coeffs[i,j,k,0] = img[i,j,k]
+			coeffs[i,j,k,1] = d(img[i,j,k]) / dx
+			coeffs[i,j,k,1] = d(img[i,j,k]) / dy
+			coeffs[i,j,k,2] = d(img[i,j,k]) / dz
+
+		The derivative is approximated as the smaller of the left- and
+		right-side finite differences if both have the same sign; if
+		the signs differ, the derivative is zero.
+
+		Unspecified, independent cross derivatives (dxdy, dxdz, dydz,
+		and dxdydz) are implicitly zero.
+		'''
+		cdef unsigned long nx, ny, nz, ix, iy, iz
+		cdef unsigned long nval = 4
+
+		nx, ny, nz = img.shape[0], img.shape[1], img.shape[2]
+		if nx < 2 or ny < 2 or nz < 2:
+			raise ValueError('Size of image must be at least (2, 2, 2)')
+		elif (coeffs.shape[0] < nx or coeffs.shape[1] < ny or
+				coeffs.shape[2] < nz or coeffs.shape[3] < nval):
+			raise ValueError('Shape of coeffs must be at least %s' % ((nx, ny, nz, nval),))
+
+		for ix in range(nx):
+			for iy in range(ny):
+				# Populate image and find slopes along z
+				for iz in range(nz):
+					coeffs[ix,iy,iz,0] = img[ix,iy,iz]
+				HermiteInterpolator3D.mhdiffs(coeffs[ix,iy,:,3], img[ix,iy,:])
+
+			for iz in range(nz):
+				# Find slopes along y
+				HermiteInterpolator3D.mhdiffs(coeffs[ix,:,iz,2], img[ix,:,iz])
+
+		# Find slopes along x
+		for iy in range(ny):
+			for iz in range(nz):
+				HermiteInterpolator3D.mhdiffs(coeffs[:,iy,iz,1], img[:,iy,iz])
+
+		return 0
+
+
+	@cython.wraparound(False)
+	@cython.boundscheck(False)
+	@cython.cdivision(True)
+	@staticmethod
+	cdef int mhdiffs(double[:] m, double[:] v) except -1:
+		'''
+		Given a set of function values v with length N, store in m the
+		central differences at each of the interior points, and the
+		one-sided differences at the end points.
+
+		The differences are adjusted according to the Fritsch-Carlson
+		(1980) method to ensure monotonicity of the cubic Hermite
+		spline interpolant using these values and derivatives.
+		'''
+		cdef unsigned long n, i
+		cdef double lh, rh, mm, beta, alpha
+
+		n = v.shape[0]
+		if n < 2:
+			raise ValueError('Array v must have at least 2 elements')
+		elif m.shape[0] < n:
+			raise ValueError('Array m must hold at least %d elements' % (n,))
+
+		# Assign the first and last differences
+		m[0] = v[1] - v[0]
+		m[n - 1] = v[n - 1] - v[n - 2]
+
+		# Initialize the left difference
+		lh = m[0]
+
+		# Compute the slopes subject to Fritsch-Carlson criterion
+		for i in range(1, n - 1):
+			# Compute the right difference
+			rh = v[i + 1] - v[i]
+
+			if (lh >= 0) != (rh >= 0):
+				# Signs are different; slope is 0
+				m[i] = 0.0
+			elif almosteq(lh, 0.0) or almosteq(rh, 0.0):
+				# Data doesn't change; slope must be flat
+				m[i] = 0.0
+			else:
+				# Use central differencing
+				mm = 0.5 * (lh + rh)
+				# Limit slope
+				beta = max(0, min(mm / lh, 3))
+				alpha = max(0, min(mm / rh, 3))
+				if beta > alpha: m[i] = alpha * rh
+				else: m[i] = beta * lh
+
+			# Move to next point
+			lh = rh
+
+		return 0
+
+
+	@staticmethod
+	cdef void hermspl(double *w, double t) nogil:
+		'''
+		Compute, in the four-elemenet array w, the values of the four
+		Hermite cubic polynomials:
+
+			w[0] = (1 + 2 * t) * (1 - t)**2
+			w[1] = t**2 * (3 - 2 * t)
+			w[2] = t * (1 - t)**2
+			w[3] = t**2 * (t - 1)
+		'''
+		cdef:
+			double tsq = t * t
+			double mt1 = 1 - t
+			double mt1sq = mt1 * mt1
+			double t2 = 2 * t
+
+		w[0] = (1 + t2) * mt1sq
+		w[1] = tsq * (3 - t2)
+		w[2] = t * mt1sq
+		w[3] = tsq * mt1
+
+	@staticmethod
+	cdef void hermdiff(double *w, double t) nogil:
+		'''
+		Compute, in the four-element array w, the values of the
+		derivatives of the four Hermite cubic polynomials:
+
+			w[0] = 6 * t * (t - 1)
+			w[1] = -w[0]
+			w[2] = t * (3 * t - 4) + 1
+			w[3] = t * (3 * t - 2)
+		'''
+		cdef double t3 = 3 * t
+		w[0] = 6 * t * (t - 1)
+		w[1] = -w[0]
+		w[2] = t * (t3 - 4) + 1
+		w[3] = t * (t3 - 2)
+
+
 cdef class CubicInterpolator3D(Interpolator3D):
 	'''
 	An Interpolator3D that implements tricubic interpolation with
@@ -175,59 +501,83 @@ cdef class CubicInterpolator3D(Interpolator3D):
 	'''
 	@cython.wraparound(False)
 	@cython.boundscheck(False)
+	@cython.embedsignature(True)
 	def __init__(self, image):
 		'''
-		CubicInterpolator3D(image)
-
 		Construct a tricubic interpolator for the given 3-D
 		floating-point image.
 		'''
 		cdef double[:,:,:] img = np.asarray(image, dtype=np.float64)
-		cdef unsigned long nx, ny, nz
+		cdef unsigned long nx, ny, nz, nx2, ny2, nz2
 		nx, ny, nz = img.shape[0], img.shape[1], img.shape[2]
 
 		if nx < 2 or ny < 2 or nz < 2:
 			raise ValueError('Size of image must be at least (2, 2, 2)')
 
 		# Need two more coefficients than samples per dimension
-		cdef unsigned long nx2, ny2, nz2
 		nx2, ny2, nz2 = nx + 2, ny + 2, nz + 2
 		self.ncx, self.ncy, self.ncz = nx2, ny2, nz2
 
-		# Allocate coefficients and prepopulate image
+		# Allocate coefficients
 		self.coeffs = <double *>PyMem_Malloc(nx2 * ny2 * nz2 * sizeof(double))
 		if self.coeffs == <double *>NULL:
 			raise MemoryError('Unable to allocate storage for coefficients')
 
+		# Capture a convenient view on the coefficient storage
 		cdef double[:,:,:] coeffs
-		cdef double[:] work
-		cdef unsigned long ix, iy, iz
 
 		try:
-			# For convenience, treat the buffer as a 3-D array
+			# Try to populate the coefficient matrix
 			coeffs = <double[:nx2,:ny2,:nz2:1]>self.coeffs
-
-			# Allocate a work array for coefficient evaluation
-			work = np.empty((max(nx, ny, nz) - 2,), dtype=np.float64, order='C')
-
-			for ix in range(nx):
-				for iy in range(ny):
-					# Populate the image and transform along z
-					for iz in range(nz):
-						coeffs[ix,iy,iz] = img[ix,iy,iz]
-					CubicInterpolator3D.nscoeffs(coeffs[ix,iy,:], work)
-				# Transform along y, including out-of-bounds z coefficients
-				for iz in range(nz2):
-					CubicInterpolator3D.nscoeffs(coeffs[ix,:,iz], work)
-
-			# Transform along x axis
-			for iy in range(ny2):
-				for iz in range(nz2):
-					CubicInterpolator3D.nscoeffs(coeffs[:,iy,iz], work)
+			CubicInterpolator3D.img2coeffs(coeffs, img)
 		except Exception:
 			PyMem_Free(self.coeffs)
 			self.coeffs = <double *>NULL
-			raise
+
+
+	@cython.wraparound(False)
+	@cython.boundscheck(False)
+	@staticmethod
+	cdef int img2coeffs(double[:,:,:] coeffs, double[:,:,:] img) except -1:
+		'''
+		Attempt to populate the compute, in coeffs, the cubic b-spline
+		coefficients of the image img. If img has shape (nx, ny, nz),
+		coeffs must have shape at least (nx + 2, ny + 2, nz + 2).
+		'''
+		cdef unsigned long nx, ny, nz, nx2, ny2, nz2
+		cdef double[:] work
+		cdef unsigned long ix, iy, iz
+
+		nx, ny, nz = img.shape[0], img.shape[1], img.shape[2]
+		nx2, ny2, nz2 = nx + 2, ny + 2, nz + 2
+
+		if nx < 2 or ny < 2 or nz < 2:
+			raise ValueError('Size of image must be at least (2, 2, 2)')
+
+		if (coeffs.shape[0] < nx2 or
+				coeffs.shape[1] < ny2 or coeffs.shape[2] < nz2):
+			raise ValueError('Shape of coeffs must be at least %s' % ((nx2, ny2, nz2),))
+
+		# Allocate a work array for coefficient evaluation
+		work = np.empty((max(nx, ny, nz) - 2,), dtype=np.float64, order='C')
+
+		for ix in range(nx):
+			for iy in range(ny):
+				# Populate the image and transform along z
+				for iz in range(nz):
+					coeffs[ix,iy,iz] = img[ix,iy,iz]
+				CubicInterpolator3D.nscoeffs(coeffs[ix,iy,:], work)
+
+			# Transform along y, including out-of-bounds z coefficients
+			for iz in range(nz2):
+				CubicInterpolator3D.nscoeffs(coeffs[ix,:,iz], work)
+
+		# Transform along x axis, including out-of-bounds y and z coefficients
+		for iy in range(ny2):
+			for iz in range(nz2):
+				CubicInterpolator3D.nscoeffs(coeffs[:,iy,iz], work)
+
+		return 0
 
 
 	@property
@@ -265,7 +615,9 @@ cdef class CubicInterpolator3D(Interpolator3D):
 		nx = nx2 - 2
 		nl, nll = nx - 1, nx - 2
 
-		if work.shape[0] < nll:
+		if nx2 < 2:
+			raise ValueError('Coefficient length must be at least 2')
+		elif work.shape[0] < nll:
 			raise ValueError('Array "work" must have length >= %d' % (nll,))
 
 		# Fix the endpoint coefficients
@@ -385,17 +737,10 @@ cdef class CubicInterpolator3D(Interpolator3D):
 		nx, ny, nz = self.ncx - 2, self.ncy - 2, self.ncz - 2
 
 		# Find the fractional and integer parts of the coordinates
-		cdef:
-			# Maximum interval indices are to left of last pixel
-			long i = max(0, min(<long>p.x, nx - 2))
-			long j = max(0, min(<long>p.y, ny - 2))
-			long k = max(0, min(<long>p.z, nz - 2))
+		cdef long i, j, k
+		cdef point t
 
-			double t = p.x - <double>i
-			double u = p.y - <double>j
-			double v = p.z - <double>k
-
-		if not (0 <= t <= 1.0 and 0 <= u <= 1.0 and 0 <= v <= 1.0):
+		if not Interpolator3D.crdfrac(&t, &i, &j, &k, p, nx, ny, nz):
 			return Interpolator3D._evaluate(self, f, grad, p)
 
 		cdef:
@@ -413,18 +758,18 @@ cdef class CubicInterpolator3D(Interpolator3D):
 		f[0] = 0.0
 
 		# Find the interpolating weights for the interval
-		CubicInterpolator3D.bswt(&(tw[0]), t)
-		CubicInterpolator3D.bswt(&(uw[0]), u)
-		CubicInterpolator3D.bswt(&(vw[0]), v)
+		CubicInterpolator3D.bswt(&(tw[0]), t.x)
+		CubicInterpolator3D.bswt(&(uw[0]), t.y)
+		CubicInterpolator3D.bswt(&(vw[0]), t.z)
 
 		if dograd:
 			# Initialize gradient
-			grad[0].x = grad[0].y = grad[0].z = 0.0
+			grad.x = grad.y = grad.z = 0.0
 
 			# Find the derivative weights
-			CubicInterpolator3D.dbswt(&(dt[0]), t)
-			CubicInterpolator3D.dbswt(&(du[0]), u)
-			CubicInterpolator3D.dbswt(&(dv[0]), v)
+			CubicInterpolator3D.dbswt(&(dt[0]), t.x)
+			CubicInterpolator3D.dbswt(&(du[0]), t.y)
+			CubicInterpolator3D.dbswt(&(dv[0]), t.z)
 
 		ii = 0
 		si = i - 1 if i > 0 else nx + 1
@@ -451,9 +796,9 @@ cdef class CubicInterpolator3D(Interpolator3D):
 					vv = vw[kk]
 					f[0] += cv * tt * uu * vv
 					if dograd:
-						grad[0].x += cv * dtt * uu * vv
-						grad[0].y += cv * tt * duu * vv
-						grad[0].z += cv * tt * uu * dv[kk]
+						grad.x += cv * dtt * uu * vv
+						grad.y += cv * tt * duu * vv
+						grad.z += cv * tt * uu * dv[kk]
 
 					kk += 1
 					sk = k + kk - 1
@@ -471,10 +816,9 @@ cdef class LinearInterpolator3D(Interpolator3D):
 	'''
 	@cython.wraparound(False)
 	@cython.boundscheck(False)
+	@cython.embedsignature(True)
 	def __init__(self, image):
 		'''
-		LinearInterpolator3D(image)
-
 		Construct a trilinear interpolator for the given 3-D
 		floating-point image.
 		'''
@@ -542,17 +886,10 @@ cdef class LinearInterpolator3D(Interpolator3D):
 		nx, ny, nz = self.ncx, self.ncy, self.ncz
 
 		# Find the fractional and integer parts of the coordinates
-		cdef:
-			# Maximum interval indices are to left of last pixel
-			long i = max(0, min(<long>p.x, nx - 2))
-			long j = max(0, min(<long>p.y, ny - 2))
-			long k = max(0, min(<long>p.z, nz - 2))
+		cdef long i, j, k
+		cdef point t
 
-			double t = p.x - <double>i
-			double u = p.y - <double>j
-			double v = p.z - <double>k
-
-		if not (0 <= t <= 1.0 and 0 <= u <= 1.0 and 0 <= v <= 1.0):
+		if not Interpolator3D.crdfrac(&t, &i, &j, &k, p, nx, ny, nz):
 			return Interpolator3D._evaluate(self, f, grad, p)
 
 		cdef:
@@ -569,44 +906,44 @@ cdef class LinearInterpolator3D(Interpolator3D):
 		f[0] = 0.0
 
 		if dograd:
-			grad[0].x = grad[0].y = grad[0].z = 0.0
+			grad.x = grad.y = grad.z = 0.0
 
 		# Interpolate the x face
 		ii = (i * self.ncy + j) * self.ncz + k
 		jj = ii + self.ncz * self.ncy
-		tt = 1.0 - t
-		tw[0] = tt * self.coeffs[ii] + t * self.coeffs[jj]
-		tw[1] = tt * self.coeffs[ii + 1] + t * self.coeffs[jj + 1]
+		tt = 1.0 - t.x
+		tw[0] = tt * self.coeffs[ii] + t.x * self.coeffs[jj]
+		tw[1] = tt * self.coeffs[ii + 1] + t.x * self.coeffs[jj + 1]
 		if dograd:
 			dt[0] = self.coeffs[jj] - self.coeffs[ii]
 			dt[1] = self.coeffs[jj + 1] - self.coeffs[ii + 1]
 		ii += self.ncz
 		jj += self.ncz
-		tw[2] = tt * self.coeffs[ii] + t * self.coeffs[jj]
-		tw[3] = tt * self.coeffs[ii + 1] + t * self.coeffs[jj + 1]
+		tw[2] = tt * self.coeffs[ii] + t.x * self.coeffs[jj]
+		tw[3] = tt * self.coeffs[ii + 1] + t.x * self.coeffs[jj + 1]
 		if dograd:
 			dt[2] = self.coeffs[jj] - self.coeffs[ii]
 			dt[3] = self.coeffs[jj + 1] - self.coeffs[ii + 1]
 		# Interpolate the y line
-		uu = 1.0 - u
-		uw[0] = uu * tw[0] + u * tw[2]
-		uw[1] = uu * tw[1] + u * tw[3]
+		uu = 1.0 - t.y
+		uw[0] = uu * tw[0] + t.y * tw[2]
+		uw[1] = uu * tw[1] + t.y * tw[3]
 		if dograd:
 			# These are the y derivatives at the line ends
 			du[0] = tw[2] - tw[0]
 			du[1] = tw[3] - tw[1]
 			# Interpolate the x derivatives at the line ends
-			dv[0] = uu * dt[0] + u * dt[2]
-			dv[1] = uu * dt[1] + u * dt[3]
+			dv[0] = uu * dt[0] + t.y * dt[2]
+			dv[1] = uu * dt[1] + t.y * dt[3]
 
 		# Interpolate the z value
-		vv = 1.0 - v
-		f[0] = vv * uw[0] + v * uw[1]
+		vv = 1.0 - t.z
+		f[0] = vv * uw[0] + t.z * uw[1]
 
 		if dograd:
-			grad[0].z = uw[1] - uw[0]
-			grad[0].y = vv * du[0] + v * du[1]
-			grad[0].x = vv * dv[0] + v * dv[1]
+			grad.z = uw[1] - uw[0]
+			grad.y = vv * du[0] + t.z * du[1]
+			grad.x = vv * dv[0] + t.z * dv[1]
 
 		return True
 
@@ -644,7 +981,9 @@ cdef class Interpolator3D:
 		'''
 		Clear coefficient storage.
 		'''
-		if self.coeffs != <double *>NULL: PyMem_Free(self.coeffs)
+		if self.coeffs != <double *>NULL:
+			PyMem_Free(self.coeffs)
+			self.coeffs = <double *>NULL
 
 
 	@property
@@ -930,6 +1269,35 @@ cdef class Interpolator3D:
 		return True
 
 
+	@staticmethod
+	cdef bint crdfrac(point *t, long *i, long *j, long *k,
+			point p, long nx, long ny, long nz) nogil:
+		'''
+		In i, j and k, stores the integer portions of p.x, p.y, and
+		p.z, respectively, clipped to the grid
+
+			[0, nx - 2] x [0, ny - 2], [0, nz - 2].
+
+		In t.x, t.y, and t.z, stores the remainders
+
+			t.x = p.x - i,
+			t.y = p.y - j,
+			t.z = p.z - k.
+
+		Returns True if t.x, t.y and t.z are all in [0, 1] and False
+		otherwise.
+		'''
+		i[0] = max(0, min(<long>p.x, nx - 2))
+		j[0] = max(0, min(<long>p.y, ny - 2))
+		k[0] = max(0, min(<long>p.z, nz - 2))
+
+		t.x = p.x - <double>(i[0])
+		t.y = p.y - <double>(j[0])
+		t.z = p.z - <double>(k[0])
+
+		return 0 <= t.x <= 1.0 and 0 <= t.y <= 1.0 and 0 <= t.z <= 1.0
+
+
 	@cython.wraparound(False)
 	@cython.boundscheck(False)
 	cdef bint _evaluate(self, double *f, point *grad, point p) nogil:
@@ -950,7 +1318,7 @@ cdef class Interpolator3D:
 
 		if self._usedef:
 			f[0] = self._default
-			if dograd: grad[0].x = grad[0].y = grad[0].z = 0.0
+			if dograd: grad.x = grad.y = grad.z = 0.0
 			return True
 
 		return False
