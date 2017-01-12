@@ -46,6 +46,18 @@ cdef point axpy(double a, point x, point y) nogil:
 	return r
 
 
+cdef point lintp(double t, point x, point y) nogil:
+	'''
+	Return the linear interpolation (1 - t) * x + t * y.
+	'''
+	cdef point r
+	cdef double m = 1 - t
+	r.x = m * x.x + t * y.x
+	r.y = m * x.y + t * y.y
+	r.z = m * x.z + t * y.z
+	return r
+
+
 cdef point * iaxpy(double a, point x, point *y) nogil:
 	'''
 	Store, in y, the value of (a * x + y).
@@ -166,6 +178,219 @@ cdef int tup2pt(point *pt, object p) except -1:
 
 # Forward declaration
 cdef class Interpolator3D
+
+
+cdef class LagrangeInterpolator3D(Interpolator3D):
+	'''
+	An Interpolator3D that implements piecewise Lagrange interpolation of
+	third degree along each axis of a 3-D function.
+	'''
+	@cython.wraparound(False)
+	@cython.boundscheck(False)
+	@cython.embedsignature(True)
+	def __init__(self, image):
+		'''
+		Construct a piecewise Lagrange interpolator of degree 3 for the
+		given 3-D floating-point image.
+		'''
+		cdef double [:,:,:] img = np.asarray(image, dtype=np.float64)
+		cdef unsigned long nx, ny, nz
+		nx, ny, nz = img.shape[0], img.shape[1], img.shape[2]
+
+		if nx < 4 or ny < 4 or nz < 4:
+			raise ValueError('Size of image must be at least (4, 4, 4)')
+
+		self.ncx, self.ncy, self.ncz = nx, ny, nz
+
+		# Allocate coefficients and capture a view
+		self.coeffs = <double *>PyMem_Malloc(nx * ny * nz * sizeof(double))
+		if self.coeffs == <double *>NULL:
+			raise MemoryError('Unable to allocate storage for coefficients')
+
+		# Capture a view on the coefficients
+		cdef double[:,:,:] coeffs
+		cdef unsigned long ix, iy, iz
+
+		try:
+			coeffs = <double[:nx,:ny,:nz:1]>self.coeffs
+
+			# Just copy the interpolation coefficients
+			for ix in range(nx):
+				for iy in range(ny):
+					for iz in range(nz):
+						coeffs[ix,iy,iz] = img[ix,iy,iz]
+		except Exception:
+			PyMem_Free(self.coeffs)
+			self.coeffs = <double *>NULL
+
+
+	@property
+	def shape(self):
+		'''
+		A grid (nx, ny, nz) representing the shape of the image being
+		interpolated.
+		'''
+		return (self.ncx, self.ncy, self.ncz)
+
+
+	@cython.cdivision(True)
+	@staticmethod
+	cdef void lgwts(double *l, double x) nogil:
+		'''
+		Compute in l[0]...l[3] the values of the third-degree Lagrange
+		polynomials 0...3 for an argument 0 <= x <= 3. The bounds of x
+		are not checked.
+		'''
+		cdef:
+			double x1 = x - 1
+			double x2 = x - 2
+			double x3 = x - 3
+			double xx3 = 0.5 * x * x3
+			double x12 = x1 * x2 / 6.0
+
+		l[0] = -x12 * x3
+		l[1] = xx3 * x2
+		l[2] = -xx3 * x1
+		l[3] = x * x12
+
+
+	@cython.cdivision(True)
+	@staticmethod
+	cdef void dlgwts(double *l, double x) nogil:
+		'''
+		Compute in l[0]...l[3] the values of the derivatives of the
+		third-degree Lagrange polynomials 0...3 for 0 <= x <= 3. The
+		bounds of x are not checked.
+		'''
+		cdef:
+			double x1 = x - 1
+			double x2 = x - 2
+			double x3 = x - 3
+
+			double x23 = x2 * x3
+			double x12 = x1 * x2
+			double x13 = x1 * x3
+
+			double xx3 = x * x3
+			double xx2 = x * x2
+			double xx1 = x * x1
+
+
+		l[0] = -(x23 + x13 + x12) / 6.0
+		l[1] = 0.5 * (x23 + xx3 + xx2)
+		l[2] = -0.5 * (x13 + xx3 + xx1)
+		l[3] = (x12 + xx2 + xx1) / 6.0
+
+
+	@staticmethod
+	cdef void adjint(double *t, long *i, unsigned long n) nogil:
+		'''
+		Adjust the fractional and interval coordiantes t and i,
+		respectively, according to the rule:
+
+			0 < i < n - 2: i -= 1, t += 1.0
+			i == n - 2: i -= 2, t += 2.0
+			Otherwise: no change
+		'''
+		if 0 < i[0] < n - 2:
+			i[0] -= 1
+			t[0] += 1.0
+		elif i[0] == n - 2:
+			i[0] -= 2
+			t[0] += 2
+
+
+	@cython.wraparound(False)
+	@cython.boundscheck(False)
+	cdef bint _evaluate(self, double *f, point *grad, point p) nogil:
+		'''
+		Evaluate, in f, a function and, in grad if grad is not NULL,
+		its gradient at a point p.
+
+		If the coordinates are out of bounds, evaluation will be
+		attempted by Interpolator3D._evaluate().
+
+		The method will always return True if evaluation was done
+		locally, or the return value of Interpolator3D._evaluate() if
+		the evaluation was delegated.
+		'''
+		cdef long nx, ny, nz
+		cdef bint dograd = (grad != <point *>NULL)
+
+		if self.coeffs == <double *>NULL:
+			return Interpolator3D._evaluate(self, f, grad, p)
+
+		# Hermite coefficient shape is (nx, ny, nz, self.nval)
+		nx, ny, nz = self.ncx, self.ncy, self.ncz
+
+		# Find fractional and integer parts of the coordinates
+		cdef long i, j, k
+		cdef point t
+
+		if not Interpolator3D.crdfrac(&t, &i, &j, &k, p, nx, ny, nz):
+			return Interpolator3D._evaluate(self, f, grad, p)
+
+		# Adjust intervals at endpoints
+		LagrangeInterpolator3D.adjint(&(t.x), &i, nx)
+		LagrangeInterpolator3D.adjint(&(t.y), &j, ny)
+		LagrangeInterpolator3D.adjint(&(t.z), &k, nz)
+
+		# Check for sanity (this should be assured)
+		if not (0 <= i <= nx - 4 and 0 <= j <= ny - 4 and 0 <= k <= nz - 4):
+			return Interpolator3D._evaluate(self, f, grad, p)
+
+		cdef:
+			double lx[4]
+			double ly[4]
+			double lz[4]
+			double dlx[4]
+			double dly[4]
+			double dlz[4]
+
+			unsigned long ii, jj, kk, soi, soij, soijk
+			double cv, lxv, lyv, lzv, dlxv, dlyv, dlzv
+
+		# Initialize the function value
+		f[0] = 0.0
+
+		# Find the interpolator values in the interval
+		LagrangeInterpolator3D.lgwts(lx, t.x)
+		LagrangeInterpolator3D.lgwts(ly, t.y)
+		LagrangeInterpolator3D.lgwts(lz, t.z)
+
+		if dograd:
+			# Initialize the gradient
+			grad.x = grad.y = grad.z = 0.0
+
+			# Find derivative values
+			LagrangeInterpolator3D.dlgwts(dlx, t.x)
+			LagrangeInterpolator3D.dlgwts(dly, t.y)
+			LagrangeInterpolator3D.dlgwts(dlz, t.z)
+
+		for ii in range(4):
+			soi = self.ncy * (i + ii)
+			lxv = lx[ii]
+			dlxv = dlx[ii]
+
+			for jj in range(4):
+				soij = self.ncz * (j + jj + soi)
+				lyv = ly[jj]
+				dlyv = dly[jj]
+
+				for kk in range(4):
+					soijk = k + kk + soij
+					lzv = lz[kk]
+					dlzv = dlz[kk]
+
+					# Add contribution from function value
+					cv = self.coeffs[soijk]
+					f[0] += cv * lxv * lyv * lzv
+					if dograd:
+						# Add contribution to gradient
+						grad.x += cv * dlxv * lyv * lzv
+						grad.y += cv * lxv * dlyv * lzv
+						grad.z += cv * lxv * lyv * dlzv
+		return True
 
 
 cdef class HermiteInterpolator3D(Interpolator3D):
@@ -1392,12 +1617,8 @@ cdef class Segment3D:
 	'''
 	# Intrinsic properties of the segment
 	cdef point _start, _end
-
 	# Dependent properties (accessible from Python)
 	cdef readonly double length
-
-	# Dependent properties (hidden from Python)
-	cdef point _midpoint, _direction
 
 	def __init__(self, start, end):
 		'''
@@ -1421,14 +1642,7 @@ cdef class Segment3D:
 		self._end = end
 
 		# Initialize dependent properties
-		self._direction = axpy(-1.0, self._start, self._end)
-		self.length = ptnrm(self._direction)
-
-		if not almosteq(self.length, 0.0):
-			iscal(1. / self.length, &(self._direction))
-
-		self._midpoint = axpy(1.0, self._start, self._end)
-		iscal(0.5, &(self._midpoint))
+		self.length = ptnrm(axpy(-1, start, end))
 
 
 	@property
@@ -1444,12 +1658,7 @@ cdef class Segment3D:
 	@property
 	def midpoint(self):
 		'''The midpoint of the segment, as a 3-tuple of floats'''
-		return pt2tup(self._midpoint)
-
-	@property
-	def direction(self):
-		'''The direction of the segment, as a 3-tuple of floats'''
-		return pt2tup(self._direction)
+		return pt2tup(lintp(0.5, self._start, self._end))
 
 
 	@cython.embedsignature(True)
@@ -1458,27 +1667,7 @@ cdef class Segment3D:
 		For a given signed length t, return the Cartesian point on the
 		line through this segment which is a distance t from the start.
 		'''
-		return pt2tup(axpy(t, self._direction, self._start))
-
-
-	@cython.embedsignature(True)
-	cpdef double lengthToAxisPlane(self, double c, unsigned int axis) except? -1:
-		'''
-		Return the signed distance along the segment from the start to
-		the plane defined by a constant value c in the specified axis.
-
-		If the segment and plane are parallel, the result will be
-		signed infinity if the plane does not contain the segment. If
-		the plane contains the segment, the length will be 0.
-		'''
-		if axis == 0:
-			return infdiv(c - self._start.x, self._direction.x)
-		elif axis == 1:
-			return infdiv(c - self._start.y, self._direction.y)
-		elif axis == 2:
-			return infdiv(c - self._start.z, self._direction.z)
-		else:
-			raise IndexError('Argument axis must be 0, 1 or 2')
+		return pt2tup(lintp(t, self._start, self._end))
 
 
 	@cython.embedsignature(True)
@@ -1818,10 +2007,11 @@ cdef class Triangle3D:
 		cdef point hlen = scal(0.5, b._length)
 		# Shift node origin to box center, regroup by node
 		cdef point v[3]
+		cdef point midpoint = lintp(0.5, lo, hi)
 
-		v[0] = axpy(-1.0, b._midpoint, n[0])
-		v[1] = axpy(-1.0, b._midpoint, n[1])
-		v[2] = axpy(-1.0, b._midpoint, n[2])
+		v[0] = axpy(-1.0, midpoint, n[0])
+		v[1] = axpy(-1.0, midpoint, n[1])
+		v[2] = axpy(-1.0, midpoint, n[2])
 
 		cdef unsigned long i, j
 		cdef point f, a
@@ -1898,7 +2088,7 @@ cdef class Triangle3D:
 		if ((0 <= v <= 1 and 0 <= u <= 1 and 0 <= t <= 1) and 0 <= u + t <= 1):
 			# v is the fraction of segment length
 			# t and u are normal barycentric coordinates in triangle
-			return v * seg.length, t, u, 1 - t - u
+			return v, t, u, 1 - t - u
 		else:
 			# Intersection is not in segment or triangle
 			return None
@@ -1912,7 +2102,7 @@ cdef class Box3D:
 	sequences that provide the Cartesian coordinates of the low and high
 	corners, respectively.
 	'''
-	cdef point _lo, _hi, _midpoint, _length, _cell
+	cdef point _lo, _hi, _length, _cell
 	cdef unsigned long nx, ny, nz
 
 	def __init__(self, lo, hi):
@@ -1938,10 +2128,6 @@ cdef class Box3D:
 				self._lo.y > self._hi.y or self._lo.z > self._hi.z):
 			raise ValueError('Coordinates of hi must be no less than those of lo')
 
-		# Compute some dependent properties
-		self._midpoint = axpy(1.0, self._lo, self._hi)
-		iscal(0.5, &(self._midpoint))
-
 		self._length = axpy(-1.0, self._lo, self._hi)
 
 		self.nx = self.ny = self.nz = 1
@@ -1963,7 +2149,7 @@ cdef class Box3D:
 	@property
 	def midpoint(self):
 		'''The barycenter of the box'''
-		return pt2tup(self._midpoint)
+		return pt2tup(lintp(0.5, self._lo, self._hi))
 
 	@property
 	def length(self):
@@ -2131,43 +2317,46 @@ cdef class Box3D:
 
 
 	@staticmethod
-	cdef bint _intersection(double *t, point l, point h, point s, point d, double sl) nogil:
+	cdef bint _intersection(double *t, point l, point h, point s, point e):
 		'''
 		Low-level routine to compute intersection of a box, with low
-		and high corners l and h, respectively, with a ray or segment
-		that has starting point s, direction d, and a length sl (for
-		ray intersections, sl should be negative or infinite).
+		and high corners l and h, respectively, with a line segment
+		that has starting point s and end point e.
 
-		If the segment or ray intersects the box, True is returned and
-		the values t[0] and t[1] represent, respectively, the minimum
-		and maximum lengths along the ray or segment (in units of the
-		magnitude of d) that describe the points of intersection. The
-		value t[0] may be negative if the ray or segment starts within
-		the box. The value t[1] may exceed the length if a segment ends
-		within the box.
+		If the segment intersects the box, True is returned and the
+		values t[0] and t[1] represent, respectively, the minimum and
+		maximum lengths along the ray or segment (as a multiple of the
+		length of the segment) that describe the points of
+		intersection. The value t[0] may be negative if the ray or
+		segment starts within the box. The value t[1] may exceed unity
+		if a segment ends within the box.
 
-		If no intersection is found, False is returned.
+		If no intersection is found, False is returned and t is
+		untouched.
 		'''
-		cdef double tmin, tmax, ty1, ty2, tz1, tz2
+		cdef double tmin, tmax, ty1, ty2, tz1, tz2, d
 
 		# Check, in turn, intersections with the x, y and z slabs
-		tmin = infdiv(l.x - s.x, d.x)
-		tmax = infdiv(h.x - s.x, d.x)
+		d = e.x - s.x
+		tmin = infdiv(l.x - s.x, d)
+		tmax = infdiv(h.x - s.x, d)
 		if tmax < tmin: tmin, tmax = tmax, tmin
 		# Check the y-slab
-		ty1 = infdiv(l.y - s.y, d.y)
-		ty2 = infdiv(h.y - s.y, d.y)
+		d = e.y - s.y
+		ty1 = infdiv(l.y - s.y, d)
+		ty2 = infdiv(h.y - s.y, d)
 		if ty2 < ty1: ty1, ty2 = ty2, ty1
 		if ty2 < tmax: tmax = ty2
 		if ty1 > tmin: tmin = ty1
 		# Check the z-slab
-		tz1 = infdiv(l.z - s.z, d.z)
-		tz2 = infdiv(h.z - s.z, d.z)
+		d = e.z - s.z
+		tz1 = infdiv(l.z - s.z, d)
+		tz2 = infdiv(h.z - s.z, d)
 		if tz2 < tz1: tz1, tz2 = tz2, tz1
 		if tz2 < tmax: tmax = tz2
 		if tz1 > tmin: tmin = tz1
 
-		if tmax < max(0, tmin) or (sl >= 0 and tmin > sl):
+		if tmax < max(0, tmin) or (tmin > 1):
 			return False
 
 		t[0] = tmin
@@ -2178,16 +2367,16 @@ cdef class Box3D:
 	def intersection(self, Segment3D seg not None):
 		'''
 		Returns the lengths tmin and tmax along the given Segment3D seg
-		at which the segment enters and exits the box. If the box does
-		not intersect the segment, returns None.
+		at which the segment enters and exits the box, as a multiple of
+		the segment length. If the box does not intersect the segment,
+		returns None.
 
 		If the segment starts within the box, tmin will be negative. If
 		the segment ends within the box, tmax will exceed the segment
 		length.
 		'''
 		cdef double tlims[2]
-		if Box3D._intersection(tlims, self._lo, self._hi,
-				seg._start, seg._direction, seg.length):
+		if Box3D._intersection(tlims, self._lo, self._hi, seg._start, seg._end):
 			return tlims[0], tlims[1]
 		else: return None
 
@@ -2317,18 +2506,82 @@ cdef class Box3D:
 
 
 	@cython.embedsignature(True)
-	def raymarcher(self, Segment3D seg not None, double step=realeps):
+	cdef object _raymarcher(self, point start, point end, double step=realeps):
 		'''
-		Marches along the given Segment3D seg to identify cells in the
-		grid (defined by the ncell property) that intersect the
-		segment. Returns a map (i, j, k) -> (tmin, tmax), where the key
-		(i, j, k) is an index of a cell in the grid and the values tmin
-		and tmax are the lengths along the segment of the entry and
-		exit points, respectively, through the cell.
+		Helper for Box3D.raymarcher that performs a single march for a
+		segment from point start to point end.
+		'''
+		# Make sure the segment intersects this box
+		cdef double tlims[2]
 
-		As the segment exits each encountered cell, a step along the
+		intersections = { }
+		if not Box3D._intersection(tlims, self._lo, self._hi, start, end):
+			return intersections
+
+		if step <= 0: step = -step
+
+		# Keep track of accumulated and max length
+		cdef double t = max(0, tlims[0])
+		cdef double tmax = min(tlims[1], 1)
+		# This is a dynamically grown step into the next cell
+		cdef double cstep
+
+		cdef point lo, hi
+		cdef long i, j, k, ni, nj, nk
+
+		# Find the cell that contains the current test point
+		self._cellForPoint(&i, &j, &k, lintp(t, start, end))
+
+		while t < tmax:
+			self._boundsForCell(&lo, &hi, i, j, k)
+			if not Box3D._intersection(tlims, lo, hi, start, end):
+				raise ValueError('Segment fails to intersect cell %s' % ((i,j,k),))
+
+			if 0 <= i < self.nx and 0 <= j < self.ny and 0 <= k < self.nz:
+				# Record a hit inside the grid
+				key = i, j, k
+				val = max(0, tlims[0]), min(tlims[1], 1)
+				intersections[i,j,k] = val
+
+			# Advance t; make sure it lands in another cell
+			t = tlims[1]
+			cstep = step
+			while t < tmax:
+				# Find the cell containing the point
+				self._cellForPoint(&ni, &nj, &nk, lintp(t, start, end))
+				if i != ni or j != nj or k != nk:
+					# Found a new cell; record and move on
+					i, j, k = ni, nj, nk
+					break
+				# Otherwise, stuck in same cell; bump t
+				t += cstep
+				# Increase step for next time
+				cstep *= 2
+
+		return intersections
+
+	@cython.embedsignature(True)
+	def raymarcher(self, p, double step=realeps):
+		'''
+		Marches along the given p, which is either a single Segment3D
+		instance or a 2-D array of shape (N, 3), where N >= 2, that
+		defines control points of a piecewise linear curve.
+
+		A march of a single linear segment accumulates a map of the
+		form (i, j, k) -> (tmin, tmax), where (i, j, k) is the index of
+		a cell that intersects the segment and (tmin, tmax) are the
+		minimum and maximum lengths (as fractions of the segment
+		length) along which the segment and cell intersect.
+
+		If p is a Segment3D instance or an array of shape (2, 3), a
+		single map will be returned. If p is an array of shape (N, 3)
+		for N > 2, a list of (N - 1) of maps will be returned, with
+		maps[i] providing the intersection map for the segment from
+		p[i] to p[i+1].
+ 
+		As a segment exits each encountered cell, a step along the
 		segment is taken to advance into another intersecting cell. The
-		length of the step will be
+		length of the step will be, in units of the segment length,
 
 			step * sum(2**i for i in range(q)),
 
@@ -2337,51 +2590,39 @@ cdef class Box3D:
 		this step may be nonzero, cells which intersect the segment
 		over a total length less than step may be excluded from the
 		intersection map.
-
-		If the segment begins or ends in a cell, tmin or tmax for that
-		cell may fall outside the range [0, seg.length].
 		'''
-		# Capture segment parameters for convenience
-		cdef point sst = seg._start
-		cdef point sdr = seg._direction
-		cdef double sl = seg.length
+		cdef double[:,:] pts
+		cdef Segment3D seg
+		cdef point s, e
 
-		# Try to grab the intersection lengths, if they exist
-		cdef double tlims[2]
-		if not Box3D._intersection(tlims, self._lo, self._hi, sst, sdr, sl):
-			return { }
+		if isinstance(p, Segment3D):
+			seg = <Segment3D>p
+			return self._raymarcher(seg._start, seg._end, step)
 
-		if step <= 0: raise ValueError('Length step must be positive')
+		pts = np.asarray(p, dtype=np.float64)
+		if pts.shape[0] < 2 or pts.shape[1] != 3:
+			raise ValueError('Argument "p" must have shape (N,3), N >= 2')
 
-		intersections = { }
+		# Capture the start of the first segment
+		s = packpt(pts[0,0], pts[0,1], pts[0,2])
 
-		# Keep track of accumulated and max length
-		cdef double t = max(0, tlims[0])
-		cdef double tmax = min(tlims[1], seg.length)
+		if pts.shape[0] == 2:
+			# Special case: a single segment in array form
+			e = packpt(pts[1,0], pts[1,1], pts[1,2])
+			return self._raymarcher(s, e, step)
 
-		cdef point lo, hi
-		cdef long i, j, k
+		# Accumulate results for multiple segments
+		results = [ ]
 
-		# Find the cell that contains the current test point
-		self._cellForPoint(&i, &j, &k, axpy(t, seg._direction, seg._start))
+		cdef unsigned long i
+		for i in range(1, pts.shape[0]):
+			# Build current segment and march
+			e = packpt(pts[i,0], pts[i,1], pts[i,2])
+			results.append(self._raymarcher(s, e, step))
+			# Move end to start for next round
+			s = e
 
-		while t < tmax:
-			self._boundsForCell(&lo, &hi, i, j, k)
-			if not Box3D._intersection(tlims, lo, hi, sst, sdr, sl):
-				raise ValueError('Segment fails to intersect cell %s' % ((i,j,k),))
-
-			if 0 <= i < self.nx and 0 <= j < self.ny and 0 <= k < self.nz:
-				# Record a hit inside the grid
-				key = i, j, k
-				val = tlims[0], tlims[1]
-				intersections[key] = val
-
-			# Advance to next cell or run off end of segment
-			t = self._advance(&i, &j, &k, tlims[1], step,
-					tmax, seg._start, seg._direction)
-
-		return intersections
-
+		return results
 
 	cdef void _cellForPoint(self, long *i, long *j, long *k, point p) nogil:
 		'''
@@ -2401,42 +2642,3 @@ cdef class Box3D:
 		cdef long i, j, k
 		self._cellForPoint(&i, &j, &k, packpt(x, y, z))
 		return i, j, k
-
-
-	cdef double _advance(self, long *i, long *j, long *k, double t,
-			double step, double tmax, point start, point direction) nogil:
-		'''
-		For a point with coordinates (start + t * direction), compute a
-		new distance tp such that (start + tp * direction) belongs to a
-		cell distinct from the provided (i, j, k), the distance
-
-		    tp = t + step * sum(2**i for i in range(q))
-
-		where q is the smallest nonnegative integer that guarantees
-		that the point will reside in a distinct cell, and tp < tmax.
-
-		The indices of the cell containing the advanced point will be
-		stored in i, j and k and the new value tp will be returned.
-
-		If no tp satisfies all three criteria, the values of i, j and k
-		will remain unchanged, while some t >= tmax will be returned.
-		'''
-		cdef long ni, nj, nk
-
-		while t < tmax:
-			# Find the coordinates of the advanced point
-			self._cellForPoint(&ni, &nj, &nk, axpy(t, direction, start))
-
-			if ni != i[0] or nj != j[0] or nk != k[0]:
-				# Cell is different, terminate advancement
-				i[0] = ni
-				j[0] = nj
-				k[0] = nk
-				return t
-			# Cell is the same, take another step
-			t += step
-			# Increase step for next time
-			step *= 2
-
-		# No neighbor cell was found, just return too-large t
-		return t
