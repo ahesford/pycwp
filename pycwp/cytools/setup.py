@@ -12,7 +12,7 @@ def configuration(parent_package='', top_path=None):
 
 	for ext in cythonize([os.path.join(d, '*.pyx') 
 			for d in config.package_dir.itervalues()]): 
-		config.add_extension(ext.name.split('.')[-1], ext.sources)
+		config.ext_modules.append(ext)
 
 	return config
 

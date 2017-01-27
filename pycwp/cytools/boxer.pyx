@@ -1243,144 +1243,185 @@ cdef class Interpolator3D:
 	@cython.boundscheck(False)
 	@cython.cdivision(True)
 	@cython.embedsignature(True)
-	def pathgrad(self, double[:,:] points not None, double hmax):
-		'''
-		Given control points specified as rows of an N-by-3 array of
-		grid coordinates, evaluate the gradient of the path integral as
-		computed in self.pathint. The output is an array with the same
-		shape as points, where the entry output[i,j] is the derivative
-		of the path integral with respect to coordinate j of control
-		point i. By convention, the gradient for the first and last
-		control points are 0.
-
-		Gradients are evaluated analytically. However, because the
-		gradient is of an integral which is calculated using the
-		composite Simpson's rule, the the parameter hmax is used as in
-		self.pathint to control the accuracy of the integrals.
-
-		If the second dimension of points does not have length three,
-		or if any control points fall outside the interpolation grid, a
-		ValueError will be raised.
-		'''
-		cdef unsigned long npts = points.shape[0]
-		if points.shape[1] != 3:
-			raise ValueError('Length of second dimension of points must be 3')
-		if npts < 3:
-			raise ValueError('At least 3 control points are required for a gradient')
-
-		cdef double[:,:] grad = np.zeros((npts, 3), dtype=np.float64, order='C')
-
-		cdef unsigned long i, im1
-		cdef point l, r, lg, rg
-
-		# Make sure hmax has positive sign
-		if hmax < 0: hmax = -hmax
-
-		# Initialize the left point
-		l = packpt(points[0,0], points[0,1], points[0,2])
-
-		# Compute contributions to gradients segment by segment
-		for i in range(1, npts):
-			# Evaluate the right point
-			r = packpt(points[i,0], points[i,1], points[i,2])
-
-			# Contribute contributions at l and c for segment lr
-			if not self.segrad(&lg, &rg, l, r, hmax):
-				raise ValueError('Could not compute path gradient in segment %s -> %s' % (pt2tup(l), pt2tup(r)))
-
-			# Add left and right gradient contributions
-			im1 = i - 1
-			grad[im1,0] += lg.x
-			grad[im1,1] += lg.y
-			grad[im1,2] += lg.z
-
-			grad[i,0] += rg.x
-			grad[i,1] += rg.y
-			grad[i,2] += rg.z
-
-			# Cycle the points for the next round
-			l = r
-
-		# Remove contributions at path endpoints
-		grad[0,0] = grad[0,1] = grad[0,2] = 0.0
-		im1 = npts - 1
-		grad[im1,0] = grad[im1,1] = grad[im1,2] = 0.0
-
-		return np.asarray(grad)
-
-
-	@cython.wraparound(False)
-	@cython.boundscheck(False)
-	@cython.cdivision(True)
-	@cython.embedsignature(True)
-	def pathint(self, double[:,:] points not None, double hmax):
+	def pathint(self, points, double hmax, bint grad=False):
 		'''
 		Given control points specified as rows of an N-by-3 array of
 		grid coordinates, use the composite Simpson's rule to integrate
 		the image associated with this interpolator instance along the
 		piecewise linear path between the points.
 
-		Each segment of the path will be subdivided into a minimum
-		number of equal-length pieces such that the length of each
-		piece does not exceed hmax.
+		As a convenience, points may also be a 1-D array of length 3N
+		that represents the two-dimensional array of points flattened
+		in C order.
 
-		If the second dimension of points does not have length three,
+		Each segment of the path will be subdivided into the minimum
+		possible even number of equal-length pieces such that the
+		length of each piece does not exceed hmax.
+
+		If grad is False, only the integral will be returned. If grad
+		is True, the return value will be (ival, igrad), where ival is
+		the path integral and igrad is an N-by-3 array wherein igrad[i]
+		is the gradient of ival with respect to points[i]. By
+		convention, igrad[0] and igrad[N - 1] are identically zero. If
+		the input array points was a 1-D flattened version of points,
+		the output igrad will be similarly flattened in C order.
+
+		If the second dimension of points does not have length three, 
 		or if any control point falls outside the interpolation grid,
 		a ValueError will be raised.
 		'''
+		cdef bint flattened = False
+		# Make sure points is a well-behaved array
+		points = np.asarray(points, dtype=np.float64)
+
+		# For convenience, handle a flattened array of 3-D points
+		if points.ndim == 1:
+			flattened = True
+			points = points.reshape((-1, 3), order='C')
+		elif points.ndim != 2:
+			raise ValueError('Points must be a 1-D or 2-D array')
+
 		cdef unsigned long npts = points.shape[0]
 		if points.shape[1] != 3:
 			raise ValueError('Length of second dimension of points must be 3')
 
-		cdef unsigned long i
-		cdef point ps, pe
-		cdef double ival = 0.0, sval = 0.0
+		cdef double[:,:] pts = points
+
+		# This will hold the path endpoints and segment gradients if desired
+		cdef point lr[4]
+
+		cdef point sgf
+		cdef point *sgfp = <point *>NULL
+		cdef point *lrgrad = <point *>NULL
+
+		cdef unsigned long i, im1
+		cdef double ival = 0.0, sval = 0.0, fval = 0.0
 
 		# Make sure hmax has positive sign
 		if hmax < 0: hmax = -hmax
 
+		cdef np.ndarray[np.float64_t, ndim=2] pgrad
+
+		if grad:
+			# Point to the segment gradient storage
+			lrgrad = &lr[2]
+			# Allocate output for the path gradient
+			pgrad = np.zeros((npts, 3), dtype=np.float64)
+			# Point to the endpoint gradient storage
+			sgfp = &sgf
+		else: pgrad = None
+
 		# Initialize the left point and its value
-		ps = packpt(points[0,0], points[0,1], points[0,2])
-		if not self._evaluate(&sval, NULL, ps):
-			raise ValueError('Start point %s is out of bounds' % (pt2tup(ps),))
+		lr[0] = packpt(pts[0,0], pts[0,1], pts[0,2])
+		if not self._evaluate(&sval, sgfp, lr[0]):
+			raise ValueError('Start point %s is out of bounds' % (pt2tup(lr[0]),))
 
 		for i in range(1, npts):
 			# Pull the end point
-			pe = packpt(points[i,0], points[i,1], points[i,2])
-			# Add the contribution from this segment
+			lr[1] = packpt(pts[i,0], pts[i,1], pts[i,2])
+			# Calculate contribution from this segment
 			# This uses, then updates, the function value in sval
-			if not self.segint(&ival, ps, pe, hmax, &sval):
-				raise ValueError('Path %s -> %s is out of bounds' % (pt2tup(ps), pt2tup(pe)))
-			# The next start point is the current end point
-			ps = pe
+			if not self.segintgrad(&ival, lrgrad, lr, hmax, &sval, sgfp):
+				raise ValueError('Path %s -> %s is out of bounds' % (pt2tup(lr[0]), pt2tup(lr[1])))
 
-		return ival
+			# Add segment contribution to path integral
+			fval += ival
+
+			# Cycle endpoints for next round
+			lr[0] = lr[1]
+
+			if not grad: continue
+
+			# Add contribution to gradient from segment endpoints
+			im1 = i - 1
+			pgrad[im1, 0] += lrgrad[0].x
+			pgrad[im1, 1] += lrgrad[0].y
+			pgrad[im1, 2] += lrgrad[0].z
+			pgrad[i, 0] += lrgrad[1].x
+			pgrad[i, 1] += lrgrad[1].y
+			pgrad[i, 2] += lrgrad[1].z
+
+		# Return just the function, if no gradient is desired
+		if not grad: return fval
+
+		# Force endpoint gradients to zero
+		pgrad[0,0] = pgrad[0,1] = pgrad[0,2] = 0.0
+		im1 = npts - 1
+		pgrad[im1,0] = pgrad[im1,1] = pgrad[im1,2] = 0.0
+
+		# Return the function and the (flattened, if necessary) gradient
+		if flattened: return fval, pgrad.ravel('C')
+		else: return fval, pgrad
 
 
 	@cython.cdivision(True)
 	@cython.boundscheck(False)
 	@cython.wraparound(False)
-	cdef bint segrad(self, point *sgrad, point *egrad,
-			point s, point e, double hmax) nogil:
+	cdef bint segintgrad(self, double *ival, point *lrgrad,
+			point *lr, double hmax, double *f, point *gradf) nogil:
 		'''
-		Store, in lgrad and rgrad, the gradients (with respect to
-		points s and e, respectively) of the integral of the this
-		interpolated function along the line from point s to point e,
-		each in grid coordinates.
+		Compute, in ival if it is not NULL, the path integral of the
+		interpolated function represented by this instance over the
+		linear segment starting at lr[0] and ending at lr[1]. If lrgrad
+		is not NULL, it should be a two-point array that will hold, on
+		output, the gradients of this path integral with respect to
+		point lr[0] and lr[1] in lrgrad[0] and lrgrad[1], respectively.
 
-		As in segint, the integral is computed using the composite
-		Simpson's rule by dividing the segment into the smallest even
-		number of equal-length pieces that each have a length no longer
-		than hmax. The sign of hmax is ignored.
+		The path integral is approximated using the composite Simpson's
+		rule by choosing an even number of equal-length segments N that
+		subdivide the path lr[0] -> lr[1] such that the length of the
+		segments are no longer than hmax.
+
+		The points lr[0] and lr[1], and the length hmax, are all
+		specified in grid coordinates. The sign of hmax is ignored.
+
+		If a = lr[0], b = lr[1], L = |b - a|, h = L / N, and f is the
+		interpolated function represented by this instance, then the
+		path integral is
+
+		  ival = (h / 3) * Sum(w[i] * f(p[i]), i = 0...N),
+
+		where the range 0...N includes both endpoints, p[i] is the
+		interpolated point p[i] = (1 - i / N) a + (i / N) b, and w[i]
+		are the usual composite Simpson's weights:
+
+		  w[0] = w[N] = 1; w[i] = 2 * (int(i % 2) + 1), 0 < i < N.
+
+		Using the product and chain rules, the gradient of the path
+		integral with respect to point a is
+
+		  lrgrad[0] = (ival / L**2) * (a - b) +
+		    (h / 3N) * Sum(w[i] * (N - i) * gf(p[i]), i = 0...N),
+
+		where gf is the gradient of f. The first term in the sum is
+		attributable to differentiating the step h with respect to a,
+		whereas the second term is attributable to differentiating the
+		terms of the sum with respect to a.
+
+		Similarly, the gradient of the path integral with respect to
+		point b is
+
+		  lrgrad[1] = (ival / L**2) * (b - a) +
+		    (h / 3N) * Sum(w[i] * i * gf(p[i]), i = 0...N).
+
+		If f and gradf are not NULL, they are assumed to contain on
+		input the values of f(lr[0]) and grad(f)(lr[0]), respectively.
+		If either value is NULL, these values will be evaluated
+		explicitly. If f is not NULL, it will hold the value of
+		f(lr[1]) on output. Likewise, if gradf is not NULL and lrgrad
+		is not NULL, gradf will hold the value grad(f)(lr[1]) on
+		output.
 
 		Returns True if the integral was evaluated and False if any
-		point along the line cannot be evaluated.
-
-		If False is returned, neither sgrad or egrad will be modified.
+		point along the line cannot be evaluated. If False is returned,
+		the values in ival, lrgrad, f and gradf will not be modified. 
 		'''
 		cdef point dp, p, agf, bgf, sgf
-		cdef double l, h, fval = 0.0, sval = 0.0, sc = 0.0, ifn = 0.0
+		cdef double l, h, fval = 0.0, sval = 0.0, nf = 0.0, sc = 0.0
 		cdef unsigned long i, n
+
+		cdef bint dograd = (lrgrad != <point *>NULL)
+		cdef point *sgfp = &sgf if dograd else <point *>NULL
 
 		cdef double mpy[2]
 		mpy[0], mpy[1] = 2.0, 4.0
@@ -1388,7 +1429,7 @@ cdef class Interpolator3D:
 		if hmax < 0: hmax = -hmax
 
 		# Calculate the length of the segment
-		dp = axpy(-1, s, e)
+		dp = axpy(-1, lr[0], lr[1])
 		l = ptnrm(dp)
 
 		# Subdivide the step for the composite rule
@@ -1402,130 +1443,68 @@ cdef class Interpolator3D:
 		h = l / n
 		iscal(h / l, &dp)
 
-		# Evaluate the function and gradient at the start
-		# Gradient at start fully contributes to path grad wrt a
-		if not self._evaluate(&fval, &agf, s): return False
-		# Gradient at start does not contribute to path grad wrt b
+		# Initialize gradient wrt lr[0] and lr[1]
+		agf.x = agf.y = agf.z = 0.0
+		# Note: function gradient at lr[0] does not contribute to bgf
 		bgf.x = bgf.y = bgf.z = 0.0
 
-		# Include the interior points
+		if f != <double *>NULL and (not dograd or gradf != <point *>NULL):
+			# Use provided values at start
+			fval = f[0]
+			if dograd: agf = gradf[0]
+		else:
+			# Explicitly evaluate function and, if needed, gradient
+			if not self._evaluate(&fval, sgfp, lr[0]): return False
+			if dograd: agf = sgf
+
+		# Do interior points with gradient
 		for i in range(1, n):
-			p = axpy(i, dp, s)
-			if not self._evaluate(&sval, &sgf, p): return False
+			p = axpy(i, dp, lr[0])
+			if not self._evaluate(&sval, sgfp, p): return False
+			# Calculate Simpson's weight
 			sc = mpy[i % 2]
-			# Update the common function sum
+			# Update the integral sum
 			fval += sc * sval
-			# Update contributions to a and b gradients
-			ifn = <double>i / <double>n
-			# Contribution to a gradient decreases with increasing i
-			iaxpy(sc * (1.0 - ifn), sgf, &agf)
-			# Contribution to b gradient increases with increasing i
-			iaxpy(sc * ifn, sgf, &bgf)
+			if not dograd: continue
+			nf = <double>i / <double>n
+			# Left gradient contribution decreases with i
+			iaxpy(sc - sc * nf, sgf, &agf)
+			# Right gradient contribution increases with i
+			iaxpy(sc * nf, sgf, &bgf)
 
 		# Evaluate the endpoint
-		if not self._evaluate(&sval, &sgf, e): return False
+		if not self._evaluate(&sval, sgfp, lr[1]): return False
 
-		# Include endpoint contributions
-		fval += sval
-		# Gradient at end does not contribute to path grad wrt a
-		# Gradient at end fully contributes to path grad wrt b
-		iaxpy(1.0, sgf, &bgf)
+		# At this point, only h/3 is required
+		h /= 3.0
 
-		# Scale the scalar term
-		fval /= (3.0 * n * l)
+		# Include endpoint contribution to integral, then scale
+		fval = h * (fval + sval)
 
-		# First term in path gradients is gradient of integral step
-		sgrad[0] = axpy(-1, e, s)
-		iscal(fval, sgrad)
-		egrad[0] = axpy(-1, s, e)
-		iscal(fval, egrad)
-
-		# Second term is gradient of function
-		iaxpy(h / 3.0, agf, sgrad)
-		iaxpy(h / 3.0, bgf, egrad)
-
-		return True
-
-
-	@cython.cdivision(True)
-	@cython.boundscheck(False)
-	@cython.wraparound(False)
-	cdef bint segint(self, double *ival, point s,
-			point e, double hmax, double *f) nogil:
-		'''
-		Add to the value stored in ival the integral of the function
-		represented by this interpolator along the line from point s to
-		point e, each in grid coordinates. The integral is computed
-		using the composite Simpson's rule by dividing the segment into
-		the smallest even number of equal-length pieces that each have
-		a length no longer than hmax. The sign of hmax is ignored.
-
-		If f is not NULL, it must hold the result of a call to
-
-			self._evaluate(f, NULL, s).
-
-		In this case, initial evaluation of function will not be
-		attempted. On output, the value of a call to
-
-			self._evaluate(f, NULL, e)
-
-		will be stored in f. This allows calls to segint to be chained
-		over multiple segments that share endpoints without multiple
-		evaluations of the function at the same point.
-
-		If f is NULL, the function will be evaluated everywhere.
-
-		Returns True if the integral was evaluated and False if any
-		point along the line cannot be evaluated.
-
-		If False is returned, neither ival nor f will have changed.
-		'''
-		cdef point dp, p
-		cdef double l, h, fval = 0.0, sval = 0.0
-		cdef unsigned long i, n
-
-		cdef double mpy[2]
-		mpy[0], mpy[1] = 2.0, 4.0
-
-		if hmax < 0: hmax = -hmax
-
-		# Calculate the length of the segment
-		dp = axpy(-1, s, e)
-		l = ptnrm(dp)
-
-		# Subdivide the step for the composite rule
-		n = max(<unsigned long>(l / hmax), 2)
-		# Step size must be less than h
-		if n * hmax < l: n += 1
-		# The step count must be even
-		if n % 2: n += 1
-
-		# Scale the walk direction and step size
-		h = l / n
-		iscal(h / l, &dp)
-
-		# Copy a pre-evaluated starting point or evaluate
-		if f != <double *>NULL: fval = f[0]
-		elif not self._evaluate(&fval, NULL, s): return False
-
-		# Include the interior points
-		for i in range(1, n):
-			p = axpy(i, dp, s)
-			if not self._evaluate(&sval, NULL, p): return False
-			fval += mpy[i % 2] * sval
-
-		# Evaluate the endpoint
-		if not self._evaluate(&sval, NULL, e): return False
-
-		# Update f with the endpoint value
+		# Copy output value
+		if ival != <double *>NULL: ival[0] = fval
+		# Copy final evaluation to storage, if provided
 		if f != <double *>NULL: f[0] = sval
 
-		# Include endpoint contribution and scale the sum
-		fval += sval
-		fval *= h / 3.0
+		# Nothing to do if gradients are not desired
+		if not dograd: return True
 
-		# Augment the output
-		ival[0] += fval
+		# Note: function gradient at lr[1] does not contribute to agf
+		iaxpy(1.0, sgf, &bgf)
+
+		# Compute first term of gradients
+		fval /= l * l
+		lrgrad[0] = axpy(-1, lr[1], lr[0])
+		iscal(fval, &lrgrad[0])
+		lrgrad[1] = axpy(-1, lr[0], lr[1])
+		iscal(fval, &lrgrad[1])
+
+		# Now add second term of gradients
+		iaxpy(h, agf, &lrgrad[0])
+		iaxpy(h, bgf, &lrgrad[1])
+
+		# Copy final gradient to storage, if provided
+		if gradf != <point *>NULL: gradf[0] = sgf
 
 		return True
 
@@ -1537,7 +1516,7 @@ cdef class Interpolator3D:
 		In i, j and k, stores the integer portions of p.x, p.y, and
 		p.z, respectively, clipped to the grid
 
-			[0, nx - 2] x [0, ny - 2], [0, nz - 2].
+			[0, nx - 2] x [0, ny - 2] x [0, nz - 2].
 
 		In t.x, t.y, and t.z, stores the remainders
 
