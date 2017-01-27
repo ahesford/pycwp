@@ -1243,7 +1243,7 @@ cdef class Interpolator3D:
 	@cython.boundscheck(False)
 	@cython.cdivision(True)
 	@cython.embedsignature(True)
-	def pathgrad(self, double[:,:] points not None, double dl, double hmax = -1.0):
+	def pathgrad(self, double[:,:] points not None, double hmax):
 		'''
 		Given control points specified as rows of an N-by-3 array of
 		grid coordinates, evaluate the gradient of the path integral as
@@ -1253,14 +1253,10 @@ cdef class Interpolator3D:
 		point i. By convention, the gradient for the first and last
 		control points are 0.
 
-		Gradients are evaluated by a central finite-difference scheme,
-		taking a step dl to each side of the varied coordinate. (Thus,
-		the total step size is dl.) The sign of dl is ignored.
-
-		Because the gradient involves calculating differences of path
-		integrals, the parameter hmax is used as in self.pathint to
-		control the accuracy of the integrals over perturbed paths. If
-		hmax is not positive, abs(dl) will be used in its place.
+		Gradients are evaluated analytically. However, because the
+		gradient is of an integral which is calculated using the
+		composite Simpson's rule, the the parameter hmax is used as in
+		self.pathint to control the accuracy of the integrals.
 
 		If the second dimension of points does not have length three,
 		or if any control points fall outside the interpolation grid, a
@@ -1274,93 +1270,43 @@ cdef class Interpolator3D:
 
 		cdef double[:,:] grad = np.zeros((npts, 3), dtype=np.float64, order='C')
 
-		cdef unsigned long i, ip1
-		cdef unsigned int j
-		cdef point l, c, r
-		cdef double lval, rval
-		cdef int ns
+		cdef unsigned long i, im1
+		cdef point l, r, lg, rg
 
-		# Ensure steps are positive
-		if dl < 0: dl = -dl
-		# Handle default hmax
-		if hmax <= 0: hmax = dl
+		# Make sure hmax has positive sign
+		if hmax < 0: hmax = -hmax
 
-		# Initialize the left and center points
+		# Initialize the left point
 		l = packpt(points[0,0], points[0,1], points[0,2])
-		c = packpt(points[1,0], points[1,1], points[1,2])
 
-		# No need to evaluate gradient at first or last points
-		for i in range(1, npts - 1):
+		# Compute contributions to gradients segment by segment
+		for i in range(1, npts):
 			# Evaluate the right point
-			ip1 = i + 1
-			r = packpt(points[ip1,0], points[ip1,1], points[ip1,2])
+			r = packpt(points[i,0], points[i,1], points[i,2])
 
-			for j in range(3):
-				# Compute the central or one-sided differences
-				ns = self.perturb(&lval, j, l, c, r, -dl, hmax)
-				ns += self.perturb(&rval, j, l, c, r, +dl, hmax)
-				if ns < 1:
-					raise ValueError('Uncomputable derivative at %s (axis %d)' % (pt2tup(c), j))
-				grad[i,j] = (rval - lval) / (dl * ns)
+			# Contribute contributions at l and c for segment lr
+			if not self.segrad(&lg, &rg, l, r, hmax):
+				raise ValueError('Could not compute path gradient in segment %s -> %s' % (pt2tup(l), pt2tup(r)))
+
+			# Add left and right gradient contributions
+			im1 = i - 1
+			grad[im1,0] += lg.x
+			grad[im1,1] += lg.y
+			grad[im1,2] += lg.z
+
+			grad[i,0] += rg.x
+			grad[i,1] += rg.y
+			grad[i,2] += rg.z
 
 			# Cycle the points for the next round
-			l = c
-			c = r
+			l = r
+
+		# Remove contributions at path endpoints
+		grad[0,0] = grad[0,1] = grad[0,2] = 0.0
+		im1 = npts - 1
+		grad[im1,0] = grad[im1,1] = grad[im1,2] = 0.0
 
 		return np.asarray(grad)
-
-	@cython.wraparound(False)
-	@cython.boundscheck(False)
-	@cython.cdivision(True)
-	cdef int perturb(self, double *ival, unsigned int axis,
-			point s, point c, point e, double dl, double hmax) except -1:
-		'''
-		Store, in ival, the integral (as computed by segint) over a
-		two-segment path from s to c to e, perturbing c if possible
-		along the specified by axis (0 => x, 1 => y, 2 => z) by a
-		distance dl. The parameter hmax is passed to segint.
-
-		If axis is not 0, 1 or 2, a ValueError will be raised.
-
-		If the integration can be performed over the perturbed path, 1
-		will be returned.
-
-		If the perturbation causes the path to step outside of the
-		function bounds, the contents of ival will hold the integral of
-		the unperturbed path and 0 will be returned. If the unperturbed
-		integral cannot be computed, a ValueError will be raised.
-		'''
-		cdef point dp
-		cdef double cval = 0.0, sval = 0.0
-		cdef int rv = 1
-
-		# Copy the starting point to avoid multiple evaluations
-		if not self._evaluate(&sval, NULL, s):
-			raise ValueError('Point %s is out of bounds' % (pt2tup(s),))
-
-		# Perturb the central point
-		dp = c
-
-		if axis == 0: dp.x += dl
-		elif axis == 1: dp.y += dl
-		elif axis == 2: dp.z += dl
-		else: raise ValueError('Perturbed axis must be 0, 1 or 2')
-
-		# Try to integrate along the first half of the perturbed path
-		if not self.segint(&cval, s, dp, hmax, &sval):
-			# Perturbed integration failed; sval and cval uncorrupted
-			# Revert to integrating over unperturbed path
-			dp = c
-			rv = 0
-			if not self.segint(&cval, s, dp, hmax, &sval):
-				raise ValueError('Path %s -> %s is out of bounds' % (pt2tup(s), pt2tup(dp)))
-
-		# Integrate along the second half of the path
-		if not self.segint(&cval, dp, e, hmax, &sval):
-			raise ValueError('Path %s -> %s is out of bounds' % (pt2tup(dp), pt2tup(e)))
-
-		ival[0] = cval
-		return rv
 
 
 	@cython.wraparound(False)
@@ -1409,6 +1355,96 @@ cdef class Interpolator3D:
 			ps = pe
 
 		return ival
+
+
+	@cython.cdivision(True)
+	@cython.boundscheck(False)
+	@cython.wraparound(False)
+	cdef bint segrad(self, point *sgrad, point *egrad,
+			point s, point e, double hmax) nogil:
+		'''
+		Store, in lgrad and rgrad, the gradients (with respect to
+		points s and e, respectively) of the integral of the this
+		interpolated function along the line from point s to point e,
+		each in grid coordinates.
+
+		As in segint, the integral is computed using the composite
+		Simpson's rule by dividing the segment into the smallest even
+		number of equal-length pieces that each have a length no longer
+		than hmax. The sign of hmax is ignored.
+
+		Returns True if the integral was evaluated and False if any
+		point along the line cannot be evaluated.
+
+		If False is returned, neither sgrad or egrad will be modified.
+		'''
+		cdef point dp, p, agf, bgf, sgf
+		cdef double l, h, fval = 0.0, sval = 0.0, sc = 0.0, ifn = 0.0
+		cdef unsigned long i, n
+
+		cdef double mpy[2]
+		mpy[0], mpy[1] = 2.0, 4.0
+
+		if hmax < 0: hmax = -hmax
+
+		# Calculate the length of the segment
+		dp = axpy(-1, s, e)
+		l = ptnrm(dp)
+
+		# Subdivide the step for the composite rule
+		n = max(<unsigned long>(l / hmax), 2)
+		# Step size must be less than h
+		if n * hmax < l: n += 1
+		# The step count must be even
+		if n % 2: n += 1
+
+		# Scale the walk direction and step size
+		h = l / n
+		iscal(h / l, &dp)
+
+		# Evaluate the function and gradient at the start
+		# Gradient at start fully contributes to path grad wrt a
+		if not self._evaluate(&fval, &agf, s): return False
+		# Gradient at start does not contribute to path grad wrt b
+		bgf.x = bgf.y = bgf.z = 0.0
+
+		# Include the interior points
+		for i in range(1, n):
+			p = axpy(i, dp, s)
+			if not self._evaluate(&sval, &sgf, p): return False
+			sc = mpy[i % 2]
+			# Update the common function sum
+			fval += sc * sval
+			# Update contributions to a and b gradients
+			ifn = <double>i / <double>n
+			# Contribution to a gradient decreases with increasing i
+			iaxpy(sc * (1.0 - ifn), sgf, &agf)
+			# Contribution to b gradient increases with increasing i
+			iaxpy(sc * ifn, sgf, &bgf)
+
+		# Evaluate the endpoint
+		if not self._evaluate(&sval, &sgf, e): return False
+
+		# Include endpoint contributions
+		fval += sval
+		# Gradient at end does not contribute to path grad wrt a
+		# Gradient at end fully contributes to path grad wrt b
+		iaxpy(1.0, sgf, &bgf)
+
+		# Scale the scalar term
+		fval /= (3.0 * n * l)
+
+		# First term in path gradients is gradient of integral step
+		sgrad[0] = axpy(-1, e, s)
+		iscal(fval, sgrad)
+		egrad[0] = axpy(-1, s, e)
+		iscal(fval, egrad)
+
+		# Second term is gradient of function
+		iaxpy(h / 3.0, agf, sgrad)
+		iaxpy(h / 3.0, bgf, egrad)
+
+		return True
 
 
 	@cython.cdivision(True)
@@ -2535,7 +2571,9 @@ cdef class Box3D:
 		while t < tmax:
 			self._boundsForCell(&lo, &hi, i, j, k)
 			if not Box3D._intersection(tlims, lo, hi, start, end):
-				raise ValueError('Segment fails to intersect cell %s' % ((i,j,k),))
+				stt = pt2tup(start)
+				edt = pt2tup(end)
+				raise ValueError('Segment %s -> %s fails to intersect cell %s' % (stt, edt, (i,j,k)))
 
 			if 0 <= i < self.nx and 0 <= j < self.ny and 0 <= k < self.nz:
 				# Record a hit inside the grid
