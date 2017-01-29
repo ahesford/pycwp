@@ -1350,8 +1350,9 @@ cdef class Interpolator3D:
 			# Add segment contribution to path integral
 			fval += ival
 
-			# Cycle endpoints for next round
+			# Cycle endpoints and function values for next round
 			a = b
+			fvals[0] = fvals[1]
 
 			if not grad: continue
 
