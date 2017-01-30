@@ -206,9 +206,11 @@ class FastSweep(object):
 		return np.asarray(t), updates
 
 	@cython.boundscheck(False)
-	@cython.embedsignature(True)
+	@cython.wraparound(False)
 	def gauss(self, src, real[:,:,:] s, bint report=False):
 		'''
+		FastSweep.gauss(self, src, s, report=False)
+
 		Given a source location src in Cartesian coordinates and a
 		slowness s, a 3-D real array with shape self.box.ncell, compute
 		and return the Eikonal t (a Numpy array with a shape matching
