@@ -18,24 +18,20 @@ from libc.math cimport sqrt
 def totvar(img, fwd=False, eps=1e-12):
 	'''
 	For a three-dimensional scalar image img with shape (nx, ny, nz),
-	compute the total variation norm
+	compute and return the total-variation (TV) norm
 
-		TV(img) = Sum(|grad(img)(i,j,k)|)
+		TV(img) = Sum_{ijk} |grad(img)(i,j,k)|
 
-	for all (i, j, k) in [0, 0, 0] x [nx - 1, ny - 1, nz - 1]. The gradient
-	of the discrete norm will also be computed at every point on the image
-	grid.
+	for all (i, j, k) in the grid [0, 0, 0] x [nx - 1, ny - 1, nz - 1]. The
+	3-D gradient of the image at (i, j, k) is approximated using forward
+	differences if fwd is True; otherwise, backward differences are used.
 
-	All derivatives are approximated using backward (if fwd is False) or
-	forward (if fwd is True). The gradient is computed analytically based
-	on the discrete, approximate representation of the TV norm.
+	The (nx * ny * nz)-dimensional gradient of the discrete TV norm, with
+	respect to changes in image values, is also computed and returned.
 
-	For simplicity, it is assumed that grad(img) == 0 and grad(TV)(img) on
-	the boundaries of the image grid (i.e., i, j, k == 0, i == nx - 1,
-	j == ny - 1 or k == nz - 1).
-
-	The image will be converted to a 64-bit floating-point array for
-	computation.
+	For simplicity, it is assumed that both grad(img)(i,j,k) and the
+	partial derivative of TV(img) with respect to img[i,j,k] vanish when
+	point (i, j, k) resides on the boundary of the image grid.
 
 	A ValueError will be raised if any of nx, ny, or nz is less than 3.
 	'''
@@ -51,7 +47,7 @@ def totvar(img, fwd=False, eps=1e-12):
 
 	cdef unsigned long i, j, k, ip, im, jp, jm, kp, km
 	cdef double cv, dxf, dyf, dzf, dxp, dyp, dzp
-	cdef double tvnorm = 0.0, gnorm, ctrm, heps = 0.5 * eps
+	cdef double tvnorm = 0.0, gnorm, heps = 0.5 * eps, gv
 
 	cdef long fdir = 1 if not fwd else -1
 
@@ -90,7 +86,7 @@ def totvar(img, fwd=False, eps=1e-12):
 
 				# Compute the central term of the gradient
 				# Sign must be adjusted for forward differencing
-				gimg[i,j,k] = (dxf + dyf + dzf) / gnorm
+				gv = (dxf + dyf + dzf) / gnorm
 
 				# Backward differences are only needed squared
 				# Shift square differences away from zero
@@ -100,9 +96,11 @@ def totvar(img, fwd=False, eps=1e-12):
 
 				# Half epsilon in two "f" terms combine
 				# to make full epsilon under square root
-				gimg[i,j,k] -= dxp / sqrt(dxp * dxp + dyf + dzf)
-				gimg[i,j,k] -= dyp / sqrt(dxf + dyp * dyp + dzf)
-				gimg[i,j,k] -= dzp / sqrt(dxf + dyf + dzp * dzp)
+				gv -= dxp / sqrt(dxp * dxp + dyf + dzf)
+				gv -= dyp / sqrt(dxf + dyp * dyp + dzf)
+				gv -= dzp / sqrt(dxf + dyf + dzp * dzp)
+
+				gimg[i,j,k] = gv
 
 	# Return the norm and its gradient
 	return tvnorm, np.asarray(gimg)
