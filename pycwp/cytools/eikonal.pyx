@@ -1,3 +1,6 @@
+# Copyright (c) 2016--2017 Andrew J. Hesford. All rights reserved.
+# Restrictions are listed in the LICENSE file distributed with this package.
+
 import cython
 cimport cython
 
@@ -10,9 +13,6 @@ from math import sqrt
 from libc.math cimport sqrt
 
 from itertools import izip, product as iproduct
-
-# Copyright (c) 2016 Andrew J. Hesford. All rights reserved.
-# Restrictions are listed in the LICENSE file distributed with this package.
 
 @cython.cdivision(True)
 @cython.boundscheck(False)

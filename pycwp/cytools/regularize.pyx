@@ -1,3 +1,6 @@
+# Copyright (c) 2017 Andrew J. Hesford. All rights reserved.
+# Restrictions are listed in the LICENSE file distributed with this package.
+
 import cython
 cimport cython
 
@@ -8,9 +11,6 @@ cimport numpy as np
 
 from math import sqrt
 from libc.math cimport sqrt
-
-# Copyright (c) 2017 Andrew J. Hesford. All rights reserved.
-# Restrictions are listed in the LICENSE file distributed with this package.
 
 @cython.cdivision(True)
 @cython.boundscheck(False)
