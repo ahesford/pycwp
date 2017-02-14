@@ -1101,9 +1101,9 @@ cdef class Interpolator3D:
 	def minpath(self, start, end, unsigned long nmax,
 			double itol, double ptol, h=1.0, **kwargs):
 		'''
-		Given 3-sequences start and end, adaptively search for a path
-		between start and end that minimizes the path integral of the
-		function interpolated by this instance.
+		Given 3-vectors start and end in grid coordinates, adaptively
+		search for a path between start and end that minimizes the path
+		integral of the function interpolated by this instance.
 
 		The path will be divided into at most N segments, where N is
 		the smallest power of 2 that is not less than nmax.
@@ -1118,6 +1118,11 @@ cdef class Interpolator3D:
 		minimize the objective for each path subdivision. All extra
 		kwargs will be passed to fmin_l_bfgs. The keyword arguments
 		'func', 'x0', 'args', 'fprime' and 'approx_grad' are forbidden.
+
+		The return value will be an L-by-3 array of points (in grid
+		coordinates) for some L that describe a piecewise linear
+		optimal path, along with the value of the path integral over
+		that path.
 		'''
 		# Validate end points
 		cdef point pt
@@ -1188,8 +1193,8 @@ cdef class Interpolator3D:
 			# Check for convergence
 			if abs(nf - lf) < ptol: break
 
-		# Return the best points
-		return np.asarray(pbest)
+		# Return the best points and the path integral
+		return np.asarray(pbest), bf
 
 
 	@cython.wraparound(False)
