@@ -15,7 +15,7 @@ cimport numpy as np
 
 from cpython.mem cimport PyMem_Malloc, PyMem_Free
 
-from libc.math cimport sqrt, fabs
+from libc.math cimport sqrt, fabs, acos
 
 from ptutils cimport *
 from interpolator cimport *
@@ -73,6 +73,18 @@ cdef class Segment3D:
 		'''The midpoint of the segment, as a 3-tuple of floats'''
 		return pt2tup(lintp(0.5, self._start, self._end))
 
+	@cython.cdivision(True)
+	@property
+	def direction(self):
+		'''
+		The normalized direction of the segment, as a 3-tuple of
+		floats. If the segment length is approximately 0, the direction
+		will be (0, 0, 0).
+		'''
+		cdef point ds = axpy(-1, self._start, self._end)
+		if almosteq(self.length, 0.0): return (0, 0, 0)
+		iscal(1 / self.length, &ds)
+		return pt2tup(ds)
 
 	@cython.embedsignature(True)
 	def cartesian(self, double t):
@@ -118,6 +130,7 @@ cdef class Triangle3D:
 	cdef point _nodes[3]
 	cdef point _normal
 	cdef point *_qr
+	cdef unsigned int _labels[3]
 
 	cdef readonly double offset
 	cdef readonly double area
@@ -128,30 +141,54 @@ cdef class Triangle3D:
 		'''
 		self._qr = <point *>NULL
 
-	def __init__(self, nodes):
+	def __init__(self, nodes, labels=None):
 		'''
 		Initialize a triangle from the sequence of three nodes (each a
 		sequence of three floats).
-		'''
-		cdef point n1, n2, n3
+
+		The argument labels, if provided, should be a sequence of three
+		unique, nonnegative integers that label each node in order. If
+		labels is omitted, a default labeling (0, 1, 2) will be used.
+		''' 
+		cdef point pnodes[3]
+		cdef unsigned int plabels[3]
+
 		if len(nodes) != 3:
 			raise ValueError('Length of nodes sequence must be 3')
 
-		tup2pt(&n1, nodes[0])
-		tup2pt(&n2, nodes[1])
-		tup2pt(&n3, nodes[2])
+		tup2pt(&pnodes[0], nodes[0])
+		tup2pt(&pnodes[1], nodes[1])
+		tup2pt(&pnodes[2], nodes[2])
 
-		self.setnodes(n1, n2, n3)
+		if not labels:
+			plabels[0], plabels[1], plabels[2] = 0, 1, 2
+		else:
+			if len(labels) != 3:
+				raise ValueError('Length of labels sequence must be 3')
+			if labels[0] < 0 or labels[1] < 0 or labels[2] < 0:
+				raise ValueError('Node labels must be nonnegative')
+			plabels[0], plabels[1], plabels[2] = labels[0], labels[1], labels[2]
+
+		self.setnodes(pnodes, plabels)
 
 
 	@cython.cdivision(True)
-	cdef int setnodes(self, point n1, point n2, point n3) except -1:
+	cdef int setnodes(self, point nodes[3], unsigned int labels[3]) except -1:
 		'''
-		Initialize a triangle from the given nodes.
+		Initialize a triangle from the given nodes and integer labels.
+		The labels must be nonnegative and unique.
 		'''
-		self._nodes[0] = n1
-		self._nodes[1] = n2
-		self._nodes[2] = n3
+		self._nodes[0] = nodes[0]
+		self._nodes[1] = nodes[1]
+		self._nodes[2] = nodes[2]
+
+		self._labels[0] = labels[0]
+		self._labels[1] = labels[1]
+		self._labels[2] = labels[2]
+
+		if (labels[0] == labels[1] or 
+				labels[1] == labels[2] or labels[0] == labels[2]):
+			raise ValueError('Labels must be unique and nonnegative')
 
 		# Find maximum cross product to determine normal
 		cdef point l, r, v
@@ -202,12 +239,17 @@ cdef class Triangle3D:
 				pt2tup(self._nodes[1]), pt2tup(self._nodes[2]))
 
 	@property
+	def labels(self):
+		'''The nonnegative integer labels of the triangle nodes'''
+		return (self._labels[0], self._labels[1], self._labels[2])
+
+	@property
 	def normal(self):
 		'''The normal of the triangle, as a 3-tuple of floats'''
 		return pt2tup(self._normal)
 
 	def __repr__(self):
-		return '%s(%r)' % (self.__class__.__name__, self.nodes)
+		return '%s(%r, %r)' % (self.__class__.__name__, self.nodes, self.labels)
 
 
 	@cython.cdivision(True)
@@ -262,6 +304,27 @@ cdef class Triangle3D:
 
 		self._qr = qr
 		return qr
+
+
+	cdef double _planedist(self, point p):
+		'''
+		C helper for the self.halfspace.
+		'''
+		return dot(self._normal, p) + self.offset
+
+	@cython.embedsignature
+	def planedist(self, p):
+		'''
+		Returns a double representing the distance from a 3-D point p
+		to the plane in which this triangle resides. If the distance is
+		positive, the point is in the positive half-space of the plane
+		(i.e., self.normal points toward the point from the plane); if
+		the distance is negative, the point is in the negative
+		half-space of the plane.
+		'''
+		cdef point pp
+		tup2pt(&pp, p)
+		return self._planedist(pp)
 
 
 	@cython.embedsignature(True)
@@ -327,10 +390,50 @@ cdef class Triangle3D:
 
 		x, y, z = p
 
-		vx = x * n[0].x + y * n[1].x + z * n.x
-		vy = x * n[0].y + y * n[1].y + z * n.y
-		vz = x * n[0].z + y * n[1].z + z * n.z
+		vx = x * n[0].x + y * n[1].x + z * n[2].x
+		vy = x * n[0].y + y * n[1].y + z * n[2].y
+		vz = x * n[0].z + y * n[1].z + z * n[2].z
 		return vx, vy, vz
+
+
+	@cython.embedsignature(True)
+	@cython.cdivision(True)
+	def perpangle(self, unsigned int d, n not None):
+		'''
+		Return the angle subtended by this triangle with the node at
+		index d (0 <= d < 3) when projected perpendicular to a
+		direction n = (nx, ny, nz).
+		'''
+		if d > 2: raise ValueError('Positive integer d must be less than 3')
+
+		cdef point nn, a, b
+		tup2pt(&nn, n)
+
+		cdef double nnrm = ptnrm(nn)
+		if almosteq(nnrm, 0.0):
+			raise ValueError('Direction n must have nonzero norm')
+		iscal(nnrm, &nn)
+
+		cdef unsigned int d1, d2
+		d1 = (d + 1) % 3
+		d2 = (d + 2) % 3
+
+		# Find the directions of the sides
+		a = axpy(-1, self._nodes[d], self._nodes[d1])
+		b = axpy(-1, self._nodes[d], self._nodes[d2])
+
+		# Subtract components parallel to projection direction
+		iaxpy(-dot(a, nn), nn, &a)
+		iaxpy(-dot(b, nn), nn, &b)
+
+		cdef double an, bn
+		an = ptnrm(a)
+		bn = ptnrm(b)
+
+		# No angle if components are essentially parallel to direction
+		if almosteq(an, 0.0) or almosteq(bn, 0.0): return 0.0
+		# Return the actual angle
+		return acos(min(1.0, max(-1.0, dot(a, b) / an / bn)))
 
 
 	@cython.embedsignature(True)
@@ -412,9 +515,9 @@ cdef class Triangle3D:
 			pv.z, nv.z = lo.z, hi.z
 
 		# p-vertex is in negative half space of triangle plane
-		if dot(normal, pv) < -self.offset: return False
+		if self._planedist(pv) < 0: return False
 		# n-vertex is in positive half space of triangle plane
-		if dot(normal, nv) > -self.offset: return False
+		if self._planedist(nv) > 0: return False
 
 		# Perform remaining SAT tests on 9 cross-product axes
 		cdef point hlen = scal(0.5, b._length)
@@ -447,7 +550,7 @@ cdef class Triangle3D:
 
 	@cython.cdivision(True)
 	@cython.embedsignature(True)
-	def intersection(self, Segment3D seg not None):
+	def intersection(self, Segment3D seg not None, bint halfline=False):
 		'''
 		Return the intersection of the segment seg with this triangle
 		as (l, t, u, v), where l is the length along the segment seg
@@ -485,7 +588,7 @@ cdef class Triangle3D:
 		if almosteq(r5, 0.0):
 			# Line is parallel to facet
 			if almosteq(dot(y, self._normal), 0.0):
-				raise NotImplementedError('Segment seg is in plane of facet')
+				raise NotImplementedError('Segment is in plane of facet')
 			return None
 		iscal(1.0 / r5, &q2)
 
@@ -493,15 +596,17 @@ cdef class Triangle3D:
 		cdef point ny
 		ny.x, ny.y, ny.z = dot(y, qr[0]), dot(y, qr[1]), dot(y, q2)
 
-		cdef double t, u, v
-		v = ny.z / r5
-		u = (ny.y - r4 * v) / r2
-		t = (ny.x - r3 * v - r1 * u) / r0
+		cdef double l, t, u
+		l = ny.z / r5
+		u = (ny.y - r4 * l) / r2
+		t = (ny.x - r3 * l - r1 * u) / r0
 
-		if ((0 <= v <= 1 and 0 <= u <= 1 and 0 <= t <= 1) and 0 <= u + t <= 1):
-			# v is the fraction of segment length
+		# Check if the line intersection is valid
+		cdef bint online = (l >= 0 and (halfline or l <= 1))
+		if online and 0 <= t <= 1 and 0 <= u <= 1 and 0 <= t + u <= 1:
+			# l is the fraction of segment length
 			# t and u are normal barycentric coordinates in triangle
-			return v, t, u, 1 - t - u
+			return l, t, u, 1 - t - u
 		else:
 			# Intersection is not in segment or triangle
 			return None
@@ -730,19 +835,23 @@ cdef class Box3D:
 
 
 	@staticmethod
-	cdef bint _intersection(double *t, point l, point h, point s, point e):
+	cdef bint _intersection(double *t, point l, point h,
+			point s, point e, bint halfline=False):
 		'''
 		Low-level routine to compute intersection of a box, with low
 		and high corners l and h, respectively, with a line segment
-		that has starting point s and end point e.
+		that has starting point s and end point e. Optionally, the
+		intersection between the box and a half-infinite ray that
+		starts at s and passes through e can be found instead.
 
-		If the segment intersects the box, True is returned and the
-		values t[0] and t[1] represent, respectively, the minimum and
-		maximum lengths along the ray or segment (as a multiple of the
-		length of the segment) that describe the points of
-		intersection. The value t[0] may be negative if the ray or
-		segment starts within the box. The value t[1] may exceed unity
-		if a segment ends within the box.
+		If the segment (or ray, when halfline is True) intersects the
+		box, True is returned and the values t[0] and t[1] represent,
+		respectively, the minimum and maximum lengths along the ray or
+		segment (as a multiple of the length of the segment) that
+		describe the points of intersection. The value t[0] may be
+		negative if the ray or segment starts within the box. The value
+		t[1] may exceed unity if a segment ends within the box or
+		halfline is True.
 
 		If no intersection is found, False is returned and t is
 		untouched.
@@ -769,7 +878,7 @@ cdef class Box3D:
 		if tz2 < tmax: tmax = tz2
 		if tz1 > tmin: tmin = tz1
 
-		if tmax < max(0, tmin) or (tmin > 1):
+		if tmax < max(0, tmin) or (not halfline and tmin > 1):
 			return False
 
 		t[0] = tmin
@@ -777,7 +886,7 @@ cdef class Box3D:
 		return True
 
 	@cython.embedsignature(True)
-	def intersection(self, Segment3D seg not None):
+	def intersection(self, Segment3D seg not None, bint halfline=False):
 		'''
 		Returns the lengths tmin and tmax along the given Segment3D seg
 		at which the segment enters and exits the box, as a multiple of
@@ -787,9 +896,16 @@ cdef class Box3D:
 		If the segment starts within the box, tmin will be negative. If
 		the segment ends within the box, tmax will exceed the segment
 		length.
+
+		If halfline is False, the segment and box must overlap for an
+		intersection to be returned. If halfline is True, an
+		intersection will be returned whenever the half-infinite ray
+		that starts at seg.start and passes through seg.end intersects
+		the box.
 		'''
 		cdef double tlims[2]
-		if Box3D._intersection(tlims, self._lo, self._hi, seg._start, seg._end):
+		if Box3D._intersection(tlims, self._lo,
+				self._hi, seg._start, seg._end, halfline):
 			return tlims[0], tlims[1]
 		else: return None
 

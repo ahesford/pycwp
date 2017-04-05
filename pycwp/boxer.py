@@ -222,7 +222,7 @@ class Octree(object):
 			for key, ctree in self.children.iteritems()
 			for ck, cv in ctree.getleaves().iteritems() }
 
-	def search(self, boxpred, leafpred=None):
+	def search(self, boxpred, leafpred=None, leafcache=None):
 		'''
 		Perform a depth-first search of the tree to identify matching
 		leaves. A leaf is said to match the search iff the value of
@@ -243,8 +243,18 @@ class Octree(object):
 		Octree.addleaves. If leafpred is not defined, the default
 		implementation returns True for every leaf.
 
+		If leafcache is provided, it must be a dictionary. When
+		attempting to match leaves in the search, the value of
+		leafcache[leaf] will be used as a substitute for the value of
+		leafpred(leaf) whenever possible. If leaf is not in leafcache,
+		the value leafpred(leaf) will be assigned to leafcache[leaf].
+		This capability is useful to avoid redundant match tests for
+		leaves added in "multibox" mode and guarantees that
+		leafpred(leaf) will be evaluated at most once for each leaf.
+
 		The return value will be a dictionary mapping all leaf objects
-		that match the search to the value returned by leafpred(leaf).
+		that match the search to the value returned by leafpred(leaf)
+		or leafcache[leaf].
 		'''
 		# Match is empty if the box predicate fails
 		if not boxpred(self.rootbox): return { }
@@ -253,7 +263,7 @@ class Octree(object):
 			# Recursively check branches
 			results = { }
 			for ctree in self.children.itervalues():
-				results.update(ctree.search(boxpred, leafpred))
+				results.update(ctree.search(boxpred, leafpred, leafcache))
 			return results
 
 		# With no leaf predicate, all leaves match
@@ -262,6 +272,12 @@ class Octree(object):
 		# Otherwise, filter leaves by the leaf predicate
 		results = { }
 		for c in self.children:
-			lp = leafpred(c)
+			if leafcache is not None:
+				try:
+					lp = leafcache[c]
+				except KeyError:
+					lp = leafpred(c)
+					leafcache[c] = lp
+			else: lp = leafpred(c)
 			if lp: results[c] = lp
 		return results
