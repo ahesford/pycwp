@@ -160,7 +160,7 @@ cdef class Triangle3D:
 		tup2pt(&pnodes[1], nodes[1])
 		tup2pt(&pnodes[2], nodes[2])
 
-		if not labels:
+		if labels is None:
 			plabels[0], plabels[1], plabels[2] = 0, 1, 2
 		else:
 			if len(labels) != 3:
