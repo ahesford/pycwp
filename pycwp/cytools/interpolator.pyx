@@ -16,12 +16,17 @@ cimport numpy as np
 from cpython.mem cimport PyMem_Malloc, PyMem_Free
 
 from libc.math cimport fabs, log2
-
-cdef extern from "float.h":
-	cdef double DBL_EPSILON
+from libc.stdlib cimport rand, RAND_MAX
+from libc.float cimport DBL_EPSILON
 
 from ptutils cimport *
 from interpolator cimport *
+
+cdef inline double randf() nogil:
+	'''
+	Return a sample of a uniform random variable in the range [0, 1].
+	'''
+	return <double>rand() / <double>RAND_MAX
 
 cdef inline double simpson(double fa, double fb, double fc, double h) nogil:
 	'''
@@ -52,7 +57,7 @@ cdef class LagrangeInterpolator3D(Interpolator3D):
 	@cython.wraparound(False)
 	@cython.boundscheck(False)
 	@cython.embedsignature(True)
-	def __init__(self, image):
+	def __init__(self, image, default=None):
 		'''
 		Construct a piecewise Lagrange interpolator of degree 3 for the
 		given 3-D floating-point image.
@@ -86,6 +91,9 @@ cdef class LagrangeInterpolator3D(Interpolator3D):
 		except Exception:
 			PyMem_Free(self.coeffs)
 			self.coeffs = <double *>NULL
+			raise
+
+		self.default = default
 
 
 	@property
@@ -271,7 +279,7 @@ cdef class HermiteInterpolator3D(Interpolator3D):
 	@cython.wraparound(False)
 	@cython.boundscheck(False)
 	@cython.embedsignature(True)
-	def __init__(self, image):
+	def __init__(self, image, default=None):
 		'''
 		Construct a constrained Hermite cubic interpolator for the
 		given 3-D floating-point image.
@@ -302,6 +310,9 @@ cdef class HermiteInterpolator3D(Interpolator3D):
 		except Exception:
 			PyMem_Free(self.coeffs)
 			self.coeffs = <double *>NULL
+			raise
+
+		self.default = default
 
 
 	@property
@@ -588,7 +599,7 @@ cdef class CubicInterpolator3D(Interpolator3D):
 	@cython.wraparound(False)
 	@cython.boundscheck(False)
 	@cython.embedsignature(True)
-	def __init__(self, image):
+	def __init__(self, image, default=None):
 		'''
 		Construct a tricubic interpolator for the given 3-D
 		floating-point image.
@@ -619,6 +630,9 @@ cdef class CubicInterpolator3D(Interpolator3D):
 		except Exception:
 			PyMem_Free(self.coeffs)
 			self.coeffs = <double *>NULL
+			raise
+
+		self.default = default
 
 
 	@cython.wraparound(False)
@@ -903,7 +917,7 @@ cdef class LinearInterpolator3D(Interpolator3D):
 	@cython.wraparound(False)
 	@cython.boundscheck(False)
 	@cython.embedsignature(True)
-	def __init__(self, image):
+	def __init__(self, image, default=None):
 		'''
 		Construct a trilinear interpolator for the given 3-D
 		floating-point image.
@@ -938,6 +952,8 @@ cdef class LinearInterpolator3D(Interpolator3D):
 			PyMem_Free(self.coeffs)
 			self.coeffs = <double *>NULL
 			raise
+
+		self.default = default
 
 	@property
 	def shape(self):
@@ -1099,24 +1115,32 @@ cdef class Interpolator3D:
 	@cython.boundscheck(False)
 	@cython.embedsignature(True)
 	def minpath(self, start, end, unsigned long nmax,
-			double itol, double ptol, h=1.0, **kwargs):
+			double itol, double ptol, h=1.0,
+			double perturb=0.0, unsigned long nstart=1, **kwargs):
 		'''
-		Given 3-vectors start and end in grid coordinates, adaptively
-		search for a path between start and end that minimizes the path
-		integral of the function interpolated by this instance.
+		Given 3-vectors start and end in grid coordinates, search for a
+		path between start and end that minimizes the path integral of
+		the function interpolated by this instance.
 
-		The path will be divided into at most N segments, where N is
-		the smallest power of 2 that is not less than nmax.
+		The path will be iteratively divided into at most N segments,
+		where N = 2**M * nstart for the smallest integer M that is not
+		less than nmax. With each iteration, an optimal path is sought
+		by minimizing the object self.pathint(path, itol, h) with
+		respect to all points along the path apart from the fixed
+		points start and end. The resulting optimal path is subdivided
+		for the next iteration by inserting points that coincide with
+		the midpoints of all segments in the currently optimal path.
+		Iterations terminate early when the objective value changes by
+		less than ptol between two successive optimizations.
 
-		The objective to be minimized is self.pathint(path, itol, h).
-		All interior points on the subdivided path will be allowed to
-		vary. Path subdivision will terminate early if the objective
-		value changes by less than ptol between two successive
-		subdivisions.
+		If perturb is greater than zero, the coordinates of the
+		midpoints introduced in each iteration will be perturbed by a
+		uniformly random variable in the interval [-perturb, perturb]
+		before the refined path is optimized.
 
 		The method scipy.optimize.fmin_l_bfgs_b will be used to
 		minimize the objective for each path subdivision. All extra
-		kwargs will be passed to fmin_l_bfgs. The keyword arguments
+		kwargs will be passed to fmin_l_bfgs_b. The keyword arguments
 		'func', 'x0', 'args', 'fprime' and 'approx_grad' are forbidden.
 
 		The return value will be an L-by-3 array of points (in grid
@@ -1131,44 +1155,55 @@ cdef class Interpolator3D:
 		tup2pt(&pt, end)
 		end = pt2tup(pt)
 
+		if nstart < 1: raise ValueError('Value of nstart must be positive')
+
 		# Find the actual maximum number of segments
-		cdef unsigned long p = 1, n, nnx, i, i2, im, im2
+		cdef unsigned long p = nstart, n, nnx, i, i2, im, im2
 		while 0 < p < nmax:
 			p <<= 1
 		if p < 1: raise ValueError('Value of nmax is out of bounds')
 
 		# Make sure the optimizer is available
 		from scipy.optimize import fmin_l_bfgs_b as bfgs
+		import warnings
 
-		# Allocate storage for maximally interpolated path
-		# Remember to include extra slot for end point
 		cdef double[:,:] points, pbest, npoints
 
 		cdef double lf, nf, bf
 
-		# Start with a one-segment (straight) path
-		points = np.array([start, end], dtype=np.float64)
-		n = 1
+		# Start with the desired number of segments
+		points = np.zeros((nstart + 1, 3), dtype=np.float64, order='C')
+		for i in range(0, nstart + 1):
+			lf = <double>i / <double>nstart
+			bf = 1.0 - lf
+			points[i, 0] = bf * start[0] + lf * end[0]
+			points[i, 1] = bf * start[1] + lf * end[1]
+			points[i, 2] = bf * start[2] + lf * end[2]
+		n = nstart
 
 		# Compute the starting cost (and current best)
 		pbest = points
 		bf = lf = self.pathint(points, itol, h, False)
+
+		# Double perturbation length for a two-sided interval
+		if perturb > 0: perturb *= 2
 
 		while n < p:
 			# Interpolate the path
 			nnx = n << 1
 			npoints = np.zeros((nnx + 1, 3), dtype=np.float64, order='C')
 
+			# Copy the starting point
 			npoints[0,0] = points[0,0]
 			npoints[0,1] = points[0,1]
 			npoints[0,2] = points[0,2]
 
-			# Move high-to-low to avoid overwriting untouched segments
+			# Copy remaining points and interpolate segments
 			for i in range(1, n + 1):
 				i2 = 2 * i
 				im2 = i2 - 1
 				im = i - 1
-				# Copy the endpoint
+				# Copy the point
 				npoints[i2, 0] = points[i, 0]
 				npoints[i2, 1] = points[i, 1]
 				npoints[i2, 2] = points[i, 2]
@@ -1177,13 +1212,27 @@ cdef class Interpolator3D:
 				npoints[im2, 1] = 0.5 * (points[im, 1] + points[i, 1])
 				npoints[im2, 2] = 0.5 * (points[im, 2] + points[i, 2])
 
+				if perturb > 0:
+					# Sample in [-0.5, 0.5] to perturb midpoints
+					npoints[im2, 0] += perturb * (randf() - 0.5)
+					npoints[im2, 1] += perturb * (randf() - 0.5)
+					npoints[im2, 2] += perturb * (randf() - 0.5)
+
 			n = nnx
 			points = npoints
 
 			# Optimize the interpolated path
-			xopt, nf, _ = bfgs(self.pathint, points, approx_grad=False,
+			xopt, nf, info = bfgs(self.pathint, points,
 					fprime=None, args=(itol, h, True), **kwargs)
 			points = xopt.reshape((n + 1, 3), order='C')
+
+			if info['warnflag']:
+				msg = 'Optimizer (%d segs, %d fcalls, %d iters) warns ' % (n, info['funcalls'], info['nit'])
+				if info['warnflag'] == 1:
+					msg += 'limits exceeded'
+				elif info['warnflag'] == 2:
+					msg += str(info.get('task', 'unknown warning'))
+				warnings.warn(msg)
 
 			if nf < bf:
 				# Record the current best path
