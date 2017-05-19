@@ -1107,6 +1107,7 @@ cdef class Interpolator3D:
 		if val is None:
 			self._usedef = False
 			self._default = 0.0
+			return
 		self._default = float(val)
 		self._usedef = True
 
