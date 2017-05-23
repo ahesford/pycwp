@@ -7,13 +7,7 @@ algorithm.
 # Copyright (c) 2015 Andrew J. Hesford. All rights reserved.
 # Restrictions are listed in the LICENSE file distributed with this package.
 
-import sys, math, itertools
-
-from itertools import izip, product as iproduct
-
-from .util import lazy_property
-from .cutil import cross, dot, norm, almosteq
-from .cytools.boxer import Segment3D, Triangle3D, Box3D
+from .cytools.boxer import *
 
 class Octree(object):
 	'''

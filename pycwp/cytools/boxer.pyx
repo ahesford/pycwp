@@ -623,15 +623,18 @@ cdef class Box3D:
 	cdef point _lo, _hi, _length, _cell
 	cdef unsigned long nx, ny, nz
 
-	def __init__(self, lo, hi):
+	def __init__(self, lo, hi, ncell=None):
 		'''
 		Initialize a 3-D box with extreme corners lo and hi (each a
-		3-tuple of floats).
+		3-tuple of floats). If ncell is not None, it should be a
+		3-tuple of integers to which the ncell property will be set.
 		'''
 		cdef point _lo, _hi
 		tup2pt(&_lo, lo)
 		tup2pt(&_hi, hi)
 		self.setbounds(_lo, _hi)
+
+		if ncell is not None: self.ncell = ncell
 
 
 	cdef int setbounds(self, point lo, point hi) except -1:
@@ -702,7 +705,13 @@ cdef class Box3D:
 			self._cell.z = self._length.z / <double>self.nz
 
 	def __repr__(self):
-		return '%s(%r, %r)' % (self.__class__.__name__, self.lo, self.hi)
+		ncell = self.ncell
+		lo = self.lo
+		hi = self.hi
+		cls = self.__class__.__name__
+		if any(c != 1 for c in ncell):
+			return '%s(%r, %r, %r)' % (cls, lo, hi, ncell)
+		return '%s(%r, %r)' % (cls, lo, hi)
 
 
 	@cython.cdivision(True)
