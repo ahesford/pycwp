@@ -9,9 +9,9 @@ data.
 
 __all__ = [
 		'aca', 'boxer', 'cutil', 'cltools', 'cytools', 'fdtd', 'focusing',
-		'geom', 'harmonic', 'imgtools', 'mio', 'process', 'poly',
-		'quad', 'scattering', 'segmentation', 'shtransform', 'signal',
-		'stats', 'util', 'wavetools',
+		'geom', 'harmonic', 'imgtools', 'iterative', 'mio', 'process',
+		'poly', 'quad', 'scattering', 'segmentation', 'shtransform',
+		'signal', 'stats', 'util', 'wavetools',
 	]
 
 from . import *
