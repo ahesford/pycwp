@@ -86,6 +86,37 @@ cdef class Segment3D:
 		iscal(1 / self.length, &ds)
 		return pt2tup(ds)
 
+	@cython.cdivision(True)
+	@cython.embedsignature(True)
+	def perpdist(self, p):
+		'''
+		Calculate the perpendicular distance from the given point p, as
+		a sequence of three floats, to the line coincident with this
+		segment.
+
+		If this segment is degenerate (self.direction is 0,0,0), the
+		distance will be that from the point to self.start.
+		'''
+		cdef point pt, ap, apn, n
+		cdef double nn
+
+		tup2pt(&pt, p)
+
+		# Find vector from start to point
+		ap = axpy(-1.0, pt, self._start)
+		# Find vector from start to end
+		n = axpy(-1.0, self._start, self._end)
+		# Find square norm of line direction
+		nn = ptsqnrm(n)
+		if almosteq(nn, 0.0):
+			# For negligible segments, get distance to start
+			apn = ap
+		else:
+			# Otherwise, find perpendicular component
+			apn = axpy(-dot(ap, n) / nn, n, ap)
+		return ptnrm(apn)
+
+
 	@cython.embedsignature(True)
 	def cartesian(self, double t):
 		'''
