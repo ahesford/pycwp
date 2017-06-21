@@ -1195,6 +1195,64 @@ cdef class Box3D:
 
 		return results
 
+	@cython.embedsignature(True)
+	def neighborhood(self, p, length):
+		'''
+		For a single cell index triplet or collection of cell index
+		triplets p, compute a set of all cells in the neighborhood of
+		p. The neighborhood is defined by length, which must either be
+		a scalar or a triplet of floating-point-compatible values, and
+		is given by all cells c such that, for some pv in p,
+
+			abs(pv[i] - c[i]) < int(length[i] / self.cell[i])
+
+		for all coordinate indices 0 <= i < 3. (If length is a scalar,
+		it is treated as [length, length, length].)
+
+		If the values in p are not integers, they will be converted to
+		integers for this method.
+		'''
+		cdef long[:,:] pts
+		cdef long i, j, k, row, lx, hx, ly, hy, lz, hz
+		cdef long ncell[3]
+
+		p = np.asarray(p, dtype=np.int64)
+		if p.ndim == 1: pts = p[np.newaxis,:]
+		elif p.ndim == 2: pts = p
+		else: raise ValueError('Argument "p" must be a 1-D or 2-D array')
+
+		if pts.shape[1] != 3:
+			raise ValueError('Argument "p" must have shape (N,3)')
+
+		length = np.asarray(length, dtype=np.float64)
+		if length.ndim == 0:
+			ncell[0] = <long>(length / self._cell.x)
+			ncell[1] = <long>(length / self._cell.y)
+			ncell[2] = <long>(length / self._cell.z)
+		elif length.ndim != 1 or length.shape[0] != 3:
+			raise ValueError('Argument "length" must be a scalar or 1-D array of length 3')
+		else:
+			ncell[0] = <long>(length[0] / self._cell.x)
+			ncell[1] = <long>(length[1] / self._cell.y)
+			ncell[2] = <long>(length[2] / self._cell.z)
+
+		neighbors = set()
+		for row in range(pts.shape[0]):
+			cx, cy, cz = pts[row,0], pts[row,1], pts[row,2]
+			lx = max(0, pts[row,0] - ncell[0])
+			hx = min(pts[row,0] + ncell[0] + 1, self.nx)
+			ly = max(0, pts[row,1] - ncell[1])
+			hy = min(pts[row,1] + ncell[1] + 1, self.ny)
+			lz = max(0, pts[row,2] - ncell[2])
+			hz = min(pts[row,2] + ncell[2] + 1, self.nz)
+
+			for i in range(lx, hx):
+				for j in range(ly, hy):
+					for k in range(lz, hz):
+						neighbors.add((i, j, k))
+
+		return neighbors
+
 	cdef void _cellForPoint(self, long *i, long *j, long *k, point p) nogil:
 		'''
 		Compute, in i, j and k, the coordinates of the cell that
