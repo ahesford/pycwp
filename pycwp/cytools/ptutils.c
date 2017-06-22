@@ -128,12 +128,3 @@ double infdiv(double a, double b) {
 
 	return a / b;
 }
-
-point packpt(double x, double y, double z) {
-	/* Pack the values x, y, z into a point struct. */
-	point r;
-	r.x = x;
-	r.y = y;
-	r.z = z;
-	return r;
-}

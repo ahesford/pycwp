@@ -19,7 +19,6 @@ cdef extern from "ptutils.c":
 	cdef point cross(point l, point r) nogil
 	cdef int almosteq(double x, double y) nogil
 	cdef double infdiv(double a, double b) nogil
-	cdef point packpt(double x, double y, double z) nogil
 
 
 cdef inline object pt2tup(point a):
@@ -35,3 +34,15 @@ cdef inline int tup2pt(point *pt, object p) except -1:
 		pt.z = z
 
 	return 0
+
+cdef inline point packpt(double x, double y, double z):
+	cdef point r
+	r.x = x
+	r.y = y
+	r.z = z
+	return r
+
+cdef inline void pt2arr(double *arr, point pt):
+	arr[0] = pt.x
+	arr[1] = pt.y
+	arr[2] = pt.z

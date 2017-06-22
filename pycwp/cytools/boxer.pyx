@@ -87,20 +87,10 @@ cdef class Segment3D:
 		return pt2tup(ds)
 
 	@cython.cdivision(True)
-	@cython.embedsignature(True)
-	def perpdist(self, p):
-		'''
-		Calculate the perpendicular distance from the given point p, as
-		a sequence of three floats, to the line coincident with this
-		segment.
-
-		If this segment is degenerate (self.direction is 0,0,0), the
-		distance will be that from the point to self.start.
-		'''
-		cdef point pt, ap, apn, n
-		cdef double nn
-
-		tup2pt(&pt, p)
+	cdef int _ptdist(self, double *results, point pt):
+		''' C backer for ptdist. '''
+		cdef point ap, apn, n
+		cdef double nn, ptd
 
 		# Find vector from start to point
 		ap = axpy(-1.0, pt, self._start)
@@ -108,14 +98,42 @@ cdef class Segment3D:
 		n = axpy(-1.0, self._start, self._end)
 		# Find square norm of line direction
 		nn = ptsqnrm(n)
+
 		if almosteq(nn, 0.0):
 			# For negligible segments, get distance to start
-			apn = ap
-		else:
-			# Otherwise, find perpendicular component
-			apn = axpy(-dot(ap, n) / nn, n, ap)
-		return ptnrm(apn)
+			results[0] = ptnrm(ap)
+			results[1] = 0.0
+			return 0
 
+		# Compute the fractional projection onto nn
+		results[1] = -dot(ap, n) / nn
+		# Compute the length of the perpendicular component
+		results[0] = ptnrm(axpy(results[1], n, ap))
+		return 0
+
+	@cython.embedsignature(True)
+	def ptdist(self, p):
+		'''
+		Calculate and return:
+
+		  1. The perpendicular distance from the given point p, as a
+		     sequence of three floats, to the line coincident with this
+		     segment, and
+
+		  2. The projection of the line from the starting point
+		     self.start to p onto this segment, as a fraction of
+		     self.length.
+
+		If this segment is degenerate (self.direction is 0,0,0), the
+		distance will be that from the point to self.start, while the
+		projection will be 0.
+		'''
+		cdef point pt
+		cdef double results[2]
+
+		tup2pt(&pt, p)
+		self._ptdist(results, pt)
+		return results[0], results[1]
 
 	@cython.embedsignature(True)
 	def cartesian(self, double t):
@@ -180,7 +198,7 @@ cdef class Triangle3D:
 		The argument labels, if provided, should be a sequence of three
 		unique, nonnegative integers that label each node in order. If
 		labels is omitted, a default labeling (0, 1, 2) will be used.
-		''' 
+		'''
 		cdef point pnodes[3]
 		cdef unsigned int plabels[3]
 
@@ -217,7 +235,7 @@ cdef class Triangle3D:
 		self._labels[1] = labels[1]
 		self._labels[2] = labels[2]
 
-		if (labels[0] == labels[1] or 
+		if (labels[0] == labels[1] or
 				labels[1] == labels[2] or labels[0] == labels[2]):
 			raise ValueError('Labels must be unique and nonnegative')
 
@@ -1194,6 +1212,191 @@ cdef class Box3D:
 			s = e
 
 		return results
+
+	@cython.embedsignature(True)
+	def fresnel(self, p, double l):
+		'''
+		Find the first Fresnel zone of a segment p, which is either a
+		Segment3D or a 2-D array of shape (2, 3) that provides the
+		start and end of a linear segment. The map takes the form
+
+			(i, j, k) -> R,
+
+		where (i, j, k) is the index of a cell within the first Fresnel
+		zone and R = D / r, where D is the perpendicular distance from
+		the midpoint of the cell to the segment and r is the radius of
+		the first Fresnel zone at the projection of the cell midpoint
+		onto the segment:
+
+			r = sqrt(l * d1 * d2 / (d1 + d2)),
+
+		where d1 is the distance between the start of the segment and
+		the point where the radius is evaluated, d2 is the distance
+		between the evaluation point and the end of the segment, and l
+		is the dominant wavelength.
+
+		A point is considered to be in the first Fresnel zone if R < 1.
+		'''
+		cdef Segment3D seg
+
+		if isinstance(p, Segment3D):
+			seg = <Segment3D>p
+		else: seg = Segment3D(*p)
+
+		cdef double tlims[2]
+		hits = { }
+		if not Box3D._intersection(tlims,
+				self._lo, self._hi, seg._start, seg._end):
+			return hits
+
+		# Find the major axis and the perpendicular axes
+		cdef int axis, axp, axpp
+		direction = seg.direction
+		axis = max(xrange(3), key=lambda i: abs(direction[i]))
+		axp = (axis + 1) % 3
+		axpp = (axis + 2) % 3
+
+		# Find the end points of the intersection
+		cdef point spt, ept
+		spt = lintp(max(tlims[0], 0.0), seg._start, seg._end)
+		ept = lintp(min(tlims[1], 1.0), seg._start, seg._end)
+
+		# Convert Cartesian points to cell coordinates as arrays
+		cdef double scl[3]
+		cdef double ecl[3]
+		pt2arr(scl, self._cart2cell(spt.x, spt.y, spt.z))
+		pt2arr(ecl, self._cart2cell(ept.x, ept.y, ept.z))
+
+		# Store grid dimensions as array
+		cdef long ngrid[3]
+		cdef double cell[3]
+		ngrid[0], ngrid[1], ngrid[2] = self.nx, self.ny, self.nz
+		pt2arr(cell, self._cell)
+
+		# Compute the start and end slabs of the segment
+		cdef long stslab, edslab
+		stslab = max(0, min(ngrid[axis] - 1, <long>(scl[axis])))
+		edslab = max(0, min(ngrid[axis] - 1, <long>(ecl[axis])))
+		if edslab < stslab: stslab, edslab = edslab, stslab
+
+		# Store the corners of slabs as arrays
+		cdef double lo[3]
+		cdef double hi[3]
+		cdef double smin, scell
+
+		pt2arr(lo, self._lo)
+		pt2arr(hi, self._hi)
+
+		# Grab the slab minimum and thickness
+		smin = lo[axis]
+		if axis == 0: scell = self._cell.x
+		elif axis == 1: scell = self._cell.y
+		elif axis == 2: scell = self._cell.z
+		else: raise IndexError('Invalid major axis %d' % (axis,))
+
+		# Loop through all slabs to pick up neighbors
+		cdef long slab, hcc, hcr, i, j
+		cdef double rad
+		cdef point mpt
+		cdef long ccell[3]
+		cdef double mpc[3]
+		for slab in range(stslab, edslab + 1):
+			# Adjust slab corners along slabbed axis
+			lo[axis] = smin + scell * slab
+			hi[axis] = smin + scell * (slab + 1)
+			# Check slab intersections
+			if not Box3D._intersection(tlims,
+					packpt(lo[0], lo[1], lo[2]),
+					packpt(hi[0], hi[1], hi[2]),
+					seg._start, seg._end):
+				# For some reason, segment misses slab
+				continue
+			# Clip intersections
+			tlims[0], tlims[1] = max(0, tlims[0]), min(1, tlims[1])
+			# Find midpoint and its cell coordinates
+			mpt = lintp(0.5 * (tlims[0] + tlims[1]), seg._start, seg._end)
+			pt2arr(mpc, self._cart2cell(mpt.x, mpt.y, mpt.z))
+			# Search the neighborhood
+			ccell[axis] = <long>mpc[axis]
+			i = 0
+			while True:
+				hcr, j = 0, 0
+				while True:
+					hcc = 0
+					ccell[axp] = <long>mpc[axp] + i
+					ccell[axpp] = <long>mpc[axpp] + j
+					# Compare radius
+					if self._calcfzone(&rad, seg, ccell, l):
+						hits[ccell[0], ccell[1], ccell[2]] = rad
+						hcc += 1
+					ccell[axpp] = <long>mpc[axpp] - j
+					# Compare radius
+					if self._calcfzone(&rad, seg, ccell, l):
+						hits[ccell[0], ccell[1], ccell[2]] = rad
+						hcc += 1
+					ccell[axp] = <long>mpc[axp] - i
+					ccell[axpp] = <long>mpc[axpp] + j
+					# Compare radius
+					if self._calcfzone(&rad, seg, ccell, l):
+						hits[ccell[0], ccell[1], ccell[2]] = rad
+						hcc += 1
+					ccell[axpp] = <long>mpc[axpp] - j
+					# Compare radius
+					if self._calcfzone(&rad, seg, ccell, l):
+						hits[ccell[0], ccell[1], ccell[2]] = rad
+						hcc += 1
+					# Stop if no hits found in column
+					if not hcc: break
+					# Otherwise, check the next column
+					j += 1
+					hcr += hcc
+				# Stop if no hits found in row
+				if not hcr: break
+				# Otherwise, check next row
+				i += 1
+		return hits
+
+	@cython.cdivision(True)
+	cdef bint _calcfzone(self, double *dist, Segment3D seg, long *cell, double l):
+		'''
+		For a given segment and a cell with indices { i, j, k },
+		calculate the distance from the midpoint of the cell to the
+		segment as a fraction of the Fresnel radius at the projection
+		of the midpoint onto the segment for a dominant wavelength l.
+
+		Returns True and stores the fractional distance in dist if the
+		midpoint is in the Fresnel zone. Otherwise, returns False and
+		leaves dist untouched.
+		'''
+		cdef double rad
+		cdef double pdist[2]
+		cdef point mpt
+
+		if not (0 <= cell[0] < self.nx
+				and 0 <= cell[1] < self.ny and 0 <= cell[2] < self.nz):
+			# Out-of-bounds cells are not in the zone
+			return False
+
+		# Find the midpoint of the cell
+		mpt = self._cell2cart(cell[0] + 0.5, cell[1] + 0.5, cell[2] + 0.5)
+
+		# Find the perpendicular distance and the fractional projection
+		seg._ptdist(pdist, mpt)
+
+		if not 0 < pdist[1] < 1:
+			# If projection is beyond segment, midpoint is not in zone
+			return False
+
+		# Calculate Fresnel radius
+		rad = sqrt(l * seg.length * pdist[1] * (1.0 - pdist[1]))
+
+		if pdist[0] >= rad or almosteq(rad, 0.0):
+			# If point is beyond radius, or radius is zero, not in zone
+			return False
+
+		dist[0] = pdist[0] / rad
+		return True
+
 
 	@cython.embedsignature(True)
 	def neighborhood(self, p, length):
