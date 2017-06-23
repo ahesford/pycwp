@@ -87,7 +87,7 @@ cdef class Segment3D:
 		return pt2tup(ds)
 
 	@cython.cdivision(True)
-	cdef int _ptdist(self, double *results, point pt):
+	cdef int _ptdist(self, double *results, point pt, bint bounded):
 		''' C backer for ptdist. '''
 		cdef point ap, apn, n
 		cdef double nn, ptd
@@ -107,32 +107,47 @@ cdef class Segment3D:
 
 		# Compute the fractional projection onto nn
 		results[1] = -dot(ap, n) / nn
+
+		if bounded:
+			if results[1] < 0:
+				# Point is before start; find distance to start
+				results[0] = ptnrm(ap)
+				return 0
+			elif results[1] > 1:
+				# Point is after end; find distance to end
+				results[0] = ptnrm(axpy(-1.0, self._end, pt))
+				return 0
+
 		# Compute the length of the perpendicular component
 		results[0] = ptnrm(axpy(results[1], n, ap))
 		return 0
 
 	@cython.embedsignature(True)
-	def ptdist(self, p):
+	def ptdist(self, p, bint bounded=False):
 		'''
-		Calculate and return:
+		For p, a sequence of 3 floats, calculate and return:
 
-		  1. The perpendicular distance from the given point p, as a
-		     sequence of three floats, to the line coincident with this
-		     segment, and
+		  1. The perpendicular distance from p to the line coincident
+		     with this segment (see note), and
 
-		  2. The projection of the line from the starting point
-		     self.start to p onto this segment, as a fraction of
-		     self.length.
+		  2. The projection of the point p onto this segment, as a
+		     fraction of self.length.
 
 		If this segment is degenerate (self.direction is 0,0,0), the
 		distance will be that from the point to self.start, while the
 		projection will be 0.
+
+		NOTE: If bounded is True, and the fractional projection (the
+		second return value) is not in the range [0, 1], the computed
+		distance (the first return value) will be the distance from p
+		to self.start if the projection is negative and the distance
+		from p to self.end if the projection is greater than unity.
 		'''
 		cdef point pt
 		cdef double results[2]
 
 		tup2pt(&pt, p)
-		self._ptdist(results, pt)
+		self._ptdist(results, pt, bounded)
 		return results[0], results[1]
 
 	@cython.embedsignature(True)
@@ -1255,20 +1270,20 @@ cdef class Box3D:
 
 		cdef:
 			Segment3D seg
-			int axis, axp, axpp
-			point spt, ept, mpt
+			int axis, axp, axpp, k
+			point spt, ept, mpt, mpc
 			double smin, scell, rad, tlen, slen
-			long stslab, edslab, slab, hcc, hcr, i, j, sg, sgp
+			long stslab, edslab, slab, hcc, hcr
+			long i, j, sg, sgp, irad, jrad
 
 			double tlims[2]
 			double scl[3]
 			double ecl[3]
-			long ngrid[3]
-			double cell[3]
 			double lo[3]
 			double hi[3]
 			long ccell[3]
-			double mpc[3]
+			long ncell[3]
+			long ngrid[3]
 
 		hits = { }
 
@@ -1279,6 +1294,10 @@ cdef class Box3D:
 			tlen += sqrt((pts[sgp,0] - pts[sg,0])**2 +
 					(pts[sgp,1] - pts[sg,1])**2 +
 					(pts[sgp,2] - pts[sg,2])**2)
+
+
+		# Copy the grid to an array
+		ngrid[0], ngrid[1], ngrid[2] = self.nx, self.ny, self.nz
 
 		# Loop through each segment
 		slen = 0.0
@@ -1306,25 +1325,21 @@ cdef class Box3D:
 			pt2arr(scl, self._cart2cell(spt.x, spt.y, spt.z))
 			pt2arr(ecl, self._cart2cell(ept.x, ept.y, ept.z))
 
-			# Store grid dimensions as array
-			ngrid[0], ngrid[1], ngrid[2] = self.nx, self.ny, self.nz
-			pt2arr(cell, self._cell)
-
-			# Compute the start and end slabs of the segment
-			stslab = max(0, min(ngrid[axis] - 1, <long>(scl[axis])))
-			edslab = max(0, min(ngrid[axis] - 1, <long>(ecl[axis])))
-			if edslab < stslab: stslab, edslab = edslab, stslab
-
 			# Store the corners of slabs as arrays
 			pt2arr(lo, self._lo)
 			pt2arr(hi, self._hi)
 
-			# Grab the slab minimum and thickness
+			# Grab the slab minimum, thickness and maximum count
 			smin = lo[axis]
 			if axis == 0: scell = self._cell.x
 			elif axis == 1: scell = self._cell.y
 			elif axis == 2: scell = self._cell.z
 			else: raise IndexError('Invalid major axis %d' % (axis,))
+
+			# Compute the start and end slabs of the segment
+			stslab = max(0, min(ngrid[axis] - 1, <long>(scl[axis])))
+			edslab = max(0, min(ngrid[axis] - 1, <long>(ecl[axis])))
+			if edslab < stslab: stslab, edslab = edslab, stslab
 
 			# Loop through all slabs to pick up neighbors
 			for slab in range(stslab, edslab + 1):
@@ -1342,37 +1357,33 @@ cdef class Box3D:
 				tlims[0], tlims[1] = max(0, tlims[0]), min(1, tlims[1])
 				# Find midpoint and its cell coordinates
 				mpt = lintp(0.5 * (tlims[0] + tlims[1]), seg._start, seg._end)
-				pt2arr(mpc, self._cart2cell(mpt.x, mpt.y, mpt.z))
+				mpc = self._cart2cell(mpt.x, mpt.y, mpt.z)
+				# Find cell index for midpoint
+				ccell[0] = <long>mpc.x
+				ccell[1] = <long>mpc.y
+				ccell[2] = <long>mpc.z
+
 				# Search the neighborhood
-				ccell[axis] = <long>mpc[axis]
-				i = 0
-				while True:
-					hcr, j = 0, 0
-					while True:
+				ncell[axis] = ccell[axis]
+				irad = max(ccell[axp], ngrid[axp] - ccell[axp])
+				jrad = max(ccell[axpp], ngrid[axpp] - ccell[axpp])
+				for i in range(irad):
+					hcr = 0
+					for j in range(jrad):
 						hcc = 0
-						ccell[axp] = <long>mpc[axp] + i
-						ccell[axpp] = <long>mpc[axpp] + j
-						# Evaluate midpoint of neighbor cell
-						hcc += self._chkfzone(hits, seg, ccell, l, tlen, slen)
-						ccell[axpp] = <long>mpc[axpp] - j
-						# Evaluate midpoint of neighbor cell
-						hcc += self._chkfzone(hits, seg, ccell, l, tlen, slen)
-						ccell[axp] = <long>mpc[axp] - i
-						ccell[axpp] = <long>mpc[axpp] + j
-						# Evaluate midpoint of neighbor cell
-						hcc += self._chkfzone(hits, seg, ccell, l, tlen, slen)
-						ccell[axpp] = <long>mpc[axpp] - j
-						# Evaluate midpoint of neighbor cell
-						hcc += self._chkfzone(hits, seg, ccell, l, tlen, slen)
+						# Loop through all neighbor corners
+						for k in range(4):
+							# Neighbor cell index
+							ncell[axp] = ccell[axp] + i * (2 * (k % 2) - 1)
+							ncell[axpp] = ccell[axpp] + j * (2 * (k / 2) - 1)
+							# Evaluate midpoint of neighbor cell
+							hcc += self._chkfzone(hits, seg, ncell, l, tlen, slen)
 						# Stop if no hits found in column
 						if not hcc: break
 						# Otherwise, check the next column
-						j += 1
 						hcr += hcc
 					# Stop if no hits found in row
 					if not hcr: break
-					# Otherwise, check next row
-					i += 1
 			# Keep track of global length at next segment start
 			slen += seg.length
 		return hits
@@ -1418,19 +1429,15 @@ cdef class Box3D:
 		# Find the midpoint of the cell
 		mpt = self._cell2cart(cell[0] + 0.5, cell[1] + 0.5, cell[2] + 0.5)
 
-		# Find the perpendicular distance and the fractional projection
-		seg._ptdist(pdist, mpt)
-
-		if not 0 < pdist[1] < 1:
-			# If projection is beyond segment, midpoint is not in zone
-			return 0
+		# Find the (bounded) distance and the fractional projection
+		seg._ptdist(pdist, mpt, 1)
 
 		# Use sensible default values for curve length parameters
 		if tlen < 0: tlen = seg.length
 		if slen < 0: slen = 0.0
 
-		# Convert fractional distance to real distance along curve
-		pdist[1] = seg.length * pdist[1] + slen
+		# Convert fractional distance to real distance along curve, bounded
+		pdist[1] = max(min(tlen, seg.length * pdist[1] + slen), 0)
 
 		# Calculate Fresnel radius
 		rad = sqrt(l * pdist[1] * (1.0 - pdist[1] / tlen))
