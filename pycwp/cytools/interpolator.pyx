@@ -49,6 +49,8 @@ cdef inline void wsimpson3(point *ival, point fa, double wa,
 	ival.z = h * (wa * fa.z + 4 * wc * fc.z + wb * fb.z) / 6
 	return
 
+class TraceError(Exception): pass
+
 cdef class LagrangeInterpolator3D(Interpolator3D):
 	'''
 	An Interpolator3D that implements piecewise Lagrange interpolation of
@@ -1115,9 +1117,9 @@ cdef class Interpolator3D:
 	@cython.wraparound(False)
 	@cython.boundscheck(False)
 	@cython.embedsignature(True)
-	def minpath(self, start, end, unsigned long nmax,
-			double itol, double ptol, h=1.0,
-			double perturb=0.0, unsigned long nstart=1, **kwargs):
+	def minpath(self, start, end, unsigned long nmax, double itol, double ptol,
+			h=1.0, double perturb=0.0, unsigned long nstart=1,
+			bint warn_on_fail=True, bint raise_on_fail=False, **kwargs):
 		'''
 		Given 3-vectors start and end in grid coordinates, search for a
 		path between start and end that minimizes the path integral of
@@ -1138,6 +1140,13 @@ cdef class Interpolator3D:
 		midpoints introduced in each iteration will be perturbed by a
 		uniformly random variable in the interval [-perturb, perturb]
 		before the refined path is optimized.
+
+		If warn_on_fail is True, a warning will be issued whenever an
+		optimum path cannot be found for some iteration. Optimization
+		will continue despite the failure. If raise_on_fail is True, a
+		TraceError exception will be raised whenever an optimum path
+		cannot be found for some iteration. Optimization will not
+		continue.
 
 		The method scipy.optimize.fmin_l_bfgs_b will be used to
 		minimize the objective for each path subdivision. All extra
@@ -1233,7 +1242,8 @@ cdef class Interpolator3D:
 					msg += 'limits exceeded'
 				elif info['warnflag'] == 2:
 					msg += str(info.get('task', 'unknown warning'))
-				warnings.warn(msg)
+				if raise_on_fail: raise TraceError(msg)
+				elif warn_on_fail: warnings.warn(msg)
 
 			if nf < bf:
 				# Record the current best path
