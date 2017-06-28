@@ -12,6 +12,7 @@ cimport numpy as np
 from math import sqrt
 from libc.math cimport sqrt
 
+@cython.embedsignature(True)
 @cython.cdivision(True)
 @cython.boundscheck(False)
 @cython.wraparound(False)
@@ -116,6 +117,7 @@ def epr(img, fwd=False):
 	return eprnorm, np.asarray(gimg)
 
 
+@cython.embedsignature(True)
 @cython.cdivision(True)
 @cython.boundscheck(False)
 @cython.wraparound(False)
@@ -215,6 +217,7 @@ def totvar(img, fwd=False, eps=0.01):
 	return tvnorm, np.asarray(gimg)
 
 
+@cython.embedsignature(True)
 @cython.cdivision(True)
 @cython.boundscheck(False)
 @cython.wraparound(False)
