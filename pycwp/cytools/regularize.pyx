@@ -49,20 +49,17 @@ def epr(img, fwd=False):
 
 	cdef double[:,:,:] gimg = np.zeros((nx, ny, nz), dtype=np.float64)
 
-	cdef unsigned long i, j, k, ip, im, jp, jm, kp, km
-	cdef double cv, dxf, dyf, dzf, dxp, dyp, dzp, dxxf, dyyf, dzzf
+	cdef unsigned long i, j, k, im, jm, km
+	cdef double cv, dxf, dyf, dzf, dxxf, dyyf, dzzf
 	cdef double eprnorm = 0.0, gnorm, gv
 
 	cdef long fdir = 1 if not fwd else -1
 
 	for i in range(1, nx - 1):
-		ip = i + fdir
 		im = i - fdir
 		for j in range(1, ny - 1):
-			jp = j + fdir
 			jm = j - fdir
 			for k in range(1, nz - 1):
-				kp = k + fdir
 				km = k - fdir
 
 				cv = cimg[i,j,k]
@@ -72,12 +69,6 @@ def epr(img, fwd=False):
 				dxf = cv - cimg[im,j,k]
 				dyf = cv - cimg[i,jm,k]
 				dzf = cv - cimg[i,j,km]
-
-				# If not fwd, this is the forward difference
-				# Otherwise, it is the negative backward difference
-				dxp = cimg[ip,j,k] - cv
-				dyp = cimg[i,jp,k] - cv
-				dzp = cimg[i,j,kp] - cv
 
 				dxxf = dxf * dxf
 				dyyf = dyf * dyf
@@ -97,21 +88,14 @@ def epr(img, fwd=False):
 				dzzf += 1.0
 
 				# Accumulate the gradient terms (first difference)
-				gv = dxf / (dxxf * dxxf)
-				gv += dyf * (dyyf * dyyf)
-				gv += dzf * (dzzf * dzzf)
+				gimg[i,j,k] += 2 * dxf / (dxxf * dxxf)
+				gimg[i,j,k] += 2 * dyf / (dyyf * dyyf)
+				gimg[i,j,k] += 2 * dzf / (dzzf * dzzf)
 
-				# Compute denominators for other gradient terms
-				dxxf = (dxp * dxp + 1.0)
-				dyyf = (dyp * dyp + 1.0)
-				dzzf = (dzp * dzp + 1.0)
-
-				# Accumulate gradient terms for second differences
-				gv -= dxp / (dxxf * dxxf)
-				gv -= dyp / (dyyf * dyyf)
-				gv -= dzp / (dzzf * dzzf)
-
-				gimg[i,j,k] = gv
+				# Accumulate shifted gradient terms
+				gimg[im,j,k] -= 2 * dxf / (dxxf * dxxf)
+				gimg[i,jm,k] -= 2 * dyf / (dyyf * dyyf)
+				gimg[i,j,km] -= 2 * dzf / (dzzf * dzzf)
 
 	# Return the norm and its gradient
 	return eprnorm, np.asarray(gimg)
@@ -156,20 +140,17 @@ def totvar(img, fwd=False, eps=0.01):
 
 	cdef double[:,:,:] gimg = np.zeros((nx, ny, nz), dtype=np.float64)
 
-	cdef unsigned long i, j, k, ip, im, jp, jm, kp, km
-	cdef double cv, dxf, dyf, dzf, dxp, dyp, dzp
+	cdef unsigned long i, j, k, im, jm, km
+	cdef double cv, dxf, dyf, dzf
 	cdef double tvnorm = 0.0, gnorm, heps = 0.5 * eps, gv
 
 	cdef long fdir = 1 if not fwd else -1
 
 	for i in range(1, nx - 1):
-		ip = i + fdir
 		im = i - fdir
 		for j in range(1, ny - 1):
-			jp = j + fdir
 			jm = j - fdir
 			for k in range(1, nz - 1):
-				kp = k + fdir
 				km = k - fdir
 
 				cv = cimg[i,j,k]
@@ -179,12 +160,6 @@ def totvar(img, fwd=False, eps=0.01):
 				dxf = cv - cimg[im,j,k]
 				dyf = cv - cimg[i,jm,k]
 				dzf = cv - cimg[i,j,km]
-
-				# If not fwd, this is the forward difference
-				# Otherwise, it is the negative backward difference
-				dxp = cimg[ip,j,k] - cv
-				dyp = cimg[i,jp,k] - cv
-				dzp = cimg[i,j,kp] - cv
 
 				# Compute norm of this gradient
 				gnorm = sqrt(dxf * dxf + dyf * dyf + dzf * dzf)
@@ -196,22 +171,12 @@ def totvar(img, fwd=False, eps=0.01):
 				gnorm += heps
 
 				# Compute the central term of the gradient
-				# Sign must be adjusted for forward differencing
-				gv = (dxf + dyf + dzf) / gnorm
+				gimg[i,j,k] += (dxf + dyf + dzf) / gnorm
 
-				# Backward differences are only needed squared
-				# Shift square differences away from zero
-				dxf = dxf * dxf + heps
-				dyf = dyf * dyf + heps
-				dzf = dzf * dzf + heps
-
-				# Half epsilon in two "f" terms combine
-				# to make full epsilon under square root
-				gv -= dxp / sqrt(dxp * dxp + dyf + dzf)
-				gv -= dyp / sqrt(dxf + dyp * dyp + dzf)
-				gv -= dzp / sqrt(dxf + dyf + dzp * dzp)
-
-				gimg[i,j,k] = gv
+				# Compute shifted terms
+				gimg[im,j,k] -= dxf / gnorm
+				gimg[i,jm,k] -= dyf / gnorm
+				gimg[i,j,km] -= dzf / gnorm
 
 	# Return the norm and its gradient
 	return tvnorm, np.asarray(gimg)
