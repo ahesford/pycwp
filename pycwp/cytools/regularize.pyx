@@ -4,8 +4,6 @@
 import cython
 cimport cython
 
-from cython cimport floating as real
-
 import numpy as np
 cimport numpy as np
 
