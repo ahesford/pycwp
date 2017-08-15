@@ -31,6 +31,12 @@ cdef class QuadPair:
 		'''
 		return cos(self.theta)
 
+	def __repr__(self):
+		'''
+		Return a pretty-print version of the quadrature pair.
+		'''
+		return '%s(%r, %r)' % (self.__class__.__name__, self.theta, self.weight)
+
 
 @cython.embedsignature(True)
 def glpair(size_t n, size_t k):
