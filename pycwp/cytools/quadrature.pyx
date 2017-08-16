@@ -45,7 +45,7 @@ def glpair(size_t n, size_t k):
 	a Gauss-Legendre quadrature rule of order n.
 	'''
 	cdef qpstruct result
-	cdef int rcode = cglpair(&result, n, k + 1)
+	cdef int rcode = cglpair(&result, n, k)
 
 	if not rcode:
 		raise ValueError('Node index k must be in range [0, n) for quadature order n')
