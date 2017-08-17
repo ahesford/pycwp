@@ -35,14 +35,14 @@ cdef inline int tup2pt(point *pt, object p) except -1:
 
 	return 0
 
-cdef inline point packpt(double x, double y, double z):
+cdef inline point packpt(double x, double y, double z) nogil:
 	cdef point r
 	r.x = x
 	r.y = y
 	r.z = z
 	return r
 
-cdef inline void pt2arr(double *arr, point pt):
+cdef inline void pt2arr(double *arr, point pt) nogil:
 	arr[0] = pt.x
 	arr[1] = pt.y
 	arr[2] = pt.z

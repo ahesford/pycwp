@@ -4,6 +4,7 @@ to perform ray-tracing based on oct-tree decompositions or a linear marching
 algorithm.
 '''
 
+
 # Copyright (c) 2017 Andrew J. Hesford. All rights reserved.
 # Restrictions are listed in the LICENSE file distributed with this package.
 
@@ -28,26 +29,10 @@ cdef inline double randf() nogil:
 	'''
 	return <double>rand() / <double>RAND_MAX
 
-cdef inline double simpson(double fa, double fb, double fc, double h) nogil:
-	'''
-	Return the Simpson integral, over an interval h = b - a for some
-	endpoints a, b, of a function with values fa = f(a), fb = f(b), and
-	f(c) = f(0.5 * (a + b)).
-	'''
-	return h * (fa + 4 * fc + fb) / 6
-
-cdef inline void wsimpson3(point *ival, point fa, double wa,
-		point fb, double wb, point fc, double wc, double h) nogil:
-	'''
-	Compute, in ival, the component-wise weighted Simpson integral, over an
-	interval h = b - a for some endpoints a, b, of a function with weighted
-	values f(a) = wa * fa, f(b) = wb * fb, f(c) = wc * fc, where the
-	midpoint c = 0.5 * (a + b).
-	'''
-	ival.x = h * (wa * fa.x + 4 * wc * fc.x + wb * fb.x) / 6
-	ival.y = h * (wa * fa.y + 4 * wc * fc.y + wb * fb.y) / 6
-	ival.z = h * (wa * fa.z + 4 * wc * fc.z + wb * fb.z) / 6
-	return
+ctypedef struct PathIntContext:
+	point a
+	point b
+	bint dograd
 
 class TraceError(Exception): pass
 
@@ -1052,7 +1037,7 @@ cdef class LinearInterpolator3D(Interpolator3D):
 		return True
 
 
-cdef class Interpolator3D:
+cdef class Interpolator3D(Integrable):
 	'''
 	An abstract class to manage a function, sampled on a 3-D grid, that can
 	provide interpolated values of the function and its gradient anywhere
@@ -1313,29 +1298,21 @@ cdef class Interpolator3D:
 		cdef:
 			double ival = 0.0, fval = 0.0
 			double[:,:] pts = points
-			double fvals[2]
-			point igrad[2]
-			point gvals[2]
-			point a, b
 			point scale
+			point lgrad
+			point rgrad
 
-			point *igradp = <point *>NULL
-			point *gvalap = <point *>NULL
-			point *gvalbp = <point *>NULL
+			double results[7]
+			double ends[14]
+			unsigned int nval
+			PathIntContext ctx
+			point bah
+
+			double L
 
 			unsigned long i, im1
 
 		cdef np.ndarray[np.float64_t, ndim=2] pgrad
-
-		if grad:
-			# Get valid pointers to gradient storage
-			igradp = &igrad[0]
-			gvalap = &gvals[0]
-			gvalbp = &gvals[1]
-
-			# Allocate output for the path gradient
-			pgrad = np.zeros((npts, 3), dtype=np.float64)
-		else: pgrad = None
 
 		try:
 			nh = len(h)
@@ -1348,40 +1325,72 @@ cdef class Interpolator3D:
 				raise ValueError('Argument "h" must be a scalar or 3-sequence')
 			scale.x, scale.y, scale.z = float(h[0]), float(h[1]), float(h[2])
 
-		# Initialize the left point and its value
-		a = packpt(pts[0,0], pts[0,1], pts[0,2])
-		if not self._evaluate(&fvals[0], gvalap, a):
-			raise ValueError('Point %s out of bounds' % (pt2tup(a),))
+		# Initialize the integration context
+		ctx.dograd = grad
+
+		# Allocate output for the path gradient
+		if ctx.dograd:
+			pgrad = np.zeros((npts, 3), dtype=np.float64)
+			nval = 7
+		else:
+			pgrad = None
+			nval = 1
+
+		# Initialize the left point
+		ctx.a = packpt(pts[0,0], pts[0,1], pts[0,2])
+		# The integrand ignores ctx.b when u is 0
+		ctx.b = ctx.a
+		# Evaluate the integrand at the left endpoint
+		if not self._integrand(ends, 0., <void *>(&ctx)):
+			raise ValueError('Cannot evaluate integrand at point %s' % (pt2tup(ctx.a),))
 
 		for i in range(1, npts):
-			# Initialize the right point and its value
-			b = packpt(pts[i,0], pts[i,1], pts[i,2])
-			if not self._evaluate(&fvals[1], gvalbp, b):
-				raise ValueError('Point %s out of bounds' % (pt2tup(b),))
-			# Calculate contribution from this segment
-			if not self.segint(&ival, igradp, a, b, fvals, gvalap, tol, scale):
-				raise ValueError('Path %s -> %s out of bounds' % (pt2tup(a), pt2tup(b)))
+			# Initialize the right point
+			ctx.b = packpt(pts[i,0], pts[i,1], pts[i,2])
+			if not self._integrand(&(ends[nval]), 1., <void *>&(ctx)):
+				raise ValueError('Cannot evaluate integrand at point %s' % (pt2tup(ctx.b),))
+			# Calculate integrals over the segment
+			if not self._simpson(results, nval, tol, <void *>(&ctx), ends):
+				raise ValueError('Cannot evaluate integral from %s -> %s' % (pt2tup(ctx.a), pt2tup(ctx.b)))
+
+			# Scale coordinate axes
+			bah = axpy(-1.0, ctx.b, ctx.a)
+			iptmpy(scale, &bah)
+			L = ptnrm(bah)
+
+			# Scale integrals properly
+			ival = L * results[0]
+			if ctx.dograd:
+				lgrad = packpt(results[1], results[2], results[3])
+				rgrad = packpt(results[4], results[5], results[6])
+				# Scale gradients by inverse coordinate factors
+				iptdiv(scale, &lgrad)
+				iptdiv(scale, &rgrad)
+				# Start with integrals of function gradients
+				iscal(L, &lgrad)
+				iscal(L, &rgrad)
+				# Now add the step integral
+				iaxpy(results[0] / L, bah, &lgrad)
+				iaxpy(-results[0] / L, bah, &rgrad)
 
 			# Add segment contribution to path integral
 			fval += ival
 
-			# Cycle endpoints and function values for next round
-			a = b
-			fvals[0] = fvals[1]
+			# Cycle endpoints and integrands for next round
+			ctx.a = ctx.b
+			for im1 in range(nval):
+				ends[im1] = ends[im1 + nval]
 
 			if not grad: continue
 
 			# Add contribution to gradient from segment endpoints
 			im1 = i - 1
-			pgrad[im1, 0] += igrad[0].x
-			pgrad[im1, 1] += igrad[0].y
-			pgrad[im1, 2] += igrad[0].z
-			pgrad[i, 0] += igrad[1].x
-			pgrad[i, 1] += igrad[1].y
-			pgrad[i, 2] += igrad[1].z
-
-			# Cycle endpoint gradient for next round
-			gvals[0] = gvals[1]
+			pgrad[im1, 0] += lgrad.x
+			pgrad[im1, 1] += lgrad.y
+			pgrad[im1, 2] += lgrad.z
+			pgrad[i, 0] += rgrad.x
+			pgrad[i, 1] += rgrad.y
+			pgrad[i, 2] += rgrad.z
 
 		# Return just the function, if no gradient is desired
 		if not grad: return fval
@@ -1399,297 +1408,38 @@ cdef class Interpolator3D:
 	@cython.boundscheck(False)
 	@cython.wraparound(False)
 	@cython.cdivision(True)
-	cdef bint segint(self, double *ival, point *igrad, point a, point b,
-			double *fab, point *gfab, double tol, point scale) nogil:
+	cdef bint _integrand(self, double *results, double u, void *ctx) nogil:
 		'''
-		Evaluate, using an adaptive Simpson's rule with an expected
-		tolerance tol, the integral of the function f interpolated by
-		this instance along the linear segment from point a to point b.
+		Override Integrable._integrand to evaluate the value of the
+		interpolated function at a point along the segment from ctx.a
+		to ctx.b (with ctx interpreted as a PathIntContext struct),
+		along with (if ctx.dograd) the gradient contributions with
+		respect to each endpoint of the segment.
 
-		The value of the integral will be stored in ival, if ival is
-		not NULL, as
-
-		  ival[0] = L * Int[f((1 - u) a + u b), u, 0, 1],
-
-		where L = || b - a ||.
-
-		If igrad is not NULL, the gradients of this integral with
-		respect to points a and b will be stored as
-
-		  igrad[0] = (a - b) * Int[f((1 - u) a + u b), u, 0, 1] / L
-			   + L * Int[(1 - u) grad(f)((1 - u) a + u b), u, 0, 1]
-		  igrad[1] = (b - a) * Int[f((1 - u) a + u b), u, 0, 1] / L
-		           + L * Int[u grad(f)((1 - u) a + u b), u, 0, 1].
-
-		If fab is provided, it should contain values
-
-		  fab[0] = f(a), fab[1] = f(b).
-
-		Likewise, if gfab is provided and igrad is not NULL, it should
-		contain values
-
-		  gfab[0] = grad(f)(a), gfab[1] = grad(f)(b).
-
-		If these values are missing, they will be computed on the fly.
-
-		The point scale should provide factors (hx, hy, hz) that
-		multiplicatively scale grid coordinates (the units of a and b)
-		into real Cartesian coordinates. In other words, the following
-		quantities used to define ival and igrad are replaced:
-
-		  (b - a) -> scale . (b - a),
-		  (a - b) -> scale . (a - b),
-		  L -> L' = || scale . (b - a) ||,
-		  grad(f)((1 - u) a + u b) -> scale . grad(f)((1 - u) a + u b),
-
-		where '.' is the Hadamard product. Note that the *arguments* of
-		f and grad(f) (i.e., (1 - u) a + u b) are *NOT* scaled because
-		the function f is defined in grid coordinates.
-
-		If any function evaluation fails, False will be returned, and
-		ival and igrad will be untouched. True will be returned in the
-		event of successful evaluation.
+		The output array results must have length 1 if ctx.dograd is
+		False, or length 7 if ctx.dograd is True.
 		'''
 		cdef:
-			double fa, fb, fc, s, L
-			point gfa, gfb, gfc
-			point c = lintp(0.5, a, b)
-			point sgrad[2]
-			point *gfap = <point *>NULL
-			point *gfbp = <point *>NULL
-			point *gfcp = <point *>NULL
-			point *sgp = <point *>NULL
+			PathIntContext *sctx = <PathIntContext *>ctx
+			point p
+			point gf
+			double fv
 
-			unsigned int depth
+		# Cannot integrate without context!
+		if sctx == <PathIntContext *>NULL: return False
 
-			bint dograd = (igrad != <point *>NULL)
+		# Find the evaluation point
+		p = lintp(u, sctx.a, sctx.b)
 
-		if dograd:
-			gfap = &gfa
-			gfbp = &gfb
-			gfcp = &gfc
-			sgp = sgrad
-
-		if fab == <double *>NULL or (dograd and gfab == <point *>NULL):
-			# Need to compute function values at endpoints
-			if not self._evaluate(&fa, gfap, a): return False
-			if not self._evaluate(&fb, gfbp, b): return False
+		if sctx.dograd:
+			if not self._evaluate(&fv, &gf, p): return False
+			mu = 1 - u
+			results[0] = fv
+			pt2arr(&(results[1]), scal(1 - u, gf))
+			pt2arr(&(results[4]), scal(u, gf))
 		else:
-			# Can copy provided values
-			fa, fb = fab[0], fab[1]
-			if dograd:
-				gfa = gfab[0]
-				gfb = gfab[1]
-
-		# Evaluate function at midpoint
-		if not self._evaluate(&fc, gfcp, c): return False
-
-		# Compute the Simpson integrals over the whole interval
-		s = simpson(fa, fb, fc, 1)
-		if dograd:
-			wsimpson3(&sgrad[0], gfa, 1, gfb, 0, gfc, 0.5, 1)
-			wsimpson3(&sgrad[1], gfa, 0, gfb, 1, gfc, 0.5, 1)
-
-		L = ptdst(b, a)
-		# Avoid too small intervals: constant 52 is -log2(DBL_EPSILON)
-		# This should ensure at least one step is taken, but not more
-		# than will make the smallest interval less than DBL_EPSILON,
-		# and never more than 256 regardless.
-		depth = <unsigned int>min(max(1, log2(L) + 52), 256)
-
-		if not self.segintaux(&s, sgp, a, b, 0, 1, tol,
-				fa, fb, fc, gfap, gfbp, gfcp, depth): return False
-
-		# Scale coordinate axes
-		gfc = axpy(-1.0, b, a)
-		iptmpy(scale, &gfc)
-		L = ptnrm(gfc)
-
-		# Scale integral properly
-		if ival != <double *>NULL: ival[0] = L * s
-		if dograd:
-			# Scale gradients by inverse coordinate factors
-			iptdiv(scale, &sgrad[0])
-			iptdiv(scale, &sgrad[1])
-			# Start with integrals of function gradients
-			igrad[0] = scal(L, sgrad[0])
-			igrad[1] = scal(L, sgrad[1])
-			# Now add the step integral
-			iaxpy(s / L, gfc, &igrad[0])
-			iaxpy(-s / L, gfc, &igrad[1])
-
-		return True
-
-
-	cdef bint segintaux(self, double *ival, point *igrad,
-			point a, point b, double ua, double ub,
-			double tol, double fa, double fb, double fc,
-			point *gfa, point *gfb, point *gfc,
-			unsigned int maxdepth) nogil:
-		'''
-		A recursive helper function for self.segint. Computes, if f is
-		the function interpolated by self,
-
-		  ival[0] = Int[f((1 - u) a + u b), u, ua, ub].
-
-		If ival is NULL, this method returns False without taking
-		further action.
-
-		If igrad is not NULL, the gradient integrals
-
-		  igrad[0] = Int[(1 - u) grad(f)((1 - u) a + u b), u, ua, ub],
-		  igrad[1] = Int[u grad(f)((1 - u) a + u b), u, ua, ub]
-
-		will also be computed.
-
-		An adaptive rule will recursively subdivide the interval until
-		a tolerance of tol can be achieved in all evaluated integrals
-		or the maximum recursion depth maxdepth is reached.
-
-		On input, the value stored in ival should hold the standard
-		Simpson approximation to the integral and, if igrad is not
-		NULL, the values in igrad[0] and igrad[1] should hold the
-		standard Simpson approximations to the gradient integrals to be
-		evaluated.
-
-		The values of the function at the end and midpoints should be
-		provided as
-
-			fa = f((1 - ua) a + ua b),
-			fb = f((1 - ub) a + ub b),
-			fc = f((1 - uc) a + uc b),
-
-		where the midpoint uc = 0.5 (ua + ub). If igrad is not NULL,
-		the gradients must be provided as
-
-			gfa[0] = grad(f)((1 - ua) a + ua b),
-			gfb[0] = grad(f)((1 - ub) a + ub b),
-			gfc[0] = grad(f)((1 - uc) a + uc b).
-
-		If igrad is NULL, these arguments are ignored.
-
-		NOTE: If igrad is not NULL, this method will return False
-		without further evaluation if gfa, gfb, or gfc are NULL.
-		'''
-		cdef:
-			# Midpoint, interval, half interval
-			double uc = 0.5 * (ua + ub)
-			double h = ub - ua
-			double h2 = 0.5 * h
-
-			# Midpoints for left and right halve of interval
-			double ud = 0.75 * ua + 0.25 * ub
-			double ue = 0.25 * ua + 0.75 * ub
-			point pd = lintp(ud, a, b)
-			point pe = lintp(ue, a, b)
-
-			# Gradients at midpoints, if necessary
-			point gd, ge
-			# For convenience
-			point *gdp = <point *>NULL
-			point *gep = <point *>NULL
-
-			# Whether gradients are needed
-			bint dograd = (igrad != <point *>NULL)
-
-			# Function value at midpoints
-			double fd, fe
-
-			# Half-interval integrals, and their sums
-			double sleft, sright, s2
-			# Half-interval gradient integrals, and their sums
-			point sgleft[2]
-			point sgright[2]
-			point sg2[2]
-			# Gradient-integral errors
-			point sgerr[2]
-			double ta, tb, tc, td, te
-			double errmax = 0.0
-
-		if ival == <double *>NULL: return False
-
-		sg2[0].x = sg2[0].y = sg2[0].z = 0.0
-		sg2[1].x = sg2[1].y = sg2[1].z = 0.0
-		sgerr[0].x = sgerr[0].y = sgerr[0].z = 0.0
-		sgerr[1].x = sgerr[1].y = sgerr[1].z = 0.0
-
-		if dograd:
-			# If gradients are desired, store computed gradients
-			gdp = &gd
-			gep = &ge
-
-		# Evaluate function (and gradient) at the midpoints
-		if not self._evaluate(&fd, gdp, pd): return False
-		if not self._evaluate(&fe, gep, pe): return False
-
-		# Compute integrals over left and right half intervals
-		sleft = simpson(fa, fc, fd, h2)
-		sright = simpson(fc, fb, fe, h2)
-		# Compute the refined approximation to the whole interval
-		s2 = sleft + sright
-		# Estimate integration error
-		errmax = fabs(s2 - ival[0])
-
-		if dograd:
-			# Gradient arguments must be provided
-			if (gfa == <point *>NULL or gfb == <point *>NULL
-					or gfc == <point *>NULL): return False
-
-			# Integrate over the left and right half intervals
-			ta, tb, tc, td, te = 1 - ua, 1 - ub, 1 - uc, 1 - ud, 1 - ue
-			wsimpson3(&sgleft[0], gfa[0], ta, gfc[0], tc, gd, td, h2)
-			wsimpson3(&sgright[0], gfc[0], tc, gfb[0], tb, ge, te, h2)
-			wsimpson3(&sgleft[1], gfa[0], ua, gfc[0], uc, gd, ud, h2)
-			wsimpson3(&sgright[1], gfc[0], uc, gfb[0], ub, ge, ue, h2)
-
-			# Compute the refined integrals over whole intervals
-			sg2[0] = axpy(1.0, sgleft[0], sgright[0])
-			sg2[1] = axpy(1.0, sgleft[1], sgright[1])
-
-			# Estimate component-wise errors
-			sgerr[0] = axpy(-1.0, igrad[0], sg2[0])
-			sgerr[1] = axpy(-1.0, igrad[1], sg2[1])
-
-			# Find maximum error component for convergence tests
-			errmax = max(fabs(sgerr[0].x), fabs(sgerr[0].y),
-					fabs(sgerr[0].z), fabs(sgerr[1].x),
-					fabs(sgerr[1].y), fabs(sgerr[1].z), errmax)
-
-		# Check for convergence
-		# Make sure half-step doesn't collapse
-		# Tolerances below epsilon don't make much sense
-		tol = max(tol, DBL_EPSILON)
-		if maxdepth < 1 or h2 <= DBL_EPSILON or errmax <= 15 * tol:
-			ival[0] = s2 + (s2 - ival[0]) / 15
-			if dograd:
-				igrad[0] = axpy(1. / 15., sgerr[0], sg2[0])
-				igrad[1] = axpy(1. / 15., sgerr[1], sg2[1])
-			return True
-
-		# Cut tolerance in half for half-interval integration
-		ta = tol / 2
-
-		if dograd:
-			# Reuse gradient integrals and errors
-			if not self.segintaux(&sleft, sgleft, a, b, ua, uc, ta,
-					fa, fc, fd, gfa, gfc, gdp, maxdepth - 1):
-				return False
-			if not self.segintaux(&sright, sgright, a, b, uc, ub, ta,
-					fc, fb, fe, gfc, gfb, gep, maxdepth - 1):
-				return False
-			igrad[0] = axpy(1.0, sgleft[0], sgright[0])
-			igrad[1] = axpy(1.0, sgleft[1], sgright[1])
-		else:
-			# Do not evaluate gradient integrals on subintervals
-			if not self.segintaux(&sleft, NULL, a, b, ua, uc, ta,
-					fa, fc, fd, NULL, NULL, NULL, maxdepth - 1):
-				return False
-			if not self.segintaux(&sright, NULL, a, b, uc, ub, ta,
-					fc, fb, fe, NULL, NULL, NULL, maxdepth - 1):
-				return False
-
-		# Merge the integrals from each side
-		ival[0] = sleft + sright
+			if not self._evaluate(&fv, <point *>NULL, p): return False
+			results[0] = fv
 		return True
 
 

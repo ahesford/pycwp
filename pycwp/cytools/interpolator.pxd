@@ -18,26 +18,21 @@ from cpython.mem cimport PyMem_Malloc, PyMem_Free
 from libc.math cimport fabs, log2
 
 from ptutils cimport point
+from quadrature cimport Integrable
 
-cdef class Interpolator3D:
+cdef class Interpolator3D(Integrable):
 	cdef double *coeffs
 	cdef unsigned long ncx, ncy, ncz
 	cdef bint _usedef
 	cdef double _default
-
-	cdef bint segint(self, double *ival, point *igrad, point a, point b,
-			double *fab, point *gfab, double tol, point scale) nogil
-	cdef bint segintaux(self, double *ival, point *igrad,
-			point a, point b, double ua, double ub,
-			double tol, double fa, double fb, double fc,
-			point *gfa, point *gfb, point *gfc,
-			unsigned int maxdepth) nogil
 
 	@staticmethod
 	cdef bint crdfrac(point *t, long *i, long *j, long *k,
 			point p, long nx, long ny, long nz) nogil
 
 	cdef bint _evaluate(self, double *f, point *grad, point p) nogil
+
+	cdef bint _integrand(self, double *, double, void *) nogil
 
 
 cdef class LagrangeInterpolator3D(Interpolator3D):
