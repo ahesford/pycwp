@@ -3,8 +3,6 @@ Classes to represent axis-aligned 3-D bounding boxes and 3-D line segments, and
 to perform ray-tracing based on oct-tree decompositions or a linear marching
 algorithm.
 '''
-
-
 # Copyright (c) 2017 Andrew J. Hesford. All rights reserved.
 # Restrictions are listed in the LICENSE file distributed with this package.
 
@@ -1341,16 +1339,16 @@ cdef class Interpolator3D(Integrable):
 		# The integrand ignores ctx.b when u is 0
 		ctx.b = ctx.a
 		# Evaluate the integrand at the left endpoint
-		if not self._integrand(ends, 0., <void *>(&ctx)):
+		if not self.integrand(ends, 0., <void *>(&ctx)):
 			raise ValueError('Cannot evaluate integrand at point %s' % (pt2tup(ctx.a),))
 
 		for i in range(1, npts):
 			# Initialize the right point
 			ctx.b = packpt(pts[i,0], pts[i,1], pts[i,2])
-			if not self._integrand(&(ends[nval]), 1., <void *>&(ctx)):
+			if not self.integrand(&(ends[nval]), 1., <void *>&(ctx)):
 				raise ValueError('Cannot evaluate integrand at point %s' % (pt2tup(ctx.b),))
 			# Calculate integrals over the segment
-			if not self._simpson(results, nval, tol, <void *>(&ctx), ends):
+			if not self.simpson(results, nval, tol, <void *>(&ctx), ends):
 				raise ValueError('Cannot evaluate integral from %s -> %s' % (pt2tup(ctx.a), pt2tup(ctx.b)))
 
 			# Scale coordinate axes
@@ -1408,9 +1406,9 @@ cdef class Interpolator3D(Integrable):
 	@cython.boundscheck(False)
 	@cython.wraparound(False)
 	@cython.cdivision(True)
-	cdef bint _integrand(self, double *results, double u, void *ctx) nogil:
+	cdef bint integrand(self, double *results, double u, void *ctx) nogil:
 		'''
-		Override Integrable._integrand to evaluate the value of the
+		Override Integrable.integrand to evaluate the value of the
 		interpolated function at a point along the segment from ctx.a
 		to ctx.b (with ctx interpreted as a PathIntContext struct),
 		along with (if ctx.dograd) the gradient contributions with

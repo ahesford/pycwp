@@ -8,10 +8,13 @@ def configuration(parent_package='', top_path=None):
 	from Cython.Build import cythonize
 	import os
 
-	config = Configuration('cytools', parent_package, top_path)
+	config = Configuration('cytools', parent_package, top_path, package_data={ })
 
-	for ext in cythonize([os.path.join(d, '*.pyx') 
-			for d in config.package_dir.itervalues()]): 
+	# Put includes to package_data to install them
+	config.package_data.update({ k: [ '*.pxd' ] for k in config.package_dir })
+
+	for ext in cythonize([ os.path.join(d, '*.pyx')
+			for d in config.package_dir.itervalues() ]):
 		config.ext_modules.append(ext)
 
 	return config

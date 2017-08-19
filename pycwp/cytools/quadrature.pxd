@@ -19,7 +19,7 @@ cdef class Integrable:
 	A class to represent integrable functions, and an adaptive Simpson
 	quadrature to integrate them.
 	'''
-	cdef bint _integrand(self, double *, double, void *) nogil
-	cdef bint _simpson(self, double *, unsigned int, double, void *, double *) nogil
+	cdef bint integrand(self, double *, double, void *) nogil
+	cdef bint simpson(self, double *, unsigned int, double, void *, double *) nogil
 	cdef bint _simpaux(self, double *, unsigned int, double, double,
 				double, void *, double*, double *, double *) nogil

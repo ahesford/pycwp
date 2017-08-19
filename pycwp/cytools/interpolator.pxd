@@ -32,7 +32,7 @@ cdef class Interpolator3D(Integrable):
 
 	cdef bint _evaluate(self, double *f, point *grad, point p) nogil
 
-	cdef bint _integrand(self, double *, double, void *) nogil
+	cdef bint integrand(self, double *, double, void *) nogil
 
 
 cdef class LagrangeInterpolator3D(Interpolator3D):

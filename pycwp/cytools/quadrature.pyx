@@ -72,13 +72,13 @@ cdef class Integrable:
 	quadrature to integrate them.
 	'''
 	@cython.embedsignature(True)
-	cdef bint _simpson(self, double *results, unsigned int nval,
+	cdef bint simpson(self, double *results, unsigned int nval,
 					double tol, void *ctx, double *ends) nogil:
 		'''
-		Perform adaptive Simpson quadrature of self._integrand along
+		Perform adaptive Simpson quadrature of self.integrand along
 		the interval [0, 1]. The function is evaluated by calling
 
-			self._integrand(output, u, ctx),
+			self.integrand(output, u, ctx),
 
 		where output is a pointer to a length-nval (in range [1, 32])
 		array of doubles that stores the function values to be
@@ -90,19 +90,19 @@ cdef class Integrable:
 		output; the results are stored in the "results" array, which
 		should hold at least nval doubles.
 
-		The function self._integrand must return True for a successful
+		The function self.integrand must return True for a successful
 		call and return False if the call cannot be completed
-		successfully. If self._integrand returns False at any point,
+		successfully. If self.integrand returns False at any point,
 		this routine will abort by returning False, leaving results in
-		an indeterminate state. If self._integrand never fails, this
+		an indeterminate state. If self.integrand never fails, this
 		routine will return True, and the values stored in results are
 		guranteed to be valid.
 
 		If ends is not NULL, it should point to an array of length
 		2 * nval that holds, in elements 0 through (nval - 1), the
-		precomputed value of self._integrand at u == 0 and, in elements
+		precomputed value of self.integrand at u == 0 and, in elements
 		nval through (2 * nval - 1), the precomputed value of
-		self._integrand at u == 1. If ends is NULL, these values will
+		self.integrand at u == 1. If ends is NULL, these values will
 		be computed on demand.
 		'''
 		cdef:
@@ -121,8 +121,8 @@ cdef class Integrable:
 		# Allocate storage for function evaluations
 		if ends == <double *>NULL:
 			# Compute the endpoint values
-			if not self._integrand(fa, 0., ctx): return False
-			if not self._integrand(fb, 1., ctx): return False
+			if not self.integrand(fa, 0., ctx): return False
+			if not self.integrand(fb, 1., ctx): return False
 		else:
 			# Copy precomputed endpoint values
 			for i in range(nval):
@@ -130,7 +130,7 @@ cdef class Integrable:
 				fb[i] = ends[i + nval]
 
 		# Evaluate at the midpoint, if all other values can be evaluated
-		if not self._integrand(fc, 0.5, ctx): return False
+		if not self.integrand(fc, 0.5, ctx): return False
 
 		# Compute the Simpson integral over the whole interval
 		for i in range(nval):
@@ -140,7 +140,7 @@ cdef class Integrable:
 
 
 	@cython.embedsignature(True)
-	cdef bint _integrand(self, double *results, double u, void *ctx) nogil:
+	cdef bint integrand(self, double *results, double u, void *ctx) nogil:
 		'''
 		A dummy integrand that returns False (no value is computed).
 		'''
@@ -152,7 +152,7 @@ cdef class Integrable:
 			double tol, double ua, double ub, void *ctx,
 			double *fa, double *fb, double *fc) nogil:
 		'''
-		A recursive helper for _simpson.
+		A recursive helper for simpson.
 		'''
 		cdef:
 			# Find midpoint and interval lengths
@@ -182,8 +182,8 @@ cdef class Integrable:
 		sr = &(sl[nval])
 
 		# Evaluate the function at the left and right midpoints
-		if not self._integrand(fd, ud, ctx): return False
-		if not self._integrand(fe, ue, ctx): return False
+		if not self.integrand(fd, ud, ctx): return False
+		if not self.integrand(fe, ue, ctx): return False
 
 		for i in range(nval):
 			# Evaluate the sub-interval integrals
