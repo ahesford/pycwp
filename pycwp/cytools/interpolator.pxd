@@ -7,16 +7,6 @@ algorithm.
 # Copyright (c) 2017 Andrew J. Hesford. All rights reserved.
 # Restrictions are listed in the LICENSE file distributed with this package.
 
-import cython
-cimport cython
-
-import numpy as np
-cimport numpy as np
-
-from cpython.mem cimport PyMem_Malloc, PyMem_Free
-
-from libc.math cimport fabs, log2
-
 from ptutils cimport point
 from quadrature cimport Integrable
 

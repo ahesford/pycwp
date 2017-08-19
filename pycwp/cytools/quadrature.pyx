@@ -7,12 +7,15 @@ cimport cython
 from libc.math cimport cos, M_PI, fabs
 from libc.float cimport DBL_EPSILON
 
-from fastgl cimport qpstruct, glpair as cglpair
-
 from quadrature cimport *
 
 cdef extern from "<alloca.h>":
 	void *alloca (size_t) nogil
+
+cdef extern from "fastgl.c":
+	ctypedef struct qpstruct:
+		double theta, weight
+	int cglpair(qpstruct *, size_t, size_t) nogil
 
 cdef inline double isimpson(double fa, double fb, double fc, double h) nogil:
 	'''

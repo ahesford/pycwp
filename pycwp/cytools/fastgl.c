@@ -329,9 +329,9 @@ qpstruct GLPairTabulated(size_t l, size_t k) {
 }
 
 // This function computes the kth GL pair of an n-point rule
-int glpair(qpstruct *result, size_t n, size_t k) {		
+int cglpair(qpstruct *result, size_t n, size_t k) {		
 	// Sanity check [also implies l > 0]
-	if (n < k) return 0;
+	if (n <= k) return 0;
 
 	if(n < 101)
 		*result = GLPairTabulated(n, k);

@@ -28,11 +28,6 @@ cdef class Segment3D:
 	element sequences providing the Cartesian coordinates of the respective
 	start and end points of the segment.
 	'''
-	# Intrinsic properties of the segment
-	cdef point _start, _end
-	# Dependent properties (accessible from Python)
-	cdef readonly double length
-
 	def __init__(self, start, end):
 		'''
 		Initialize a 3-D line segment that starts and ends at the
@@ -191,14 +186,6 @@ cdef class Triangle3D:
 	node descriptors, each of which is a three-element sequence which
 	provides the Cartesian coordinates of the node.
 	'''
-	cdef point _nodes[3]
-	cdef point _normal
-	cdef point *_qr
-	cdef unsigned int _labels[3]
-
-	cdef readonly double offset
-	cdef readonly double area
-
 	def __cinit__(self, *args, **kwargs):
 		'''
 		Make sure the QR pointer is NULL for proper management.
@@ -684,9 +671,6 @@ cdef class Box3D:
 	sequences that provide the Cartesian coordinates of the low and high
 	corners, respectively.
 	'''
-	cdef point _lo, _hi, _length, _cell
-	cdef unsigned long nx, ny, nz
-
 	def __init__(self, lo, hi, ncell=None):
 		'''
 		Initialize a 3-D box with extreme corners lo and hi (each a
@@ -1108,7 +1092,7 @@ cdef class Box3D:
 
 
 	@cython.embedsignature(True)
-	cdef object _raymarcher(self, point start, point end, double step=realeps):
+	cdef object _raymarcher(self, point start, point end, double step=REALEPS):
 		'''
 		Helper for Box3D.raymarcher that performs a single march for a
 		segment from point start to point end.
@@ -1165,7 +1149,7 @@ cdef class Box3D:
 		return intersections
 
 	@cython.embedsignature(True)
-	def raymarcher(self, p, double step=realeps):
+	def raymarcher(self, p, double step=REALEPS):
 		'''
 		Marches along the given p, which is either a single Segment3D
 		instance or a 2-D array of shape (N, 3), where N >= 2, that

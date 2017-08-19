@@ -14,9 +14,7 @@ cimport numpy as np
 
 from cpython.mem cimport PyMem_Malloc, PyMem_Free
 
-from libc.math cimport fabs, log2
 from libc.stdlib cimport rand, RAND_MAX
-from libc.float cimport DBL_EPSILON
 
 from ptutils cimport *
 from interpolator cimport *
