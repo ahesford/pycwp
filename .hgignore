@@ -5,4 +5,4 @@ build
 dist
 pyajh.egg-info
 setup.cfg
-pycwp/cytools/{boxer,eikonal,interpolator,regularize,quadrature}.c
+pycwp/cytools/{boxer,eikonal,interpolator,regularize,quadrature,ptutils}.c
