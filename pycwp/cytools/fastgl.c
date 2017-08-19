@@ -336,7 +336,7 @@ int cglpair(qpstruct *result, size_t n, size_t k) {
 	if(n < 101)
 		*result = GLPairTabulated(n, k);
 	else {
-		if((2*k-1) > n) {
+		if((2*k+1) > n) {
 			*result = GLPairS(n, n-k);
 			result->theta = pi - result->theta;
 		} else *result = GLPairS(n, k+1);
