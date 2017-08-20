@@ -1298,8 +1298,8 @@ cdef class Box3D:
 			# Find the major axis and the perpendicular axes
 			direction = seg.direction
 			axis = max(xrange(3), key=lambda i: abs(direction[i]))
-			axp = (axis + 1) % 3
-			axpp = (axis + 2) % 3
+			axp = <int>((axis + 1) % 3)
+			axpp = <int>((axis + 2) % 3)
 
 			# Find the end points of the intersection
 			spt = lintp(max(tlims[0], 0.0), seg._start, seg._end)

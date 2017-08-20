@@ -8,9 +8,8 @@ algorithm.
 # Restrictions are listed in the LICENSE file distributed with this package.
 
 from ptutils cimport point
-from quadrature cimport Integrable
 
-cdef class Interpolator3D(Integrable):
+cdef class Interpolator3D:
 	cdef double *coeffs
 	cdef unsigned long ncx, ncy, ncz
 	cdef bint _usedef
@@ -21,8 +20,6 @@ cdef class Interpolator3D(Integrable):
 			point p, long nx, long ny, long nz) nogil
 
 	cdef bint _evaluate(self, double *f, point *grad, point p) nogil
-
-	cdef bint integrand(self, double *, double, void *) nogil
 
 
 cdef class LagrangeInterpolator3D(Interpolator3D):
