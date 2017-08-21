@@ -5,7 +5,7 @@ import cython
 cimport cython
 
 from libc.math cimport cos, M_PI, fabs
-from libc.float cimport DBL_EPSILON
+from libc.float cimport DBL_EPSILON, FLT_EPSILON
 
 from quadrature cimport *
 
@@ -16,6 +16,10 @@ cdef extern from "fastgl.c":
 	ctypedef struct qpstruct:
 		double theta, weight
 	int cglpair(qpstruct *, size_t, size_t) nogil
+
+cdef extern from "kronrod.c":
+	int kronrod(int, double, double *, double *, double *) nogil
+	void kronrod_adjust(double, double, int, double *, double *, double *) nogil
 
 cdef inline double isimpson(double fa, double fb, double fc, double h) nogil:
 	'''
@@ -71,12 +75,214 @@ def glpair(size_t n, size_t k):
 
 cdef class Integrable:
 	'''
-	A class to represent integrable functions, and an adaptive Simpson
-	quadrature to integrate them.
+	A class to represent integrable functions, and adaptive quadratures to
+	integrate them.
 	'''
+	@staticmethod
+	cdef bint _gkweights(double *ndwt, unsigned int N, double tol) nogil:
+		'''
+		Prepare a set of Gauss-Kronrod abcissae and weights with
+		Gaussian order N and Kronrod order 2 * N + 1. Results are
+		stored in ndwt, which must hold at least 3 * (N + 1) doubles.
+		The order N must be in the range [1, 128].
+
+		The first (N + 1) values in ndwt will be the abcissae in the
+		interval [0, 1] and represent half of the quadrature interval
+		[-1, 1]; the negative abcissae are the negatives of those
+		returned, with identical weights.
+
+		The second (N + 1) values in ndwt will hold the Kronrod weights
+		for the (N + 1) returned abcissae. The third (N + 1) values in
+		ndwt will hold the corresponding Gaussian weights, which will
+		be 0 for even-numbered (Kronrod-only) indices.
+
+		Abcissae and weights are computed to a tolerance
+
+			eps = min(FLT_EPSILON, max(DBL_EPSILON, 0.001 * tol)).
+
+		This method returns True if the weights can be computed, and
+		False otherwise.
+		'''
+		cdef:
+			double *kwts
+			double *gwts
+			unsigned int i
+
+		if not 1 <= N <= 128: return False
+
+		kwts = &(ndwt[N + 1])
+		gwts = &(kwts[N + 1])
+
+		eps = min(FLT_EPSILON, max(DBL_EPSILON, 0.001 * tol))
+		return kronrod(N, eps, ndwt, kwts, gwts)
+
+
+	@staticmethod
 	@cython.embedsignature(True)
+	def gkweights(unsigned int order, double tol):
+		'''
+		Return a list of elements (x, kw, gw), where x is a
+		Gauss-Kronrod abcissa in the range [0, 1] (half of the
+		symmetric integration interval [-1, 1]), kw is the Kronrod
+		weight, and gw is the Gauss weight (which is 0 if x is a
+		Kronrod abcissa only).
+
+		The value of tol should be on the order of the desired integral
+		accuracy; the accuracy of the nodes and weights will be
+		determined based on this value.
+		'''
+		cdef:
+			double *nodes
+			double *kweights
+			double *gweights
+			unsigned int i
+			double eps
+
+		if not 1 <= order <= 128:
+			raise ValueError('Order must be in range [1, 128]')
+
+		nodes = <double *>alloca(3 * (order + 1) * sizeof(double));
+		if not nodes:
+			raise MemoryError('Could not allocate temporary storage')
+		kweights = &(nodes[order + 1])
+		gweights = &(kweights[order + 1])
+
+		if not Integrable._gkweights(nodes, order, tol):
+			raise ValueError('Unable to evaluate weights for order %d, tolerance %g' % (order, tol))
+
+		wtlist = [ ]
+		for i in range(order + 1):
+			wtlist.append((nodes[i], kweights[i], gweights[i]))
+
+		return wtlist
+
+
+	cdef bint gausskron(self, double *results, unsigned int nval,
+			unsigned int order, double tol, void *ctx) nogil:
+		'''
+		Exactly as self.simpson, except adaptive Gauss-Kronrod
+		quadrature of the specified order (in range [0, 128]) is used
+		in place of adapative Simpson quadrature.
+		'''
+		cdef:
+			double *nodes
+			double *kweights
+			double *gweights
+			double eps
+
+		if not 1 <= nval <= 32: return False
+		if not 1 <= order <= 128: return False
+
+		nodes = <double *>alloca(3 * (order + 1) * sizeof(double));
+		if nodes == <double *>NULL: return False
+		kweights = &(nodes[order + 1])
+		gweights = &(kweights[order + 1])
+
+		# Compute weights and adjust to [0, 1] interval
+		if not Integrable._gkweights(nodes, order, tol): return False
+		kronrod_adjust(0., 1., order, nodes, kweights, gweights)
+
+		return self._gkaux(results, nval, tol, nodes, order, 0., 1., ctx)
+
+
+	cdef bint _geval(self, double *kres, double *gres, double *fv,
+			unsigned int nval, double u, double h,
+			double kwt, double gwt, void *ctx) nogil:
+		'''
+		Helper for _geval; updates Gauss and Kronrod integrals and
+		stores the integrand at a specific evaluation point.
+		'''
+		cdef unsigned int i
+
+		if not self.integrand(fv, u, ctx): return False
+
+		for i in range(nval):
+			kres[i] += h * kwt * fv[i]
+			gres[i] += h * gwt * fv[i]
+
+		return True
+
+
+	cdef bint _gkaux(self, double *results, unsigned int nval,
+				double tol, double *ndwt, unsigned int order, 
+				double ua, double ub, void *ctx) nogil:
+		'''
+		Recursive helper for gausskron.
+		'''
+		cdef:
+			# Find midpoint and interval lengths
+			double uc = 0.5 * (ua + ub)
+			double h = ub - ua
+
+			double *gwts
+			double *kwts
+
+			double *fv, *gint
+			double errmax = 0., u
+
+			unsigned int i
+
+		if not 1 <= nval <= 32: return False
+
+		kwts = &(ndwt[order + 1])
+		gwts = &(kwts[order + 1])
+
+		fv = <double *>alloca(2 * nval * sizeof(double))
+		if fv == <double *>NULL: return False
+
+		gint = &(fv[nval])
+
+		# Clear the integration results
+		for i in range(nval):
+			results[i] = 0.
+			gint[i] = 0.
+
+		# Compute the left-half integral
+		for i in range(order):
+			# Find point in increasing order
+			u = ua + h * (1.0 - ndwt[i])
+			# Update the integrals with the evaluated function
+			if not self._geval(results, gint, fv, nval,
+						u, h, kwts[i], gwts[i], ctx):
+				return False
+
+		# Add contribution from central point
+		if not self._geval(results, gint, fv, nval, uc,
+					h, kwts[order], gwts[order], ctx):
+			return False
+
+		# Compute right-half integral
+		for i in range(order - 1, -1, -1):
+			# Find point in increasing order
+			u = ua + h * ndwt[i]
+			# Update the integrals
+			if not self._geval(results, gint, fv, nval,
+						u, h, kwts[i], gwts[i], ctx):
+				return False
+
+		# Estimate the error
+		for i in range(nval):
+			errmax = max(errmax, fabs(results[i] - gint[i]))
+
+		tol = max(tol, DBL_EPSILON)
+
+		# If converged or interval collapsed, integration is done
+		if h <= DBL_EPSILON or errmax <= tol: return True
+
+		# Otherwise, drill down left and right
+		tol /= 2
+		if not self._gkaux(fv, nval, tol, ndwt, order, ua, uc, ctx):
+			return False
+		if not self._gkaux(gint, nval, tol, ndwt, order, uc, ub, ctx):
+			return False
+
+		for i in range(nval): results[i] = fv[i] + gint[i]
+
+		return True
+
+
 	cdef bint simpson(self, double *results, unsigned int nval,
-					double tol, void *ctx, double *ends) nogil:
+				double tol, void *ctx, double *ends) nogil:
 		'''
 		Perform adaptive Simpson quadrature of self.integrand along
 		the interval [0, 1]. The function is evaluated by calling
@@ -142,7 +348,6 @@ cdef class Integrable:
 		return self._simpaux(results, nval, tol, 0., 1., ctx, fa, fb, fc)
 
 
-	@cython.embedsignature(True)
 	cdef bint integrand(self, double *results, double u, void *ctx) nogil:
 		'''
 		A dummy integrand that returns False (no value is computed).
@@ -150,7 +355,6 @@ cdef class Integrable:
 		return False
 
 
-	@cython.embedsignature(True)
 	cdef bint _simpaux(self, double *results, unsigned int nval,
 			double tol, double ua, double ub, void *ctx,
 			double *fa, double *fb, double *fc) nogil:

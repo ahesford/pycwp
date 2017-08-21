@@ -14,7 +14,19 @@ cdef class Integrable:
 	A class to represent integrable functions, and an adaptive Simpson
 	quadrature to integrate them.
 	'''
-	cdef bint integrand(self, double *, double, void *) nogil
+	@staticmethod
+	cdef bint _gkweights(double *, unsigned int, double) nogil
+
+	cdef bint gausskron(self, double *, unsigned int,
+				unsigned int, double, void *) nogil
+	cdef bint _geval(self, double *, double *, double *, unsigned int,
+				double, double, double, double, void *) nogil
+	cdef bint _gkaux(self, double *, unsigned int, double, double *,
+				unsigned int, double, double, void *) nogil
+
 	cdef bint simpson(self, double *, unsigned int, double, void *, double *) nogil
 	cdef bint _simpaux(self, double *, unsigned int, double, double,
 				double, void *, double*, double *, double *) nogil
+
+	cdef bint integrand(self, double *, double, void *) nogil
+
