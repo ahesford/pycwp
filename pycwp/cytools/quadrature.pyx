@@ -78,8 +78,24 @@ cdef class Integrable:
 	A class to represent integrable functions, and adaptive quadratures to
 	integrate them.
 	'''
+	@classmethod
+	def errmsg(cls, IntegrableStatus code):
+		'''
+		Produce a nice error message from an IntegrableStatus code.
+		'''
+		return {
+				OK: 'Success',
+				GK_WRONG_ORDER: 'Invalid Gauss-Kronrod order',
+				GK_NO_CONVERGE: 'Gauss-Kronrod weights failed to converge',
+				INTEGRAND_EVALUATION_FAILED: 'Unable to evaluate integrand',
+				INTEGRAND_TOO_MANY_DIMS: 'Integrand has too many dimensions',
+				INTEGRAND_MISSING_CONTEXT: 'Integrand requires context variable',
+				WORK_ALLOCATION_FAILED: 'Unable to allocate work space',
+				NOT_IMPLEMENTED: 'Abstract method not implemented in subclass',
+			}.get(code, 'No known error message')
+
 	@staticmethod
-	cdef bint _gkweights(double *ndwt, unsigned int N, double tol) nogil:
+	cdef IntegrableStatus _gkweights(double *ndwt, unsigned int N, double tol) nogil:
 		'''
 		Prepare a set of Gauss-Kronrod abcissae and weights with
 		Gaussian order N and Kronrod order 2 * N + 1. Results are
@@ -108,13 +124,14 @@ cdef class Integrable:
 			double *gwts
 			unsigned int i
 
-		if not 1 <= N <= 128: return False
+		if not 1 <= N <= 128: return GK_WRONG_ORDER
 
 		kwts = &(ndwt[N + 1])
 		gwts = &(kwts[N + 1])
 
 		eps = min(FLT_EPSILON, max(DBL_EPSILON, 0.001 * tol))
-		return kronrod(N, eps, ndwt, kwts, gwts)
+		if not kronrod(N, eps, ndwt, kwts, gwts): return GK_NO_CONVERGE
+		return OK
 
 
 	@staticmethod
@@ -137,6 +154,7 @@ cdef class Integrable:
 			double *gweights
 			unsigned int i
 			double eps
+			IntegrableStatus rcode
 
 		if not 1 <= order <= 128:
 			raise ValueError('Order must be in range [1, 128]')
@@ -147,8 +165,10 @@ cdef class Integrable:
 		kweights = &(nodes[order + 1])
 		gweights = &(kweights[order + 1])
 
-		if not Integrable._gkweights(nodes, order, tol):
-			raise ValueError('Unable to evaluate weights for order %d, tolerance %g' % (order, tol))
+
+		rcode = Integrable._gkweights(nodes, order, tol)
+		if rcode != OK:
+			raise ValueError('Cannot evaluate weights: %s' % (Integrable.errmsg(rcode),))
 
 		wtlist = [ ]
 		for i in range(order + 1):
@@ -157,8 +177,8 @@ cdef class Integrable:
 		return wtlist
 
 
-	cdef bint gausskron(self, double *results, unsigned int nval,
-			unsigned int order, double tol, void *ctx) nogil:
+	cdef IntegrableStatus gausskron(self, double *results, unsigned int nval,
+				unsigned int order, double tol, void *ctx) nogil:
 		'''
 		Exactly as self.simpson, except adaptive Gauss-Kronrod
 		quadrature of the specified order (in range [0, 128]) is used
@@ -169,41 +189,46 @@ cdef class Integrable:
 			double *kweights
 			double *gweights
 			double eps
+			IntegrableStatus rcode
 
-		if not 1 <= nval <= 32: return False
-		if not 1 <= order <= 128: return False
+		if not 1 <= nval <= 32: return INTEGRAND_TOO_MANY_DIMS
+		if not 1 <= order <= 128: return GK_WRONG_ORDER
 
 		nodes = <double *>alloca(3 * (order + 1) * sizeof(double));
-		if nodes == <double *>NULL: return False
+		if nodes == <double *>NULL: return WORK_ALLOCATION_FAILED
+
 		kweights = &(nodes[order + 1])
 		gweights = &(kweights[order + 1])
 
 		# Compute weights and adjust to [0, 1] interval
-		if not Integrable._gkweights(nodes, order, tol): return False
+		rcode = Integrable._gkweights(nodes, order, tol)
+		if rcode != OK: return rcode
 		kronrod_adjust(0., 1., order, nodes, kweights, gweights)
 
 		return self._gkaux(results, nval, tol, nodes, order, 0., 1., ctx)
 
 
-	cdef bint _geval(self, double *kres, double *gres, double *fv,
-			unsigned int nval, double u, double h,
-			double kwt, double gwt, void *ctx) nogil:
+	cdef IntegrableStatus _geval(self, double *kres, double *gres,
+			double *fv, unsigned int nval, double u,
+			double h, double kwt, double gwt, void *ctx) nogil:
 		'''
 		Helper for _geval; updates Gauss and Kronrod integrals and
 		stores the integrand at a specific evaluation point.
 		'''
 		cdef unsigned int i
+		cdef IntegrableStatus rcode
 
-		if not self.integrand(fv, u, ctx): return False
+		rcode = self.integrand(fv, u, ctx)
+		if rcode != OK: return rcode
 
 		for i in range(nval):
 			kres[i] += h * kwt * fv[i]
 			gres[i] += h * gwt * fv[i]
 
-		return True
+		return OK
 
 
-	cdef bint _gkaux(self, double *results, unsigned int nval,
+	cdef IntegrableStatus _gkaux(self, double *results, unsigned int nval,
 				double tol, double *ndwt, unsigned int order, 
 				double ua, double ub, void *ctx) nogil:
 		'''
@@ -221,14 +246,15 @@ cdef class Integrable:
 			double errmax = 0., u
 
 			unsigned int i
+			IntegrableStatus rcode
 
-		if not 1 <= nval <= 32: return False
+		if not 1 <= nval <= 32: return INTEGRAND_TOO_MANY_DIMS
 
 		kwts = &(ndwt[order + 1])
 		gwts = &(kwts[order + 1])
 
 		fv = <double *>alloca(2 * nval * sizeof(double))
-		if fv == <double *>NULL: return False
+		if fv == <double *>NULL: return WORK_ALLOCATION_FAILED
 
 		gint = &(fv[nval])
 
@@ -242,23 +268,23 @@ cdef class Integrable:
 			# Find point in increasing order
 			u = ua + h * (1.0 - ndwt[i])
 			# Update the integrals with the evaluated function
-			if not self._geval(results, gint, fv, nval,
-						u, h, kwts[i], gwts[i], ctx):
-				return False
+			rcode = self._geval(results, gint, fv, nval,
+						u, h, kwts[i], gwts[i], ctx)
+			if rcode != OK: return rcode
 
 		# Add contribution from central point
-		if not self._geval(results, gint, fv, nval, uc,
-					h, kwts[order], gwts[order], ctx):
-			return False
+		rcode = self._geval(results, gint, fv, nval, uc,
+					h, kwts[order], gwts[order], ctx)
+		if rcode != OK: return rcode
 
 		# Compute right-half integral
 		for i in range(order - 1, -1, -1):
 			# Find point in increasing order
 			u = ua + h * ndwt[i]
 			# Update the integrals
-			if not self._geval(results, gint, fv, nval,
-						u, h, kwts[i], gwts[i], ctx):
-				return False
+			rcode = self._geval(results, gint, fv, nval,
+						u, h, kwts[i], gwts[i], ctx)
+			if rcode != OK: return rcode
 
 		# Estimate the error
 		for i in range(nval):
@@ -267,21 +293,21 @@ cdef class Integrable:
 		tol = max(tol, DBL_EPSILON)
 
 		# If converged or interval collapsed, integration is done
-		if h <= DBL_EPSILON or errmax <= tol: return True
+		if h <= DBL_EPSILON or errmax <= tol: return OK
 
 		# Otherwise, drill down left and right
 		tol /= 2
-		if not self._gkaux(fv, nval, tol, ndwt, order, ua, uc, ctx):
-			return False
-		if not self._gkaux(gint, nval, tol, ndwt, order, uc, ub, ctx):
-			return False
+		rcode = self._gkaux(fv, nval, tol, ndwt, order, ua, uc, ctx)
+		if rcode != OK: return rcode
+		rcode = self._gkaux(gint, nval, tol, ndwt, order, uc, ub, ctx)
+		if rcode != OK: return rcode
 
 		for i in range(nval): results[i] = fv[i] + gint[i]
 
-		return True
+		return OK
 
 
-	cdef bint simpson(self, double *results, unsigned int nval,
+	cdef IntegrableStatus simpson(self, double *results, unsigned int nval,
 				double tol, void *ctx, double *ends) nogil:
 		'''
 		Perform adaptive Simpson quadrature of self.integrand along
@@ -299,13 +325,13 @@ cdef class Integrable:
 		output; the results are stored in the "results" array, which
 		should hold at least nval doubles.
 
-		The function self.integrand must return True for a successful
-		call and return False if the call cannot be completed
-		successfully. If self.integrand returns False at any point,
-		this routine will abort by returning False, leaving results in
-		an indeterminate state. If self.integrand never fails, this
-		routine will return True, and the values stored in results are
-		guranteed to be valid.
+		The function self.integrand must return IntegrableStatus.OK for
+		a successful call and another IntegrableStatus if the call
+		cannot be completed successfully. If self.integrand returns
+		anything but OK at any point, this routine will abort by
+		returning the failure code, leaving results in an indeterminate
+		state. If self.integrand never fails, this routine will return
+		OK, and the values stored in results are guranteed to be valid.
 
 		If ends is not NULL, it should point to an array of length
 		2 * nval that holds, in elements 0 through (nval - 1), the
@@ -319,19 +345,22 @@ cdef class Integrable:
 			double *fb
 			double *fc
 			unsigned int i
+			IntegrableStatus rcode
 
-		if not 1 <= nval <= 32: return False
+		if not 1 <= nval <= 32: return INTEGRAND_TOO_MANY_DIMS
 
 		fa = <double *>alloca(3 * nval * sizeof(double));
-		if fa == <double *>NULL: return False
+		if fa == <double *>NULL: return WORK_ALLOCATION_FAILED
 		fb = &(fa[nval])
 		fc = &(fb[nval])
 
 		# Allocate storage for function evaluations
 		if ends == <double *>NULL:
 			# Compute the endpoint values
-			if not self.integrand(fa, 0., ctx): return False
-			if not self.integrand(fb, 1., ctx): return False
+			rcode = self.integrand(fa, 0., ctx)
+			if rcode != OK: return rcode
+			rcode = self.integrand(fb, 1., ctx)
+			if rcode != OK: return rcode
 		else:
 			# Copy precomputed endpoint values
 			for i in range(nval):
@@ -339,7 +368,8 @@ cdef class Integrable:
 				fb[i] = ends[i + nval]
 
 		# Evaluate at the midpoint, if all other values can be evaluated
-		if not self.integrand(fc, 0.5, ctx): return False
+		rcode = self.integrand(fc, 0.5, ctx)
+		if rcode != OK: return rcode
 
 		# Compute the Simpson integral over the whole interval
 		for i in range(nval):
@@ -348,16 +378,16 @@ cdef class Integrable:
 		return self._simpaux(results, nval, tol, 0., 1., ctx, fa, fb, fc)
 
 
-	cdef bint integrand(self, double *results, double u, void *ctx) nogil:
+	cdef IntegrableStatus integrand(self, double *results, double u, void *ctx) nogil:
 		'''
 		A dummy integrand that returns False (no value is computed).
 		'''
-		return False
+		return NOT_IMPLEMENTED
 
 
-	cdef bint _simpaux(self, double *results, unsigned int nval,
-			double tol, double ua, double ub, void *ctx,
-			double *fa, double *fb, double *fc) nogil:
+	cdef IntegrableStatus _simpaux(self, double *results, unsigned int nval,
+				double tol, double ua, double ub, void *ctx,
+				double *fa, double *fb, double *fc) nogil:
 		'''
 		A recursive helper for simpson.
 		'''
@@ -379,18 +409,21 @@ cdef class Integrable:
 			double errmax = 0., scomp, err
 
 			unsigned int i
+			IntegrableStatus rcode
 
-		if not 1 <= nval <= 32: return False
+		if not 1 <= nval <= 32: return INTEGRAND_TOO_MANY_DIMS
 
 		fd = <double *>alloca(4 * nval * sizeof(double))
-		if fd == <double *>NULL: return False
+		if fd == <double *>NULL: return WORK_ALLOCATION_FAILED
 		fe = &(fd[nval])
 		sl = &(fe[nval])
 		sr = &(sl[nval])
 
 		# Evaluate the function at the left and right midpoints
-		if not self.integrand(fd, ud, ctx): return False
-		if not self.integrand(fe, ue, ctx): return False
+		rcode = self.integrand(fd, ud, ctx)
+		if rcode != OK: return rcode
+		rcode = self.integrand(fe, ue, ctx)
+		if rcode != OK: return rcode
 
 		for i in range(nval):
 			# Evaluate the sub-interval integrals
@@ -408,16 +441,16 @@ cdef class Integrable:
 		tol = max(tol, DBL_EPSILON)
 
 		# If converged or interval collapsed, integration is done
-		if h2 <= 2 * DBL_EPSILON or errmax <= 15 * tol: return True
+		if h2 <= 2 * DBL_EPSILON or errmax <= 15 * tol: return OK
 
 		# Otherwise, drill down left and right
 		tol /= 2
-		if not self._simpaux(sl, nval, tol, ua, uc, ctx, fa, fc, fd):
-			return False
-		if not self._simpaux(sr, nval, tol, uc, ub, ctx, fc, fb, fe):
-			return False
+		rcode = self._simpaux(sl, nval, tol, ua, uc, ctx, fa, fc, fd)
+		if rcode != OK: return rcode
+		rcode = self._simpaux(sr, nval, tol, uc, ub, ctx, fc, fb, fe)
+		if rcode != OK: return rcode
 
 		# Merge two-sided integrals
 		for i in range(nval): results[i] = sl[i] + sr[i]
 
-		return True
+		return OK
