@@ -233,7 +233,7 @@ cdef class Integrable:
 
 
 	cdef IntegrableStatus _gkaux(self, double *results, unsigned int nval,
-				double tol, double *ndwt, unsigned int order, 
+				double tol, double *ndwt, unsigned int order,
 				double ua, double ub, void *ctx) nogil:
 		'''
 		Recursive helper for gausskron.
@@ -299,7 +299,8 @@ cdef class Integrable:
 		tol = max(tol, DBL_EPSILON)
 
 		# If converged or interval collapsed, integration is done
-		if h <= DBL_EPSILON or errmax <= tol: return IntegrableStatus.OK
+		if uc <= ua or ub <= uc or errmax <= tol:
+			return IntegrableStatus.OK
 
 		# Otherwise, drill down left and right
 		tol /= 2
@@ -453,7 +454,7 @@ cdef class Integrable:
 		tol = max(tol, DBL_EPSILON)
 
 		# If converged or interval collapsed, integration is done
-		if h2 <= 2 * DBL_EPSILON or errmax <= 15 * tol:
+		if uc <= ua or ub <= uc or errmax <= 15 * tol:
 			return IntegrableStatus.OK
 
 		# Otherwise, drill down left and right
