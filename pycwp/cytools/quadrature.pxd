@@ -5,6 +5,7 @@ ctypedef enum IntegrableStatus:
 	OK = 0,
 	GK_WRONG_ORDER,
 	GK_NO_CONVERGE,
+	GK_INVALID_RANGE,
 	INTEGRAND_EVALUATION_FAILED,
 	INTEGRAND_TOO_MANY_DIMS,
 	INTEGRAND_MISSING_CONTEXT,
@@ -30,14 +31,14 @@ cdef class Integrable:
 	cdef IntegrableStatus _gkweights(double *, unsigned int, double) nogil
 
 	cdef IntegrableStatus gausskron(self, double *, unsigned int,
-				unsigned int, double, void *) nogil
+					double, double, double, double, void *) nogil
 	cdef IntegrableStatus _geval(self, double *, double *, double *, unsigned int,
 				double, double, double, double, void *) nogil
-	cdef IntegrableStatus _gkaux(self, double *, unsigned int, double, double *,
-				unsigned int, double, double, void *) nogil
 
-	cdef IntegrableStatus simpson(self, double *, unsigned int, double, void *, double *) nogil
-	cdef IntegrableStatus _simpaux(self, double *, unsigned int, double, double,
-				double, void *, double*, double *, double *) nogil
+	cdef IntegrableStatus simpson(self, double *, unsigned int,
+					double, double, void *, double *) nogil
+	cdef IntegrableStatus _simpaux(self, double *, unsigned int, double,
+					double, double, double, void *,
+					double*, double *, double *) nogil
 
 	cdef IntegrableStatus integrand(self, double *, double, void *) nogil
