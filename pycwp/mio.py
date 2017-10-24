@@ -61,7 +61,7 @@ def getmattype (infile, dim = None, dtype = None):
 		# Grab the number of bytes per record and
 		# check that the record size lines up
 		nelts = cutil.prod(matsize)
-		nbytes = dsize / nelts
+		nbytes = dsize // nelts
 		if nbytes * nelts != dsize: continue
 
 		# Try to grab the data type of the records

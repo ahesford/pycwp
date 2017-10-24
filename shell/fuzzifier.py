@@ -27,7 +27,7 @@ def fuzzyblks(infile, outfile, nbr, start, stride, chunk):
 	inmat = mio.Slicer(infile)
 	outmat = mio.Slicer(outfile)
 	# Compute the one-sided pad depth
-	pad = (nbr - 1) / 2
+	pad = (nbr - 1) // 2
 
 	# Loop through the chunks to process output
 	for n in range(start * chunk, inmat.shape[-1], stride * chunk):

@@ -56,7 +56,7 @@ class HarmonicSpline(object):
 		dphi = 2. * math.pi / self.nphis[0]
 
 		# The dimensions of the coefficient grid at the coarse level
-		n, m = 2 * (self.nthetas[0] - 1), self.nphis[0] / 2
+		n, m = 2 * (self.nthetas[0] - 1), self.nphis[0] // 2
 
 		# Precompute the pole for the causal and anti-causal filters
 		zp = math.sqrt(3) - 2.
@@ -153,7 +153,7 @@ class HarmonicSpline(object):
 		zp = zpn[1]
 
 		# Create the coefficient grid
-		n, m, k = 2 * (ntheta - 1), nphi / 2, ntheta - 1
+		n, m, k = 2 * (ntheta - 1), nphi // 2, ntheta - 1
 		c = np.zeros((n, m), dtype=f.dtype)
 
 		# Copy the first hemisphere of data
@@ -188,7 +188,7 @@ class HarmonicSpline(object):
 			c[i, :] = zp * (c[i + 1, :] - c[i,:])
 
 		# Correct the length and coefficients for the azimuthal angle
-		n, m, k = nphi, ntheta - 1, nphi / 2
+		n, m, k = nphi, ntheta - 1, nphi // 2
 		l = 6. / (1 - zpn[n]), zp / (zpn[n] - 1)
 
 		# Limit the number of terms in the sum
@@ -229,7 +229,7 @@ class HarmonicSpline(object):
 
 		# The polar azimuthal coefficients are special cases in which
 		# the period degenerates to pi, rather than 2 pi.
-		n = nphi / 2
+		n = nphi // 2
 		l = 6. / (1. - zpn[n]), zp / (zpn[n] - 1.)
 
 		# Limit the number of terms in the sum
@@ -323,7 +323,7 @@ class SphericalInterpolator(object):
 		dphi = [2 * math.pi / n for n in nphi]
 
 		# Half the Lagrange interval width
-		offset = (order - 1) / 2
+		offset = (order - 1) // 2
 
 		# Adjust wrapping shifts depending on direction of polar samples
 		if thetas[0][0] < thetas[0][-1]: wraps = 0, 2 * math.pi
@@ -371,11 +371,11 @@ class SphericalInterpolator(object):
 					# Compute the angular position
 					rphi = j * dphi[1]
 					# Find the starting interpolation interval
-					k = (j * nphi[0]) / nphi[1] - offset
+					k = (j * nphi[0]) // nphi[1] - offset
 
 					if rv < 0 or rv >= ntheta[0]:
 						rphi += math.pi
-						k += nphi[0] / 2
+						k += nphi[0] // 2
 
 					# Properly wrap the polar values
 					if rv < 0: rv = -rv

@@ -106,7 +106,7 @@ def findpeaks(vec):
 			# Analyze subsequent maxima
 			if ival > jval:
 				# Set the left col for the rightward peak
-				jh = j / 2
+				jh = j // 2
 				lcols[jh] = col
 			else:
 				# Set the right col for the leftward peak
@@ -203,7 +203,7 @@ def bandwidth(sigft, df=1, level=0.5, r2c=False):
 	sigamps = numpy.abs(sigft)
 	if not r2c:
 		# Strip the negative frequencies from the C2C DFT
-		sigamps = sigamps[:len(sigamps)/2]
+		sigamps = sigamps[:len(sigamps) // 2]
 
 	# Find the peak positive frequency
 	peakidx = numpy.argmax(sigamps)

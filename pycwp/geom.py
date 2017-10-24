@@ -151,9 +151,9 @@ def gridcoords(i, nc, dc, dim=3):
 	if dim == 1:
 		coords = np.array(i % nc[0])
 	elif dim == 2:
-		coords = np.array((i / nc[1], i % nc[1]))
+		coords = np.array((i // nc[1], i % nc[1]))
 	elif dim == 3:
-		coords = np.array((i / (nc[1] * nc[2]), (i / nc[1]) % nc[2], i % nc[2]))
+		coords = np.array((i // (nc[1] * nc[2]), (i // nc[1]) % nc[2], i % nc[2]))
 
 	# Return the coordinates
 	return  ((2. * coords + 1. - np.array(nc)) * np.array(dc) * 0.5).tolist()
@@ -178,7 +178,7 @@ def sampcoords(i, nt, np, th = None):
 
 	# Compute the indices
 	pidx = (i - 1) % np
-	tidx = 1 + (i - 1) / np
+	tidx = 1 + (i - 1) // np
 
 	# The last sample is always the north pole
 	if tidx == nt - 1: return (0., 0., 1.)

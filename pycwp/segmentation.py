@@ -89,7 +89,7 @@ def maptissueblk(seg, params, n, scatden=0.2, scatsd=0.6, chunk=8, smoothp=[5,3]
 		ndimage.correlate1d(c, kern, output=b, mode='nearest', axis=2)
 		return b
 	# Pad the blocks with the kernel width for valid convolutions
-	pad = (smoothp[0] - 1) / 2
+	pad = (smoothp[0] - 1) // 2
 
 	# Try to start two slices early for correct convolution
 	start = max(0, n - pad)

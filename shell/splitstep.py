@@ -174,7 +174,7 @@ def propagator(contrast, outfmt, srclist, start=0, stride=1, c=1.507, f=3.0,
 
 	# Pick a default Hann window thickness that will not encroach on the domain
 	if a is None:
-		a = max(0, min((dcrd - gcrd) / 2
+		a = max(0, min((dcrd - gcrd) // 2
 			for dcrd, gcrd in zip(e, ctmat.sliceshape)))
 
 	# Note the rank of this process
@@ -356,7 +356,7 @@ if __name__ == '__main__':
 
 	# Figure the share of elements for this MPI task
 	nelts = len(elements)
-	share = nelts / size
+	share = nelts // size
 	remainder = nelts % size
 	start = rank * share + min(remainder, rank)
 	if rank < remainder: share += 1

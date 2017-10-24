@@ -200,7 +200,7 @@ def fuzzyimg(img, nbr):
 	from numpy import fmax, fmin
 	from numpy.random import rand
 	if nbr % 2 != 1: raise ValueError('Neighborhood must have odd dimensions')
-	half = (nbr - 1) / 2
+	half = (nbr - 1) // 2
 	ndim = len(img.shape)
 	# Create the maximum and minimum arrays
 	nmax = img.copy()
@@ -245,8 +245,8 @@ def commongrid(lgrid, rgrid):
 	'''
 
 	cgrid = [min(lv, rv) for lv, rv in zip(lgrid, rgrid)]
-	loff = [max(0, (lv - rv) / 2) for lv, rv in zip(lgrid, rgrid)]
-	roff = [max(0, (rv - lv) / 2) for lv, rv in zip(lgrid, rgrid)]
+	loff = [max(0, (lv - rv) // 2) for lv, rv in zip(lgrid, rgrid)]
+	roff = [max(0, (rv - lv) // 2) for lv, rv in zip(lgrid, rgrid)]
 	return cgrid, loff, roff
 
 
@@ -267,7 +267,7 @@ def smoothkern(w, s, n = 3):
 	from scipy.ndimage import gaussian_filter
 
 	if w % 2 != 1: raise ValueError('Kernel width must be odd.')
-	lw = (w - 1) / 2
+	lw = (w - 1) // 2
 	# Compute the restricted Gaussian kernel
 	k = zeros([w]*n)
 	sl = [slice(lw, lw+1)]*n
