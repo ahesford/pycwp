@@ -11,7 +11,7 @@ from pycwp import mio
 
 def usage (progname = 'catslab.py'):
 	binfile = os.path.basename(progname)
-	print >> sys.stderr, "Usage:", binfile, "[-h] [-t xl,xh,yl,yh] [-o output] <slab1> [...] <slabN>"
+	print("Usage:", binfile, "[-h] [-t xl,xh,yl,yh] [-o output] <slab1> [...] <slabN>", file=sys.stderr)
 
 def main (argv = None):
 	if argv is None:

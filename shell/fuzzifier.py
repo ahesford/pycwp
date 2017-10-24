@@ -8,12 +8,12 @@ from pycwp import mio, cutil, process
 
 def usage(progname = 'fuzzifier.py'):
 	binfile = os.path.basename(progname)
-	print "Usage:", binfile, "[-h] [-p p] [-n n] [-c c] <input> <output>"
-	print
-	print "\t-h: Display this message and exit"
-	print "\t-p: Use p processors (default: CPU count)"
-	print "\t-g: Use a neighborhood of n (default: 5)"
-	print "\t-c: Process output c slices at a time (default: 8)"
+	print("Usage:", binfile, "[-h] [-p p] [-n n] [-c c] <input> <output>")
+	print()
+	print("\t-h: Display this message and exit")
+	print("\t-p: Use p processors (default: CPU count)")
+	print("\t-g: Use a neighborhood of n (default: 5)")
+	print("\t-c: Process output c slices at a time (default: 8)")
 
 def fuzzyblks(infile, outfile, nbr, start, stride, chunk):
 	'''
@@ -31,7 +31,7 @@ def fuzzyblks(infile, outfile, nbr, start, stride, chunk):
 
 	# Loop through the chunks to process output
 	for n in range(start * chunk, inmat.shape[-1], stride * chunk):
-		print 'Processing chunk', n
+		print('Processing chunk', n)
 		# Read the chunk
 		start = max(0, n - pad)
 		finish = min(n + chunk + pad, inmat.shape[-1])

@@ -5,13 +5,13 @@
 
 import sys, os, getopt, numpy as np, math, multiprocessing
 from numpy import linalg as la
-from itertools import izip
+
 
 from pycwp import mio, cutil
 
 def usage(progname = 'mse.py'):
 	binfile = os.path.basename(progname)
-	print "Usage:", binfile, "[-h] [-s] [-p nproc] <cmpfile> [...] <reffile>"
+	print("Usage:", binfile, "[-h] [-s] [-p nproc] <cmpfile> [...] <reffile>")
 
 
 def slicerr(args):
@@ -75,11 +75,11 @@ def main (argv = None):
 	if perslice:
 		# Denominator is averaged over all slices for per-slice errors
 		errs *= math.sqrt(nslice)
-		for erow in errs: print ' '.join('%-11.6e' % ev for ev in erow)
+		for erow in errs: print(' '.join('%-11.6e' % ev for ev in erow))
 	else:
 		# Collapse the per-slice errors into a global RMS error
 		for i, ecol in enumerate(errs.T):
-			print '%4d %11.6e' % (i, la.norm(ecol))
+			print('%4d %11.6e' % (i, la.norm(ecol)))
 
 	return 0
 

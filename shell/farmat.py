@@ -9,8 +9,8 @@ from pycwp.cltools import wavecl
 
 def usage(execname):
 	binfile = os.path.basename(execname)
-	print 'USAGE:', binfile, '[-h] [-r] [-i <iord>] [-d <length>] [-n <ncell>] <ntheta> <outfile>'
-	print '''
+	print('USAGE:', binfile, '[-h] [-r] [-i <iord>] [-d <length>] [-n <ncell>] <ntheta> <outfile>')
+	print('''
 	Write to outfile the far-field matrix for a group of ncell elements per
 	dimension using ntheta samples of the polar angle.
 
@@ -20,7 +20,7 @@ def usage(execname):
 	-i: Use quadrature order iord for integration (default: 4)
 	-d: Specify the edge length of each cubic cell in wavelengths (default: 0.1)
 	-n: Specify the number of cells per group per dimension (default: 10)
-	'''
+	''')
 
 if __name__ == '__main__':
 	# Grab the executable name
@@ -57,7 +57,7 @@ if __name__ == '__main__':
 	# Build the matrix class
 	f = wavecl.FarMatrix(theta, dc, iord)
 
-	print "Building %d-by-%d far-field matrix" % (f.nsamp, n**3)
+	print("Building %d-by-%d far-field matrix" % (f.nsamp, n**3))
 
 	# Create the output file
 	output = mio.Slicer(args[1], [f.nsamp, n**3], np.complex64, True)

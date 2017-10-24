@@ -13,18 +13,18 @@ from pycwp import focusing, mio, scattering
 
 def usage (progname = 'elevbeam.py'):
 	binfile = os.path.basename(progname)
-	print 'Usage:', binfile, '[-h] [-p] [-f freq] [-c speed] [-a phi] [-w aperture] [-l length] [-z offset] [-s shift] [-r scatpat] [-o output]'
-	print '\t-h: Print this message'
-	print '\t-p: Plot the amplitudes'
-	print '\t-f: Excitation frequency in MHz (default: 2.5)'
-	print '\t-c: Sound speed in m/s (default: 1509)'
-	print '\t-a: Azimuthal angle phi in degrees (default: 0.0)'
-	print '\t-w: Aperture width in m (default: 15e-3)'
-	print '\t-l: Focus length in m (default: 75e-3)'
-	print '\t-z: Focus elevation offset in m (default: 0)'
-	print '\t-s: Phase shift to move focus in m (default: 0)'
-	print '\t-r: Receive focusing on pattern listed in scatpat'
-	print '\t-o: Specify an output file (default: stdout)'
+	print('Usage:', binfile, '[-h] [-p] [-f freq] [-c speed] [-a phi] [-w aperture] [-l length] [-z offset] [-s shift] [-r scatpat] [-o output]')
+	print('\t-h: Print this message')
+	print('\t-p: Plot the amplitudes')
+	print('\t-f: Excitation frequency in MHz (default: 2.5)')
+	print('\t-c: Sound speed in m/s (default: 1509)')
+	print('\t-a: Azimuthal angle phi in degrees (default: 0.0)')
+	print('\t-w: Aperture width in m (default: 15e-3)')
+	print('\t-l: Focus length in m (default: 75e-3)')
+	print('\t-z: Focus elevation offset in m (default: 0)')
+	print('\t-s: Phase shift to move focus in m (default: 0)')
+	print('\t-r: Receive focusing on pattern listed in scatpat')
+	print('\t-o: Specify an output file (default: stdout)')
 
 def main (argv = None):
 	if argv is None:
@@ -74,7 +74,7 @@ def main (argv = None):
 
 		# Print the angles in ascending order
 		for c, t in zip(T[::-1], theta[::-1]):
-			print >>output, "%0.10f %0.10f %0.10f %0.10f" % (real(c), imag(c), t, phi)
+			print("%0.10f %0.10f %0.10f %0.10f" % (real(c), imag(c), t, phi), file=output)
 	else:
 		# Read the scattering pattern in the provided file
 		ref, thr = scattering.readradpat(scatpat)[0:2]
@@ -84,7 +84,7 @@ def main (argv = None):
 
 		# Print the focused pattern
 		if output is None:
-			print fld
+			print(fld)
 		else:
 			mio.writebmat (fld, output)
 
