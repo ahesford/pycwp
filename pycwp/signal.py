@@ -7,7 +7,7 @@ Routines used for manipulation of sequences representing signals.
 
 import numpy, math
 from numpy import fft
-from itertools import izip
+
 
 def findpeaks(vec):
 	'''
@@ -116,7 +116,7 @@ def findpeaks(vec):
 
 	# Build the peak list
 	peaks = []
-	for pk, lc, rc in izip(maxtab, lcols, rcols):
+	for pk, lc, rc in zip(maxtab, lcols, rcols):
 		kc, sc = keysubcol(pk[0], lc, rc)
 		try:
 			sidx, kidx, pidx = sc[0], kc[0], pk[0]
@@ -147,8 +147,8 @@ def shifter(sig, delays, s=None, axes=None):
 
 	# Set default values for axes and s if necessary
 	if axes is None:
-		if s is not None: axes = range(ndim - len(s), ndim)
-		else: axes = range(ndim)
+		if s is not None: axes = list(range(ndim - len(s), ndim))
+		else: axes = list(range(ndim))
 
 	if s is None: s = tuple(sig.shape[a] for a in axes)
 

@@ -215,7 +215,7 @@ class MultiplaneProjector(object):
 		Return an iterator (if iterator is True) or list (if iterator
 		is False) of slice keys registered with the projector.
 		'''
-		return self._slices.iterkeys() if iterator else self._slices.keys()
+		return iter(self._slices.keys()) if iterator else list(self._slices.keys())
 
 
 	def slicecount(self):
@@ -443,14 +443,14 @@ class PinholeCamera(object):
 		if mi != m or ni != n or mi < 1 or ni < 1:
 			raise ValueError('Arguments m, n must have positive integer values')
 
-		if isinstance(basis, basestring):
+		if isinstance(basis, str):
 			basis = basis.lower()
 			try:
 				dm, dn = basis
 			except ValueError:
 				raise ValueError('String argument basis must contain exactly 2 characters')
 			# Map the characters to appropriate basis functions
-			bmap = dict(zip('xyz', np.eye(3, dtype=float)))
+			bmap = dict(zip('xyz', np.eye(3, dtype=float))))
 			try:
 				basis = np.array([bmap[dm], bmap[dn]], dtype=float)
 			except KeyError:

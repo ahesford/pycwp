@@ -186,7 +186,7 @@ class Helmholtz(object):
 		# Remember that rsq has had the boundaries stripped
 
 		# Grab the next source value away from the boundaries
-		srcval = self.srcscale * self.source.next()
+		srcval = self.srcscale * next(self.source)
 
 		# Perform the time updates, overwriting previous time with next 
 		self.pa[1][1:-1,1:-1,1:-1] = ((2. - 6. * self.rsq) * 

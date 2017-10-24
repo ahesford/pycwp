@@ -173,7 +173,7 @@ def sampcoords(i, nt, np, th = None):
 
 	# Compute uniform theta samples, if none are provided
 	if th is None:
-		th = [math.pi * i / float(nt - 1) for i in xrange(nt)]
+		th = [math.pi * i / float(nt - 1) for i in range(nt)]
 		th.reverse()
 
 	# Compute the indices

@@ -8,7 +8,7 @@ surfaces of spheres, used in other parts of the module.
 
 import math, numpy as np
 from scipy import special as spec, sparse
-from itertools import count, izip
+from itertools import count
 from . import cutil, poly, quad
 
 
@@ -104,12 +104,12 @@ class HarmonicSpline(object):
 
 				# Handle wrapping in the second hemisphere
 				if j >= m:
-					thwts = izip(reversed(w), count(-i - 2))
+					thwts = zip(reversed(w), count(-i - 2))
 					j -= m
-				else: thwts = izip(w, count(i - 1))
+				else: thwts = zip(w, count(i - 1))
 
 				for wv, iv in thwts:
-					for uv, jv in izip(u, count(j - 1)):
+					for uv, jv in zip(u, count(j - 1)):
 						# Compute the contributing weight
 						weights.append(wv * uv)
 						# Compute its (wrapped) index
@@ -120,7 +120,7 @@ class HarmonicSpline(object):
 				rval += 1
 
 		# Create a CSR matrix representation of the interpolator
-		self.matrix = sparse.csr_matrix((weights, zip(*idx)), shape=(osamp, n * m))
+		self.matrix = sparse.csr_matrix((weights, list(zip(*idx))), shape=(osamp, n * m))
 
 
 	def getcoeff(self, f):
@@ -402,7 +402,7 @@ class SphericalInterpolator(object):
 		ij.append([rval, nsamp[0] - 1])
 
 		# Create a CSR matrix representation of the interpolator
-		self.matrix = sparse.csr_matrix((data, zip(*ij)), shape=nsamp[::-1])
+		self.matrix = sparse.csr_matrix((data, list(zip(*ij))), shape=nsamp[::-1])
 
 
 	def interpolate(self, f):
@@ -468,7 +468,7 @@ def sh2fld (k, clm, r, t, p, reg = True):
 
 	# Otherwise, compress the coefficient matrix to eliminate excess values
 	if clm.shape[0] > lda:
-		clm = np.array([[clm[i,j] for j in xrange(deg)]
+		clm = np.array([[clm[i,j] for j in range(deg)]
 			for i in harmorder(deg-1)])
 
 	# Compute the radial term
@@ -484,7 +484,7 @@ def sh2fld (k, clm, r, t, p, reg = True):
 	epm = np.array([[np.exp(1j * m * px) for px in p] for m in harmorder(deg-1)])
 
 	shxp = lambda c, y: np.array([[c[m,l] * y[abs(m),l]
-		for l in xrange(deg)] for m in harmorder(deg-1)])
+		for l in range(deg)] for m in harmorder(deg-1)])
 
 	# Compute the polar term and multiply by harmonic coefficients
 	ytlm = np.array([shxp(clm,poly.legassoc(deg-1,deg-1,tx)) for tx in t])
@@ -520,7 +520,7 @@ def translator (r, s, phi, theta, l):
 	tr = 0
 
 	# Sum the terms of the translator
-	for hv, pv in izip(hl, poly.legpoly(sds, l)): tr += hv * pv
+	for hv, pv in zip(hl, poly.legpoly(sds, l)): tr += hv * pv
 	return tr
 
 

@@ -24,16 +24,16 @@ def legassoc (n, m, th):
 	lgp[0,0] = math.sqrt(1. / 4. / math.pi)
 
 	# Set up the diagonal elements
-	for l in xrange(1,min(m,n)+1):
+	for l in range(1,min(m,n)+1):
 		lgp[l,l] = math.sqrt((2. * l + 1.) / (2. * l)) * u * lgp[l-1,l-1]
 
 	# Set up the upper diagonal
-	for l in xrange(0,min(m,n)):
+	for l in range(0,min(m,n)):
 		lgp[l,l+1] = math.sqrt(2. * l + 3.) * t * lgp[l,l]
 
 	# Now fill in the rest of the matrix
-	for p in xrange(0,m+1):
-		for l in xrange(1+p,n):
+	for p in range(0,m+1):
+		for l in range(1+p,n):
 			# Precompute the recursion coefficients
 			an = math.sqrt((2. * l + 1.) * (2. * l + 3) /
 					(1. + l + p) / (1. + l - p))
@@ -83,7 +83,7 @@ def legpoly (x, n = 0):
 	else: yield cur
 
 	# Now compute the subsequent values
-	for i in xrange(1, n):
+	for i in range(1, n):
 		next = ((2. * i + 1.) * x * cur - i * prev) / (i + 1.)
 		prev = cur
 		cur = next

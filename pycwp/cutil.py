@@ -6,7 +6,8 @@ General-purpose numerical routines used in other parts of the module.
 # Restrictions are listed in the LICENSE file distributed with this package.
 
 import sys, math, operator
-from itertools import izip, count
+from itertools import count
+from functools import reduce
 
 
 def overlap(lwin, rwin):
@@ -243,9 +244,9 @@ def commongrid(lgrid, rgrid):
 	and right grids, respectively.
 	'''
 
-	cgrid = [min(lv, rv) for lv, rv in izip(lgrid, rgrid)]
-	loff = [max(0, (lv - rv) / 2) for lv, rv in izip(lgrid, rgrid)]
-	roff = [max(0, (rv - lv) / 2) for lv, rv in izip(lgrid, rgrid)]
+	cgrid = [min(lv, rv) for lv, rv in zip(lgrid, rgrid)]
+	loff = [max(0, (lv - rv) / 2) for lv, rv in zip(lgrid, rgrid)]
+	roff = [max(0, (rv - lv) / 2) for lv, rv in zip(lgrid, rgrid)]
 	return cgrid, loff, roff
 
 
@@ -316,7 +317,7 @@ def hadamard(x, y):
 	'''
 	Compute the Hadamard product of iterables x and y.
 	'''
-	return tuple(xv * yv for xv, yv in izip(x, y))
+	return tuple(xv * yv for xv, yv in zip(x, y))
 
 
 def prod(a):
@@ -330,7 +331,7 @@ def dot(x, y):
 	'''
 	Compute the dot product of two iterables.
 	'''
-	return sum(xv * yv for xv, yv in izip(x, y))
+	return sum(xv * yv for xv, yv in zip(x, y))
 
 
 def cross(x, y):
@@ -380,7 +381,7 @@ def mse (x, y):
 	Report the mean squared error between the sequences x and y.
 	'''
 	n = d = 0.
-	for xv, yv in izip(x, y):
+	for xv, yv in zip(x, y):
 		n += abs(xv - yv)**2
 		d += abs(yv)**2
 	return math.sqrt(n / d)

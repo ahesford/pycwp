@@ -63,7 +63,7 @@ class Octree(object):
 
 		# Keep track of empty children
 		nokids = set()
-		for k, v in self.children.iteritems():
+		for k, v in self.children.items():
 			# Prune the child to see if it is empty
 			v.prune()
 			if not v.children: nokids.add(k)
@@ -191,7 +191,7 @@ class Octree(object):
 		'''
 		# Produce a list of (child, leaf-set) pairs for validation
 		bpairs = [ (self.branchForKey(key), set(lset))
-				for key, lset in leaves.iteritems() ]
+				for key, lset in leaves.items() ]
 
 		# Ensure all branches are at level 0
 		if any(branch.level for branch, lset in bpairs):
@@ -213,8 +213,8 @@ class Octree(object):
 
 		# Build the mapping up for all children
 		return { tuple(key) + ck: cv
-			for key, ctree in self.children.iteritems()
-			for ck, cv in ctree.getleaves().iteritems() }
+			for key, ctree in self.children.items()
+			for ck, cv in ctree.getleaves().items() }
 
 	def search(self, boxpred, leafpred=None, leafcache=None):
 		'''
@@ -256,7 +256,7 @@ class Octree(object):
 		if self.level > 0:
 			# Recursively check branches
 			results = { }
-			for ctree in self.children.itervalues():
+			for ctree in self.children.values():
 				results.update(ctree.search(boxpred, leafpred, leafcache))
 			return results
 
