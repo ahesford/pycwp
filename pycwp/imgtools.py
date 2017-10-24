@@ -450,7 +450,7 @@ class PinholeCamera(object):
 			except ValueError:
 				raise ValueError('String argument basis must contain exactly 2 characters')
 			# Map the characters to appropriate basis functions
-			bmap = dict(zip('xyz', np.eye(3, dtype=float))))
+			bmap = dict(zip('xyz', np.eye(3, dtype=float)))
 			try:
 				basis = np.array([bmap[dm], bmap[dn]], dtype=float)
 			except KeyError:
