@@ -11,25 +11,27 @@ of binary matrix files.
 # Restrictions are listed in the LICENSE file distributed with this package.
 
 DOCLINES = __doc__.split("\n")
-
-def configuration(parent_package='', top_path=None):
-	from numpy.distutils.misc_util import Configuration
-	config = Configuration(None,  parent_package, top_path)
-	config.set_options(ignore_setup_xxx_py=True,
-			assume_default_configuration=True,
-			delegate_options_to_subpackages=True,
-			quiet=True)
-	config.add_subpackage('pycwp')
-	config.add_scripts(['shell/*.py'])
-
-	return config
+VERSION = '3.1'
 
 if __name__ == '__main__': 
-	from numpy.distutils.core import setup
+	try: import wheel
+	except ImportError: pass
+	
+	from setuptools import setup, find_packages
+	from Cython.Build import cythonize
+	from glob import glob
 
-	setup(name = "pycwp", version = "3.0",
-		description = DOCLINES[0],
-		long_description = "\n".join(DOCLINES[2:]),
-		author = "Andrew J. Hesford", author_email = "ahesford@mac.com",
-		platforms = ["any"], license = "BSD", packages = ["pycwp"],
-		configuration=configuration)
+	import numpy as np
+
+	setup(name="pycwp",
+			version=VERSION,
+			description=DOCLINES[0],
+			long_description="\n".join(DOCLINES[2:]),
+			author="Andrew J. Hesford",
+			author_email="ahesford@mac.com",
+			platforms=["any"], license="Closed",
+			packages=find_packages(),
+			scripts=glob('shell/*.py'),
+			ext_modules=cythonize('**/*.pyx'),
+			include_dirs=[np.get_include()],
+			)

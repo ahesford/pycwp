@@ -3,6 +3,6 @@ syntax: glob
 *.pyc
 build
 dist
-pyajh.egg-info
+*.egg-info
 setup.cfg
 pycwp/cytools/{boxer,eikonal,interpolator,regularize,quadrature,ptutils}.c
