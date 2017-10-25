@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 """
 pycwp: Userful numerical routines for computational wave physics in Pyhon
-
 The pycwp library is maintained by Andrew J. Hesford to provide useful
 software in Python for computational wave physics and the manipulation
 of binary matrix files.
@@ -13,10 +12,10 @@ of binary matrix files.
 DOCLINES = __doc__.split("\n")
 VERSION = '3.1'
 
-if __name__ == '__main__': 
+if __name__ == '__main__':
 	try: import wheel
 	except ImportError: pass
-	
+
 	from setuptools import setup, find_packages
 	from Cython.Build import cythonize
 	from glob import glob
@@ -34,4 +33,5 @@ if __name__ == '__main__':
 			scripts=glob('shell/*.py'),
 			ext_modules=cythonize('**/*.pyx'),
 			include_dirs=[np.get_include()],
+			package_data={ 'pycwp.cytools': ['*.pxd'] }
 			)
