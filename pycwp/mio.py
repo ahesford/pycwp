@@ -21,7 +21,7 @@ def getmattype (infile, dim = None, dtype = None):
 	if isinstance(infile, str): infile = open (infile, mode='rb')
 
 	# The maximum allowed dimension
-	maxdim = max(dim, 3)
+	maxdim = max(dim or 3, 3)
 
 	# Record the size of the file
 	fsize = os.fstat(infile.fileno())[6]
