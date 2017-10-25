@@ -8,15 +8,15 @@ from pycwp import mio, segmentation, process
 
 def usage(progname = 'segmentation.py'):
 	binfile = os.path.basename(progname)
-	print "Usage:", binfile, "[-h] [-n] [-p p] [-d scatden] [-s scatsd] [-g w,s]"
-	print "\t[-c chunk] <segfile> <paramfile> <sndfile> <atnfile> <denfile>"
-	print
-	print "\t-n: Disable random variations"
-	print "\t-p: Use p processors (default: CPU count)"
-	print "\t-d: Assume a random scatterer fractional density scatden"
-	print "\t-s: Smooth random scatterers with Gaussian of standard deviation scatsd"
-	print "\t-g: Smooth tissue with Gaussian of width w and standard deviation s"
-	print "\t-c: Process output chunk slices at a time (default: 8)"
+	print("Usage:", binfile, "[-h] [-n] [-p p] [-d scatden] [-s scatsd] [-g w,s]")
+	print("\t[-c chunk] <segfile> <paramfile> <sndfile> <atnfile> <denfile>")
+	print()
+	print("\t-n: Disable random variations")
+	print("\t-p: Use p processors (default: CPU count)")
+	print("\t-d: Assume a random scatterer fractional density scatden")
+	print("\t-s: Smooth random scatterers with Gaussian of standard deviation scatsd")
+	print("\t-g: Smooth tissue with Gaussian of width w and standard deviation s")
+	print("\t-c: Process output chunk slices at a time (default: 8)")
 
 def mapblks(segfile, outputs, params, start, stride, chunk, **kwargs):
 	'''
@@ -36,7 +36,7 @@ def mapblks(segfile, outputs, params, start, stride, chunk, **kwargs):
 
 	# Loop through the chunks to process output
 	for n in range(start * chunk, seg.shape[-1], stride * chunk):
-		print 'Processing chunk', n
+		print('Processing chunk', n)
 		snd, atn, den = segmentation.maptissueblk(seg, params, n, **kwargs)
 		# Figure out how many slices need to be written
 		oend = min(seg.shape[-1], n + snd.shape[-1])

@@ -9,8 +9,8 @@ from pycwp.cltools import interpolators as clinterp
 
 def usage(execname):
 	binfile = os.path.basename(execname)
-	print 'USAGE:', binfile, '[-h] [-r] [-i <iord>] [-t <tol>] <ntheta> <infile> <outfile>'
-	print '''
+	print('USAGE:', binfile, '[-h] [-r] [-i <iord>] [-t <tol>] <ntheta> <infile> <outfile>')
+	print('''
 	Write to outfile the far-field matrix, characterized by ntheta samples
 	of the polar angle, obtained by interpolating the far-field matrix
 	specified in infile.
@@ -21,7 +21,7 @@ def usage(execname):
 	-i: Use Lagrange interpolation of order iord (default: use cubic b-splines)
 	-t: Use a tolerance of tol for spline coefficient computation (default: 1e-7)
 	-g: Use the GPU for interpolation (implies -r and not -i)
-	'''
+	''')
 
 if __name__ == '__main__':
 	# Grab the executable name

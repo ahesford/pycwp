@@ -7,7 +7,7 @@ Routines used for basic statistical analysis.
 
 import numpy
 from numpy import ma
-from itertools import izip
+
 
 
 def mask_outliers(s, m=1.5):
@@ -29,8 +29,8 @@ def mask_outliers(s, m=1.5):
 	except AttributeError:
 		s = numpy.asarray(s)
 	else:
-		if not len(items): return { }
-		k, s = zip(*items)
+		try: k, s = list(zip(*items))
+		except ValueError: return { }
 
 	# Calculate the quartiles and IQR
 	q1, q2, q3 = numpy.percentile(s, [25, 50, 75])
@@ -38,7 +38,7 @@ def mask_outliers(s, m=1.5):
 	lo, hi = q1 - m * iqr, q3 + m * iqr
 
 	try:
-		return dict(kp for kp in izip(k, s) if lo <= kp[1] <= hi)
+		return dict(kp for kp in zip(k, s) if lo <= kp[1] <= hi)
 	except NameError:
 		return ma.MaskedArray(s, numpy.logical_or(s < lo, s > hi))
 

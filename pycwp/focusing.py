@@ -87,7 +87,7 @@ def recvfocus (mat, thr, coeffs, theta):
 	nc = cfunc (thr)
 
 	# Return the focused array.
-	return numpy.dot(mat, nc)
+	return numpy.asarray(mat) @ nc
 
 def focusfield (k, x, z, coeffs, theta, normalize=False):
 	'''

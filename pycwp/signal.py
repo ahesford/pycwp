@@ -7,7 +7,7 @@ Routines used for manipulation of sequences representing signals.
 
 import numpy, math
 from numpy import fft
-from itertools import izip
+
 
 def findpeaks(vec):
 	'''
@@ -106,7 +106,7 @@ def findpeaks(vec):
 			# Analyze subsequent maxima
 			if ival > jval:
 				# Set the left col for the rightward peak
-				jh = j / 2
+				jh = j // 2
 				lcols[jh] = col
 			else:
 				# Set the right col for the leftward peak
@@ -116,7 +116,7 @@ def findpeaks(vec):
 
 	# Build the peak list
 	peaks = []
-	for pk, lc, rc in izip(maxtab, lcols, rcols):
+	for pk, lc, rc in zip(maxtab, lcols, rcols):
 		kc, sc = keysubcol(pk[0], lc, rc)
 		try:
 			sidx, kidx, pidx = sc[0], kc[0], pk[0]
@@ -147,8 +147,8 @@ def shifter(sig, delays, s=None, axes=None):
 
 	# Set default values for axes and s if necessary
 	if axes is None:
-		if s is not None: axes = range(ndim - len(s), ndim)
-		else: axes = range(ndim)
+		if s is not None: axes = list(range(ndim - len(s), ndim))
+		else: axes = list(range(ndim))
 
 	if s is None: s = tuple(sig.shape[a] for a in axes)
 
@@ -203,7 +203,7 @@ def bandwidth(sigft, df=1, level=0.5, r2c=False):
 	sigamps = numpy.abs(sigft)
 	if not r2c:
 		# Strip the negative frequencies from the C2C DFT
-		sigamps = sigamps[:len(sigamps)/2]
+		sigamps = sigamps[:len(sigamps) // 2]
 
 	# Find the peak positive frequency
 	peakidx = numpy.argmax(sigamps)

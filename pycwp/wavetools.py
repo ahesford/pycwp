@@ -10,9 +10,10 @@ solvers, Green's functions, and a split-step solver.
 import sys, math, cmath, numpy as np, scipy as sp
 from numpy import fft, linalg, random
 import scipy.special as spec, scipy.sparse.linalg as la, scipy.sparse as sparse
-from itertools import izip, product as iproduct
+from itertools import product as iproduct
 
 from . import cutil
+from functools import reduce
 
 def crdtogrid(x, nx, dx=1.):
 	'''
@@ -154,13 +155,13 @@ def directivity(obs, src, d, a):
 	and source.
 	'''
 	# Compute the distance r and its norm
-	r = [x - y for x, y in izip(obs, src)]
+	r = [x - y for x, y in zip(obs, src)]
 	# Compute the norms of the distance and focal axis
 	rn = np.sqrt(reduce(np.add, [rv**2 for rv in r]))
 	dn = np.sqrt(reduce(np.add, [dv**2 for dv in d]))
 
 	# Compute the cosine of the angle
-	ctheta = reduce(np.add, [x * y for x, y in izip(r, d)]) / rn / dn
+	ctheta = reduce(np.add, [x * y for x, y in zip(r, d)]) / rn / dn
 	# Compute the square of the sine of the angle
 	sthsq = 1. - ctheta**2
 	# Compute and return the pattern
@@ -301,7 +302,7 @@ def srcint(k, src, obs, cell, ifunc, n = 4, wts = None):
 	qwts = (cutil.prod(wts[i][1] for i in c) for c in enum(coords))
 
 	# Sum all contributions to the integral
-	ival = np.sum(w * ifunc(k, p, obs) for w, p in izip(qwts, qpts))
+	ival = np.sum(w * ifunc(k, p, obs) for w, p in zip(qwts, qpts))
 
 	return ival * cutil.prod(cell) / 2.**dim
 

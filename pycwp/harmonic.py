@@ -8,7 +8,7 @@ surfaces of spheres, used in other parts of the module.
 
 import math, numpy as np
 from scipy import special as spec, sparse
-from itertools import count, izip
+from itertools import count
 from . import cutil, poly, quad
 
 
@@ -56,7 +56,7 @@ class HarmonicSpline(object):
 		dphi = 2. * math.pi / self.nphis[0]
 
 		# The dimensions of the coefficient grid at the coarse level
-		n, m = 2 * (self.nthetas[0] - 1), self.nphis[0] / 2
+		n, m = 2 * (self.nthetas[0] - 1), self.nphis[0] // 2
 
 		# Precompute the pole for the causal and anti-causal filters
 		zp = math.sqrt(3) - 2.
@@ -104,12 +104,12 @@ class HarmonicSpline(object):
 
 				# Handle wrapping in the second hemisphere
 				if j >= m:
-					thwts = izip(reversed(w), count(-i - 2))
+					thwts = zip(reversed(w), count(-i - 2))
 					j -= m
-				else: thwts = izip(w, count(i - 1))
+				else: thwts = zip(w, count(i - 1))
 
 				for wv, iv in thwts:
-					for uv, jv in izip(u, count(j - 1)):
+					for uv, jv in zip(u, count(j - 1)):
 						# Compute the contributing weight
 						weights.append(wv * uv)
 						# Compute its (wrapped) index
@@ -120,7 +120,7 @@ class HarmonicSpline(object):
 				rval += 1
 
 		# Create a CSR matrix representation of the interpolator
-		self.matrix = sparse.csr_matrix((weights, zip(*idx)), shape=(osamp, n * m))
+		self.matrix = sparse.csr_matrix((weights, list(zip(*idx))), shape=(osamp, n * m))
 
 
 	def getcoeff(self, f):
@@ -153,7 +153,7 @@ class HarmonicSpline(object):
 		zp = zpn[1]
 
 		# Create the coefficient grid
-		n, m, k = 2 * (ntheta - 1), nphi / 2, ntheta - 1
+		n, m, k = 2 * (ntheta - 1), nphi // 2, ntheta - 1
 		c = np.zeros((n, m), dtype=f.dtype)
 
 		# Copy the first hemisphere of data
@@ -173,7 +173,7 @@ class HarmonicSpline(object):
 
 		# Compute the initial causal polar coefficient
 		# c[0] is never in the dot product since p < n
-		c[0] = l[0] * (c[0] + np.dot(c[-p:].T, zpn[p:0:-1]).T)
+		c[0] = l[0] * (c[0] + (c[-p:].T @ zpn[p:0:-1]).T)
 
 		# Compute the remaining causal polar coefficients
 		for i in range(1, c.shape[0]):
@@ -181,14 +181,14 @@ class HarmonicSpline(object):
 
 		# Compute the initial anti-causal polar coefficient
 		# c[-1] is never in the dot product since p < n
-		c[-1] = l[1] * (c[-1] + np.dot(c[:p,].T, zpn[1:p+1]).T)
+		c[-1] = l[1] * (c[-1] + (c[:p,].T @ zpn[1:p+1]).T)
 
 		# Compute the remaining anti-causal polar coefficients
 		for i in reversed(range(c.shape[0] - 1)):
 			c[i, :] = zp * (c[i + 1, :] - c[i,:])
 
 		# Correct the length and coefficients for the azimuthal angle
-		n, m, k = nphi, ntheta - 1, nphi / 2
+		n, m, k = nphi, ntheta - 1, nphi // 2
 		l = 6. / (1 - zpn[n]), zp / (zpn[n] - 1)
 
 		# Limit the number of terms in the sum
@@ -196,9 +196,9 @@ class HarmonicSpline(object):
 		pk = min(k, self.precision)
 
 		# The initial causal azimuthal coefficients from the second hemisphere
-		c[1:m, 0] = l[0] * (c[1:m, 0] + np.dot(c[:-m:-1, -pk:], zpn[pk:0:-1]))
+		c[1:m, 0] = l[0] * (c[1:m, 0] + (c[:-m:-1, -pk:] @ zpn[pk:0:-1]))
 		# High precision may require terms from the first hemisphere
-		if (p > k): c[1:m, 0] += l[0] * np.dot(c[1:m, k-p:], zpn[p:k:-1])
+		if (p > k): c[1:m, 0] += l[0] * (c[1:m, k-p:] @ zpn[p:k:-1])
 
 		# Compute the remaining coefficients of the first hemisphere
 		for i in range(1, c.shape[1]):
@@ -212,9 +212,9 @@ class HarmonicSpline(object):
 			c[-m+1:, i] = 6. * c[-m+1:, i] + zp * c[-m+1:, i - 1]
 
 		# The initial anti-causal azimuthal coefficients from the first hemisphere
-		c[:-m:-1, -1] = l[1] * (c[:-m:-1, -1] + np.dot(c[1:m, :pk], zpn[1:pk+1]))
+		c[:-m:-1, -1] = l[1] * (c[:-m:-1, -1] + (c[1:m, :pk] @ zpn[1:pk+1]))
 		# High precision may require terms from the second hemisphere
-		if (p > k): c[:-m:-1, -1] += l[1] * np.dot(c[:-m:-1, :p-k], zpn[k+1:p+1])
+		if (p > k): c[:-m:-1, -1] += l[1] * (c[:-m:-1, :p-k] @ zpn[k+1:p+1])
 
 		# Compute the remaining coefficients of the second hemisphere
 		for i in reversed(range(c.shape[1] - 1)):
@@ -229,7 +229,7 @@ class HarmonicSpline(object):
 
 		# The polar azimuthal coefficients are special cases in which
 		# the period degenerates to pi, rather than 2 pi.
-		n = nphi / 2
+		n = nphi // 2
 		l = 6. / (1. - zpn[n]), zp / (zpn[n] - 1.)
 
 		# Limit the number of terms in the sum
@@ -238,14 +238,14 @@ class HarmonicSpline(object):
 		# Compute the coefficients for each pole
 		for i in [0, m]:
 			# Compute the initial causal azimuthal coefficient
-			c[i, 0] = l[0] * (c[i, 0] + np.dot(c[i, -p:], zpn[p:0:-1]))
+			c[i, 0] = l[0] * (c[i, 0] + (c[i, -p:] @ zpn[p:0:-1]))
 
 			# Compute the remaining causal azimuthal coefficients
 			for j in range(1, c.shape[1]):
 				c[i, j] = 6. * c[i, j] + zp * c[i, j - 1]
 
 			# Compute the initial anti-causal azimuthal coefficient
-			c[i, -1] = l[1] * (c[i, -1] + np.dot(c[i, :p], zpn[1:p+1]))
+			c[i, -1] = l[1] * (c[i, -1] + (c[i, :p] @ zpn[1:p+1]))
 
 			# Compute the remaining anti-causal azimuthal coefficients
 			for j in reversed(range(c.shape[1] - 1)):
@@ -323,7 +323,7 @@ class SphericalInterpolator(object):
 		dphi = [2 * math.pi / n for n in nphi]
 
 		# Half the Lagrange interval width
-		offset = (order - 1) / 2
+		offset = (order - 1) // 2
 
 		# Adjust wrapping shifts depending on direction of polar samples
 		if thetas[0][0] < thetas[0][-1]: wraps = 0, 2 * math.pi
@@ -371,11 +371,11 @@ class SphericalInterpolator(object):
 					# Compute the angular position
 					rphi = j * dphi[1]
 					# Find the starting interpolation interval
-					k = (j * nphi[0]) / nphi[1] - offset
+					k = (j * nphi[0]) // nphi[1] - offset
 
 					if rv < 0 or rv >= ntheta[0]:
 						rphi += math.pi
-						k += nphi[0] / 2
+						k += nphi[0] // 2
 
 					# Properly wrap the polar values
 					if rv < 0: rv = -rv
@@ -402,7 +402,7 @@ class SphericalInterpolator(object):
 		ij.append([rval, nsamp[0] - 1])
 
 		# Create a CSR matrix representation of the interpolator
-		self.matrix = sparse.csr_matrix((data, zip(*ij)), shape=nsamp[::-1])
+		self.matrix = sparse.csr_matrix((data, list(zip(*ij))), shape=nsamp[::-1])
 
 
 	def interpolate(self, f):
@@ -468,7 +468,7 @@ def sh2fld (k, clm, r, t, p, reg = True):
 
 	# Otherwise, compress the coefficient matrix to eliminate excess values
 	if clm.shape[0] > lda:
-		clm = np.array([[clm[i,j] for j in xrange(deg)]
+		clm = np.array([[clm[i,j] for j in range(deg)]
 			for i in harmorder(deg-1)])
 
 	# Compute the radial term
@@ -484,7 +484,7 @@ def sh2fld (k, clm, r, t, p, reg = True):
 	epm = np.array([[np.exp(1j * m * px) for px in p] for m in harmorder(deg-1)])
 
 	shxp = lambda c, y: np.array([[c[m,l] * y[abs(m),l]
-		for l in xrange(deg)] for m in harmorder(deg-1)])
+		for l in range(deg)] for m in harmorder(deg-1)])
 
 	# Compute the polar term and multiply by harmonic coefficients
 	ytlm = np.array([shxp(clm,poly.legassoc(deg-1,deg-1,tx)) for tx in t])
@@ -520,7 +520,7 @@ def translator (r, s, phi, theta, l):
 	tr = 0
 
 	# Sum the terms of the translator
-	for hv, pv in izip(hl, poly.legpoly(sds, l)): tr += hv * pv
+	for hv, pv in zip(hl, poly.legpoly(sds, l)): tr += hv * pv
 	return tr
 
 

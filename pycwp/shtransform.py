@@ -40,13 +40,13 @@ class SHTransform(object):
 		'''
 		# Set up a generator for the scale factor
 		if forward:
-			cscale = (1j**(i % 4) for i in xrange(1,self.deg + 1))
+			cscale = (1j**(i % 4) for i in range(1,self.deg + 1))
 		else:
-			cscale = ((-1j)**(i % 4) for i in xrange(1,self.deg + 1))
+			cscale = ((-1j)**(i % 4) for i in range(1,self.deg + 1))
 
 		# Scale each column of the coefficient matrix
 		for column in shdata[:,:self.deg].transpose():
-			column *= cscale.next()
+			column *= next(cscale)
 
 	def spectogrid (self, samples):
 		'''Execute an inverse harmonic transform.'''

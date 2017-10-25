@@ -215,7 +215,7 @@ class MultiplaneProjector(object):
 		Return an iterator (if iterator is True) or list (if iterator
 		is False) of slice keys registered with the projector.
 		'''
-		return self._slices.iterkeys() if iterator else self._slices.keys()
+		return iter(self._slices.keys()) if iterator else list(self._slices.keys())
 
 
 	def slicecount(self):
@@ -443,7 +443,7 @@ class PinholeCamera(object):
 		if mi != m or ni != n or mi < 1 or ni < 1:
 			raise ValueError('Arguments m, n must have positive integer values')
 
-		if isinstance(basis, basestring):
+		if isinstance(basis, str):
 			basis = basis.lower()
 			try:
 				dm, dn = basis
@@ -461,7 +461,7 @@ class PinholeCamera(object):
 				raise ValueError('Array argument basis must have shape (2, 3)')
 
 		eps = np.finfo(float).eps
-		if abs(np.dot(basis[0], basis[1])) > eps:
+		if abs(basis[0] @ basis[1]) > eps:
 			raise ValueError('Rows of basis matrix must be orthogonal')
 		if any(d < eps for d in np.sum(basis, axis=-1)):
 			raise ValueError('Rows of basis matrix must not be 0')
@@ -508,7 +508,7 @@ class PinholeCamera(object):
 		axpad = [np.newaxis] * (pts.ndim - 1) + [slice(None)]
 
 		# Shift origin and rotate to camera coordinates
-		return np.dot(pts - self.center[axpad], self.rotmat.T)
+		return (pts - self.center[axpad]) @ self.rotmat.T
 
 
 	def optimumFocalLength(self, crd, m, n):
@@ -607,13 +607,13 @@ class PinholeCamera(object):
 
 		# Rotate the source origin and normal into camera coordinates
 		p0 = self.project(origin)
-		normal = np.dot(self.rotmat, normal)
+		normal = self.rotmat @ normal
 
 		eps = np.finfo(float).eps
 
 		# Find numerator for intersection parameter
 		# In camera coordinates, the line "origin" is 0
-		pn = np.dot(p0, normal)
+		pn = p0 @ normal
 
 		if abs(pn) < eps:
 			# In degenerate cases, return all -1s
@@ -629,18 +629,18 @@ class PinholeCamera(object):
 		l[:,:,2] = -f
 
 		# Project the image coordinates into the source plane
-		l *= (pn / np.dot(l, normal))[:,:,nax]
+		l *= (pn / (l @ normal))[:,:,nax]
 		# Compute the distance from source plane to aperture
 		depth = np.sqrt(np.sum(l**2, axis=-1))
 
 		# Transform intersection points into source coordinates
-		crds = np.dot(l, self.rotmat) + self.center[nax,nax,:]
+		crds = (l @ self.rotmat) + self.center[nax,nax,:]
 		# Now convert source coordinates to pixel coodinates
 		crds -= origin[nax,nax,:]
 		# This works because dm and dn are be orthogonal
 		# Clip out-of-bounds values
-		ic = (np.dot(crds, dm) / np.sum(dm**2)).clip(-1, m)
-		jc = (np.dot(crds, dn) / np.sum(dn**2)).clip(-1, n)
+		ic = ((crds @ dm) / np.sum(dm**2)).clip(-1, m)
+		jc = ((crds @ dn) / np.sum(dn**2)).clip(-1, n)
 
 		# Combine the pixel coordinates along the final axis
 		crds = np.array([ic, jc], dtype=float).transpose(1, 2, 0)

@@ -12,7 +12,7 @@ cimport numpy as np
 from math import sqrt
 from libc.math cimport sqrt
 
-from itertools import izip, product as iproduct
+from itertools import product as iproduct
 
 @cython.cdivision(True)
 @cython.boundscheck(False)

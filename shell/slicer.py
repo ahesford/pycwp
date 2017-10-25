@@ -11,7 +11,7 @@ from pycwp import mio
 
 def usage (progname = 'slicer.py'):
 	binfile = os.path.basename(progname)
-	print >> sys.stderr, "Usage:", binfile, "<slice> <inputfile> [outputfile]"
+	print("Usage:", binfile, "<slice> <inputfile> [outputfile]", file=sys.stderr)
 
 
 def slicer(slstr):

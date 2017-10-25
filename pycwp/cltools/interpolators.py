@@ -30,7 +30,7 @@ class HarmonicSpline(object):
 		self.ntheta = ntheta
 		self.nphi = nphi
 		# This is the polar-ring grid shape
-		self.grid = 2 * (ntheta - 1), nphi / 2
+		self.grid = 2 * (ntheta - 1), nphi // 2
 
 		# Set the desired precision of the filter coefficients
 		if tol > 0:

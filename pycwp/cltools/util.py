@@ -330,7 +330,7 @@ class BufferedSlices(Thread):
 		self.daemon = True
 
 		# By default, iterate through the backer in order
-		self._iter = range(len(self._backer))
+		self._iter = list(range(len(self._backer)))
 
 
 	def kill(self):

@@ -10,9 +10,9 @@ from pycwp import mio
 
 def usage (progname = 'patsplit.py'):
 	binfile = os.path.basename(progname)
-	print "Usage:", binfile, "[-h] <file> [x,y]"
-	print "\tSplit columns of two-dimensional matrix <file> into separate files"
-	print "\tOptional shape specification x,y reshapes each column as a 2-D matrix."
+	print("Usage:", binfile, "[-h] <file> [x,y]")
+	print("\tSplit columns of two-dimensional matrix <file> into separate files")
+	print("\tOptional shape specification x,y reshapes each column as a 2-D matrix.")
 
 def main (argv = None):
 	if argv is None:

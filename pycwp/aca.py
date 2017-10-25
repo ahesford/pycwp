@@ -7,7 +7,7 @@ Routines to construct and recompress ACA approximations to matrices.
 
 import math, numpy as np, numpy.linalg as la
 
-from itertools import izip
+
 
 def matrix(eltfunc, nr, nc, tol = 1e-6):
 	'''
@@ -31,12 +31,12 @@ def matrix(eltfunc, nr, nc, tol = 1e-6):
 	zhist = []
 
 	# Loop through the algorithm
-	for k in xrange(maxrank):
+	for k in range(maxrank):
 		# Build the desired row
-		r = np.array([eltfunc(irow[-1], j) for j in xrange(nc)])
+		r = np.array([eltfunc(irow[-1], j) for j in range(nc)])
 
 		# Subtract off existing contributions
-		for ue, ve in izip(u, v):
+		for ue, ve in zip(u, v):
 			r -= ue[irow[-1]] * ve
 
 		# Find the column index of the largest element
@@ -47,10 +47,10 @@ def matrix(eltfunc, nr, nc, tol = 1e-6):
 		v.append(r / r[icol[-1]])
 
 		# Build the desired column
-		c = np.array([eltfunc(i, icol[-1]) for i in xrange(nr)])
+		c = np.array([eltfunc(i, icol[-1]) for i in range(nr)])
 
 		# Subract off existing contributions
-		for ue, ve in izip(u, v):
+		for ue, ve in zip(u, v):
 			c -= ve[icol[-1]] * ue
 
 		# Add in the new column
@@ -61,13 +61,12 @@ def matrix(eltfunc, nr, nc, tol = 1e-6):
 			for idx, l in enumerate(c)])[-1])
 
 		# Update the new matrix norm estimate
-		nrmsq = np.dot(np.conj(u[-1]), u[-1]) * np.dot(np.conj(v[-1]), v[-1])
+		nrmsq = (np.conj(u[-1]) @ u[-1]) * (np.conj(v[-1]) @ v[-1])
 		zabs += nrmsq
 
 		# Add in the norm contributions from other row/column products
-		for ue, ve in izip(u[:-1], v[:-1]):
-			zabs += 2. * (np.abs(np.dot(ue, u[-1])) * 
-					np.abs(np.dot(ve, v[-1])))
+		for ue, ve in zip(u[:-1], v[:-1]):
+			zabs += 2. * (np.abs(ue @ u[-1]) * np.abs(ve @ v[-1]))
 
 		if nrmsq <= tol * zabs: break
 
@@ -88,7 +87,7 @@ def recompress(u, v, tol = 1e-6):
 	qv, rv = la.qr(v)
 
 	# Compute the outer product of the triangular matrices
-	rp = np.dot(ru, rv.transpose().conjugate())
+	rp = ru @ rv.transpose().conjugate()
 
 	# Compute the singular value decomposition of the triangular product
 	uhat, shat, vhat = la.svd(rp)
@@ -101,10 +100,10 @@ def recompress(u, v, tol = 1e-6):
 	uhat = uhat[:,:rank]
 
 	# Truncate and multiply the diagonal matrix by the column space
-	vhat = np.array([sv * vv for sv, vv in izip(shat[:rank], vhat[:rank])])
+	vhat = np.array([sv * vv for sv, vv in zip(shat[:rank], vhat[:rank])])
 
 	# Compute the modified row and column matrices
-	ut = np.dot(qu, uhat)
-	vt = np.dot(qv, vhat.transpose().conjugate())
+	ut = qu @ uhat
+	vt = qv @ vhat.transpose().conjugate()
 
 	return ut, vt

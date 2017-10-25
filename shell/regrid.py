@@ -42,8 +42,8 @@ def rotslices(outmat, inmat, theta, lints,
 		# Set the slice shapes
 		lint.setshapes(outmat.sliceshape, inmat.sliceshape)
 		# Alternate slices between each interpolator
-		src.setiter(range(i, nslice, nlints))
-		dst.setiter(range(i, nslice, nlints))
+		src.setiter(list(range(i, nslice, nlints)))
+		dst.setiter(list(range(i, nslice, nlints)))
 		# Start the slicer buffering
 		src.start()
 		dst.start()
@@ -79,7 +79,7 @@ def rotslices(outmat, inmat, theta, lints,
 				bar.increment()
 				util.printflush(str(bar) + '\r')
 
-	if verbose: print
+	if verbose: print()
 
 	# Ensure that all output has finished
 	for dst in dsts:
@@ -124,8 +124,8 @@ def rectbounds(n, h, theta, phi, hd=None):
 
 
 def usage (execname = 'regrid.py'):
-	print "Usage:", execname, "[-h] [-g g] [-v] [-d dx,dy,dz] [-s sx,sy,dz] [-n nx,ny,nz] [-r] [-t t] [-p p] <input> <output>"
-	print '''
+	print("Usage:", execname, "[-h] [-g g] [-v] [-d dx,dy,dz] [-s sx,sy,dz] [-n nx,ny,nz] [-r] [-t t] [-p p] <input> <output>")
+	print('''
   Use linear interpolation on an OpenCL device to resample and rotate the 3-D
   matrix file input (stored in FORTRAN order) into the matrix file output. The
   OpenCL device must support image types.
@@ -151,7 +151,7 @@ def usage (execname = 'regrid.py'):
   -t: Perform a polar rotation of t radians about the y axis (default: 0)
   -p: Perform an azimuthal rotation of p radians about the z axis (default: 0)
   -r: Reverse the order of rotation
-	'''
+	''')
 
 
 if __name__ == "__main__":
@@ -203,7 +203,7 @@ if __name__ == "__main__":
 	input = mio.readbmat(args[0])
 	# Make sure that the input is three-dimensional
 	if len(input.shape) != 3:
-		print >> sys.stderr, 'A three-dimensional input is required'
+		print('A three-dimensional input is required', file=sys.stderr)
 		sys.exit(128)
 
 	# If necessary, pick a size to contain the domain
@@ -214,20 +214,20 @@ if __name__ == "__main__":
 	norot = (abs(theta) < flt_eps and abs(phi) < flt_eps)
 	nogrid = (dsize == input.shape and dgrid == sgrid)
 	if norot and nogrid:
-		print >> sys.stderr, 'Output file is just a copy of input'
+		print('Output file is just a copy of input', file=sys.stderr)
 		sys.exit(128)
 
 	# Format and print the dimensions of the rotation
 	def gridprint(x): return ' x '.join(str(xv) for xv in x)
 	message = 'Regrid: ({:s}, {:s}) -> ({:s}, {:s})'
-	print message.format(*[gridprint(x) for x in [input.shape, sgrid, dsize, dgrid]])
+	print(message.format(*[gridprint(x) for x in [input.shape, sgrid, dsize, dgrid]]))
 
 	# Make the linear interpolators
 	# The shapes aren't important because they will be set when called
 	lints = [cltools.InterpolatingRotator(input.shape[:-1], input.shape[:-1], g) for g in ctx]
 
 	# The intermediate grid spacing is the minimum of input and output
-	igrid = map(min, sgrid, dgrid)
+	igrid = list(map(min, sgrid, dgrid))
 
 	# Determine parameters for the first rotation
 	if reversed:
@@ -269,7 +269,7 @@ if __name__ == "__main__":
 
 	if verbose:
 		message = 'First rotation to grid {:s}, spacing {:s}'
-		print message.format(gridprint(isize), gridprint(igrid))
+		print(message.format(gridprint(isize), gridprint(igrid)))
 
 	# Perform the first slicewise rotation
 	rotslices(outslicer, inslicer, angle, lints, igrid, sgrid, verbose)
@@ -289,7 +289,7 @@ if __name__ == "__main__":
 
 	if verbose:
 		message = 'Second rotation to grid {:s}, spacing {:s}'
-		print message.format(gridprint(dsize), gridprint(dgrid))
+		print(message.format(gridprint(dsize), gridprint(dgrid)))
 
 	# Perform the final slicewise rotation
 	rotslices(outslicer, inslicer, angle, lints, dgrid, igrid, verbose)

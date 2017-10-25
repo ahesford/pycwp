@@ -13,8 +13,8 @@ from pycwp.cltools import SplitStep, BufferedSlices, mapbuffer
 
 def usage(execname):
 	binfile = os.path.basename(execname)
-	print 'USAGE:', binfile, '[-h] [-q q] [-p p] [-a a] [-r regrid.py] [-t tmpdir] [-g g0,g1,...] [-v] [-V] [-f f] [-s s] [-c c] [-e nx,ny] [-w w] [-P P] [-d [x,y,z,]w]', '<srclist> <infile> <outfmt>'
-	print '''
+	print('USAGE:', binfile, '[-h] [-q q] [-p p] [-a a] [-r regrid.py] [-t tmpdir] [-g g0,g1,...] [-v] [-V] [-f f] [-s s] [-c c] [-e nx,ny] [-w w] [-P P] [-d [x,y,z,]w]', '<srclist> <infile> <outfmt>')
+	print('''
   Using the split-step method, compute the fields induced in a contrast medium
   specified in infile by each of a collection of sources listed in the file
   srclist. The file describes each source on a separate line and is parsed with
@@ -71,7 +71,7 @@ def usage(execname):
   -w: High-order spectral correction weight (default: 0.39)
   -P: Use extra steps to avoid phase deviations greater than (P * pi) per slab
   -d: Directivity width parameter w and optional axis (x,y,z) (default: none)
-	'''
+	''')
 
 def facetnormal(f):
 	'''
@@ -93,7 +93,7 @@ def facetnormal(f):
 	# Enumerate local coordinates of all other elements
 	vecs = [fv - f[0] for fv in f[1:-1]]
 	# Find the vector most orthogonal to the reference
-	v = min(vecs, key = lambda x: abs(np.dot(x, ref)) / norm(x) / nref)
+	v = min(vecs, key = lambda x: abs(x @ ref) / norm(x) / nref)
 	# Compute the normal and its length
 	n = np.cross(v, ref)
 	nnrm = norm(n)
@@ -107,7 +107,7 @@ def facetnormal(f):
 	# Otherwise, normalize the vector and pick the right direction
 	n /= nnrm
 	# Find length of normal segment connecting origin to facet plane
-	d = np.dot(f[0], n)
+	d = f[0] @ n
 	# If d is positive, the normal already points outward
 	return n if (d > 0) else -n
 
@@ -174,7 +174,7 @@ def propagator(contrast, outfmt, srclist, start=0, stride=1, c=1.507, f=3.0,
 
 	# Pick a default Hann window thickness that will not encroach on the domain
 	if a is None:
-		a = max(0, min((dcrd - gcrd) / 2
+		a = max(0, min((dcrd - gcrd) // 2
 			for dcrd, gcrd in zip(e, ctmat.sliceshape)))
 
 	# Note the rank of this process
@@ -195,7 +195,7 @@ def propagator(contrast, outfmt, srclist, start=0, stride=1, c=1.507, f=3.0,
 	if verbose:
 		# Note the propagation parameters
 		gridstr = ' x '.join(str(crd) for crd in list(e) + dom[-1:])
-		print '{:s}: {:s} grid, {:d}-pixel Hann window'.format(procid, gridstr, a)
+		print('{:s}: {:s} grid, {:d}-pixel Hann window'.format(procid, gridstr, a))
 		# Create a progress bar to track propagation status
 		bar = util.ProgressBar([0, dom[-1]], width=50)
 
@@ -204,7 +204,7 @@ def propagator(contrast, outfmt, srclist, start=0, stride=1, c=1.507, f=3.0,
 		src = srclist[srcidx]
 		srcstring = '({0[facet]:d}, {0[source]:d})'.format(src)
 		posstring = '({0[0]:0.2f}, {0[1]:0.2f}, {0[2]:0.2f})'.format(src['position'])
-		print '{0:s}: Propagating source {1:s} at {2:s}'.format(procid, srcstring, posstring)
+		print('{0:s}: Propagating source {1:s} at {2:s}'.format(procid, srcstring, posstring))
 
 		if verbose:
 			# Reinitialize the progress bar
@@ -265,7 +265,7 @@ def propagator(contrast, outfmt, srclist, start=0, stride=1, c=1.507, f=3.0,
 				util.printflush(str(bar) + ' (forward) \r')
 
 		# Finalize forward bar printing
-		if verbose: print
+		if verbose: print()
 
 		# Kill the object buffer
 		obj.kill()
@@ -356,7 +356,7 @@ if __name__ == '__main__':
 
 	# Figure the share of elements for this MPI task
 	nelts = len(elements)
-	share = nelts / size
+	share = nelts // size
 	remainder = nelts % size
 	start = rank * share + min(remainder, rank)
 	if rank < remainder: share += 1
@@ -391,7 +391,7 @@ if __name__ == '__main__':
 
 		if (rotprog is None) or (theta < rottol): rotcontrast = contrast
 		else:
-			print rotmsg.format(rank, theta, phi)
+			print(rotmsg.format(rank, theta, phi))
 			# Create the rotated contrast and output filenames
 			rotcontrast = contrast + '.facet{0:d}'.format(fidx)
 			# Put rotated contrast in desired temporary directory

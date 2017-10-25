@@ -14,7 +14,7 @@ def configuration(parent_package='', top_path=None):
 	config.package_data.update({ k: [ '*.pxd' ] for k in config.package_dir })
 
 	for ext in cythonize([ os.path.join(d, '*.pyx')
-			for d in config.package_dir.itervalues() ]):
+			for d in config.package_dir.values() ]):
 		config.ext_modules.append(ext)
 
 	return config

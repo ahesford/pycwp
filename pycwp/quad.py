@@ -14,13 +14,13 @@ def clenshaw (m):
 	Compute the Clenshaw-Curtis quadrature nodes and weights in the
 	interval [0,pi] for a specified order m.
 	'''
-	n = m - 1
+	n = int(m - 1)
 	idx = numpy.arange(m)
 	# Nodes are equally spaced in the interval
 	nodes = idx * math.pi / float(n)
 	# Endpoint weights should be halved to avoid aliasing
 	cj = (numpy.mod(idx, n) == 0).choose(2., 1.)
-	k = numpy.arange(1, int(n / 2) + 1)[:,numpy.newaxis]
+	k = numpy.arange(1, n // 2 + 1)[:,numpy.newaxis]
 	bk = (k < n / 2.).choose(1., 2.)
 	# The weights are defined according to Waldvogel (2003)
 	cos = numpy.cos(2. * k * nodes[numpy.newaxis,:])
@@ -34,10 +34,10 @@ def fejer2 (m):
 	Compute the quadrature nodes and weights, in the interval [0, pi],
 	using Fejer's second rule for an order m.
 	'''
-	n = m - 1
+	n = int(m - 1)
 	idx = numpy.arange(m)
 	nodes = idx * math.pi / float(n)
-	k = numpy.arange(1, int(n / 2) + 1)[:,numpy.newaxis]
+	k = numpy.arange(1, n // 2 + 1)[:,numpy.newaxis]
 	sin = numpy.sin((2. * k - 1.) * nodes[numpy.newaxis,:])
 	weights = (4. / n) * numpy.sin(nodes) * numpy.sum(sin / (2. * k - 1.), axis=0)
 	return nodes, weights
@@ -53,7 +53,7 @@ def gaussleg (m, tol = 1e-9, itmax=100):
 	weights = numpy.zeros((m), dtype=numpy.float64)
 	nodes = numpy.zeros((m), dtype=numpy.float64)
 
-	nRoots = (m + 1) / 2
+	nRoots = int(m + 1) // 2
 
 	for i in range(nRoots):
 		# The initial guess is the (i+1) Chebyshev root
@@ -89,7 +89,7 @@ def gausslob (m, tol = 1e-9, itmax=100):
 	nodes = numpy.zeros((m), dtype=numpy.float64)
 
 	# This is the number of roots away from the endpoints
-	nRoots = (m - 1) / 2
+	nRoots = int(m - 1) / 2
 
 	# First compute the nodes and weights at the endpoints
 	nodes[0] = 0.

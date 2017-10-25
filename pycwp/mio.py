@@ -18,7 +18,7 @@ def getmattype (infile, dim = None, dtype = None):
 	'''
 
 	# Open the input file if it isn't already open
-	if isinstance(infile, (str, unicode)): infile = open (infile, mode='rb')
+	if isinstance(infile, str): infile = open (infile, mode='rb')
 
 	# The maximum allowed dimension
 	maxdim = max(dim, 3)
@@ -61,7 +61,7 @@ def getmattype (infile, dim = None, dtype = None):
 		# Grab the number of bytes per record and
 		# check that the record size lines up
 		nelts = cutil.prod(matsize)
-		nbytes = dsize / nelts
+		nbytes = dsize // nelts
 		if nbytes * nelts != dsize: continue
 
 		# Try to grab the data type of the records
@@ -86,7 +86,7 @@ def writebmat (mat, outfile):
 	'''
 
 	# Open the output file if it isn't already open
-	if isinstance(outfile, (str, unicode)): outfile = open (outfile, mode='wb')
+	if isinstance(outfile, str): outfile = open (outfile, mode='wb')
 
 	# This will close the file when writing is done
 	with outfile:
@@ -124,7 +124,7 @@ def readbmat (infile, dim = None, dtype = None):
 	'''
 
 	# Open the input file if it isn't already open
-	if isinstance(infile, (str, unicode)): infile = open (infile, mode='rb')
+	if isinstance(infile, str): infile = open (infile, mode='rb')
 
 	# This will close the file when writing is done
 	with infile:
@@ -166,7 +166,7 @@ class Slicer(object):
 			if trunc: raise IOError('Ignoring any existing file')
 
 			# Open a file if a name was provided
-			if isinstance(f, (str, unicode)): f = open(f, mode='rb+')
+			if isinstance(f, str): f = open(f, mode='rb+')
 
 			# Grab the matrix header, size, and data type
 			self.shape, self.dtype = getmattype(f, dim, dtype)
@@ -180,7 +180,7 @@ class Slicer(object):
 				raise ValueError('Grid dimensions and data type must be specified to create file')
 
 			# Open a file if a name was provided
-			if isinstance(f, (str, unicode)): f = open(f, mode='wb+')
+			if isinstance(f, str): f = open(f, mode='wb+')
 			else: f.truncate(0)
 
 			# Note that the file was created or truncated
@@ -309,7 +309,7 @@ class Slicer(object):
 		Grab slices from the data file using list-style indexing.
 		'''
 		# Build a list of indices from which to read
-		try: idx = range(*key.indices(self.shape[-1]))
+		try: idx = list(range(*key.indices(self.shape[-1])))
 		# If idx is a single index, read and return the single slab
 		except AttributeError: return self._read(key)
 
@@ -334,7 +334,7 @@ class Slicer(object):
 		the backer shape.
 		'''
 		# Build a list of indices for writing
-		try: idx = range(*key.indices(self.shape[-1]))
+		try: idx = list(range(*key.indices(self.shape[-1])))
 		# If idx is a single index, write the slab and quit
 		except AttributeError:
 			self._write(key, value)
@@ -381,7 +381,7 @@ class CoordinateShifter(object):
 			raise ValueError('Axis must be in range -N:N-1 for arrays of dimension N')
 		nshift = ndim - 1 - axis
 		# Figure out the ordering of axes in the shift
-		self.axes = tuple(np.roll(range(ndim), nshift))
+		self.axes = tuple(np.roll(list(range(ndim)), nshift))
 		# Store the transposed view into the backer
 		self._backtrans = self._backer.transpose(self.axes)
 		# Figure out the total shape and slice shape

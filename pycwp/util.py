@@ -17,7 +17,7 @@ def alternator(*args):
 	iters = tuple(iter(a) for a in args)
 	while True:
 		for it in iters:
-			yield it.next()
+			yield next(it)
 
 
 class bidict(dict):
@@ -28,7 +28,7 @@ class bidict(dict):
 	def __init__(self, *args, **kwargs):
 		super(bidict, self).__init__(*args, **kwargs)
 		self.inverse = {}
-		for key, value in self.iteritems():
+		for key, value in self.items():
 			self.inverse.setdefault(value, []).append(key)
 
 	def __setitem__(self, key, value):
@@ -49,12 +49,12 @@ class lazy_property(object):
 	'''
 	def __init__(self, fget):
 		self.fget = fget
-		self.func_name = fget.__name__
+		self.fname = fget.__name__
 
 	def __get__(self, obj, cls):
 		if obj is None: return None
 		value = self.fget(obj)
-		setattr(obj, self.func_name, value)
+		setattr(obj, self.fname, value)
 		return value
 
 
@@ -84,7 +84,7 @@ def grouplist(lst, n):
 	'''
 	iterable = iter(lst)
 	while True:
-		yield tuple(islice(iterable, n)) or iterable.next()
+		yield tuple(islice(iterable, n)) or next(iterable)
 
 
 def printflush(string):
@@ -92,7 +92,7 @@ def printflush(string):
 	Print a string, without a newline, and flush stdout.
 	'''
 	from sys import stdout
-	print string,
+	print(string, end=' ')
 	stdout.flush()
 
 

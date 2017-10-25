@@ -223,7 +223,7 @@ class Helmholtz(fdtd.Helmholtz):
 
 		# Grab the next source value
 		# Needs to be scaled by the square of the time step
-		v = np.float32(self.h**2 * self.source.next())
+		v = np.float32(self.h**2 * next(self.source))
 
 		# Invoke the OpenCL kernel
 		self.fdcl.helm(self.queue, self.gsize, None, self.pa[1],

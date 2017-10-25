@@ -6,7 +6,7 @@ custom vector norm functions to facilitate parallel computation.
 # Copyright (c) 2017 Andrew J. Hesford. All rights reserved.
 # Restrictions are listed in the LICENSE file distributed with this package.
 
-from __future__ import division, print_function, absolute_import
+
 
 __all__ = [ 'lsqr', 'lsmr' ]
 

@@ -4,16 +4,16 @@
 # Restrictions are listed in the LICENSE file distributed with this package.
 
 import sys, os, getopt, numpy as np, multiprocessing
-from itertools import izip
+
 
 from pycwp import mio, cutil
 
 def usage(progname = 'caxpy.py'):
 	binfile = os.path.basename(progname)
-	print "Usage:", binfile, "[-h] [-p nproc] [-a a] [-b b] <z> <x> <y>"
-	print "  Compute z = a * x + b * y for matrices in files z, x, and y"
-	print "  Both a and b are complex constants specified in the form c+dj"
-	print "  By default, a = b = 1"
+	print("Usage:", binfile, "[-h] [-p nproc] [-a a] [-b b] <z> <x> <y>")
+	print("  Compute z = a * x + b * y for matrices in files z, x, and y")
+	print("  Both a and b are complex constants specified in the form c+dj")
+	print("  By default, a = b = 1")
 
 
 def caxpby(args):
