@@ -37,7 +37,7 @@ def eurotate(pt, alpha, beta, gamma, passive=False):
 
 	if passive: R = R.T
 
-	rpt = np.dot(R, pt.T).T
+	rpt = (R @ pt.T).T
 	if squeeze: rpt = rpt.squeeze()
 
 	return rpt

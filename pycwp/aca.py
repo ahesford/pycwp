@@ -61,13 +61,12 @@ def matrix(eltfunc, nr, nc, tol = 1e-6):
 			for idx, l in enumerate(c)])[-1])
 
 		# Update the new matrix norm estimate
-		nrmsq = np.dot(np.conj(u[-1]), u[-1]) * np.dot(np.conj(v[-1]), v[-1])
+		nrmsq = (np.conj(u[-1]) @ u[-1]) * (np.conj(v[-1]) @ v[-1])
 		zabs += nrmsq
 
 		# Add in the norm contributions from other row/column products
 		for ue, ve in zip(u[:-1], v[:-1]):
-			zabs += 2. * (np.abs(np.dot(ue, u[-1])) * 
-					np.abs(np.dot(ve, v[-1])))
+			zabs += 2. * (np.abs(ue @ u[-1]) * np.abs(ve @ v[-1]))
 
 		if nrmsq <= tol * zabs: break
 
@@ -88,7 +87,7 @@ def recompress(u, v, tol = 1e-6):
 	qv, rv = la.qr(v)
 
 	# Compute the outer product of the triangular matrices
-	rp = np.dot(ru, rv.transpose().conjugate())
+	rp = ru @ rv.transpose().conjugate()
 
 	# Compute the singular value decomposition of the triangular product
 	uhat, shat, vhat = la.svd(rp)
@@ -104,7 +103,7 @@ def recompress(u, v, tol = 1e-6):
 	vhat = np.array([sv * vv for sv, vv in zip(shat[:rank], vhat[:rank])])
 
 	# Compute the modified row and column matrices
-	ut = np.dot(qu, uhat)
-	vt = np.dot(qv, vhat.transpose().conjugate())
+	ut = qu @ uhat
+	vt = qv @ vhat.transpose().conjugate()
 
 	return ut, vt

@@ -93,7 +93,7 @@ def facetnormal(f):
 	# Enumerate local coordinates of all other elements
 	vecs = [fv - f[0] for fv in f[1:-1]]
 	# Find the vector most orthogonal to the reference
-	v = min(vecs, key = lambda x: abs(np.dot(x, ref)) / norm(x) / nref)
+	v = min(vecs, key = lambda x: abs(x @ ref) / norm(x) / nref)
 	# Compute the normal and its length
 	n = np.cross(v, ref)
 	nnrm = norm(n)
@@ -107,7 +107,7 @@ def facetnormal(f):
 	# Otherwise, normalize the vector and pick the right direction
 	n /= nnrm
 	# Find length of normal segment connecting origin to facet plane
-	d = np.dot(f[0], n)
+	d = f[0] @ n
 	# If d is positive, the normal already points outward
 	return n if (d > 0) else -n
 
