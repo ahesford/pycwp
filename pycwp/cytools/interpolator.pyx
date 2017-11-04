@@ -12,10 +12,42 @@ cimport cython
 import numpy as np
 cimport numpy as np
 
+import itertools
+
 from cpython.mem cimport PyMem_Malloc, PyMem_Free
 
 from ptutils cimport *
 from interpolator cimport *
+
+def savgol(n, order=2):
+	'''
+	Compute a Savitzky-Golay filter for a cubic tile of half-width n with
+	the given interpolating order. The tile size n and order must satisfy
+
+		2 * n + 1 > order.
+
+	The return value is a four-tuple of filter stencils (b, bx, by, bz),
+	where convolution of an image with b yields the filtered image and
+	convolution of the image with bx, by or bz yields the x, y or z
+	derivatives of the filtered image, respectively.
+	'''
+	if 2 * n + 1 <= order:
+		raise ValueError('Tile size n must satisfy 2 * n + 1 > order')
+
+	a = [ ]
+
+	for x, y, z in itertools.product(range(-n, n+1), repeat=3):
+		ar = [ ]
+		for i, j, k in itertools.product(range(order+1), repeat=3):
+			ar.append(x**i * y**j * z**k)
+		a.append(ar)
+
+	b = np.linalg.pinv(a)
+
+	# Row indices of the function and first-derivative filters
+	dfidx = [ 0, (order + 1)**2, (order + 1), 1 ]
+	return tuple(b[r].reshape((2 * n + 1,)*3, order='C') for r in dfidx)
+
 
 cdef class LagrangeInterpolator3D(Interpolator3D):
 	'''
@@ -247,12 +279,21 @@ cdef class HermiteInterpolator3D(Interpolator3D):
 	@cython.wraparound(False)
 	@cython.boundscheck(False)
 	@cython.embedsignature(True)
-	def __init__(self, image, default=None):
+	def __init__(self, image, default=None, sgfilt=None):
 		'''
 		Construct a constrained Hermite cubic interpolator for the
 		given 3-D floating-point image.
+
+		If sgfilt is not None, it should be a tuple (n, order) passed
+		as arguments to the savgol filter function. The function and
+		derivative filters returned by savgol(*sgfilt) will be used to
+		produce the values and derivatives used to define the Hermite
+		interpolation.
 		'''
-		cdef double [:,:,:] img = np.asarray(image, dtype=np.float64)
+		# Make sure the image is a valid Numpy array
+		image = np.asarray(image, dtype=np.float64)
+
+		cdef double [:,:,:] img = image
 		cdef unsigned long nx, ny, nz
 		nx, ny, nz = img.shape[0], img.shape[1], img.shape[2]
 
@@ -270,11 +311,28 @@ cdef class HermiteInterpolator3D(Interpolator3D):
 
 		# Capture a convenient view on the coefficient storage
 		cdef double[:,:,:,:] coeffs
+		cdef double[:,:,:] cnvimg
 
+		# Try to build the coefficient matrix
 		try:
-			# Try to populate the coefficient matrix
 			coeffs = <double[:nx,:ny,:nz,:self.nval:1]>self.coeffs
-			HermiteInterpolator3D.img2coeffs(coeffs, img)
+			if not sgfilt:
+				# Use finite differences for the derivatives
+				HermiteInterpolator3D.img2coeffs(coeffs, img)
+			else:
+				from scipy.ndimage.filters import convolve
+				# Use Savitzky-Golay for function and derivatives
+				b, bx, by, bz = savgol(*sgfilt)
+				# Compute the image and its derivatives
+				cnvimg = convolve(image, b, mode='reflect')
+				coeffs[:,:,:,0] = cnvimg
+				# Convolve adds wrong sign to antisymmetric derivatives
+				cnvimg = -convolve(image, bx, mode='reflect')
+				coeffs[:,:,:,1] = cnvimg
+				cnvimg = -convolve(image, by, mode='reflect')
+				coeffs[:,:,:,2] = cnvimg
+				cnvimg = -convolve(image, bz, mode='reflect')
+				coeffs[:,:,:,3] = cnvimg
 		except Exception:
 			PyMem_Free(self.coeffs)
 			self.coeffs = <double *>NULL
@@ -1158,11 +1216,15 @@ cdef class Interpolator3D:
 
 
 	@cython.embedsignature(True)
-	def gridimage(self, x, y, z):
+	def gridimage(self, x, y, z, bint grad=False):
 		'''
 		Evalute and return the interpolated image on the grid defined
 		as the product of the floating-point grid coordinates in 1-D
 		arrays x, y, and z.
+
+		If grad is True, an array of shape (nx, ny, nz, 3) will be
+		returned along with the interpolated grid, where the gradient
+		at each (x, y, z) sample is provided along the ultimate axis.
 		'''
 		cdef double[:] cx, cy, cz
 		cx = np.asarray(x, dtype=np.float64)
@@ -1177,8 +1239,16 @@ cdef class Interpolator3D:
 		cdef np.ndarray[np.float64_t, ndim=3] out
 		out = np.empty((nx, ny, nz), dtype=np.float64, order='C')
 
+		# Space for the gradient, if needed
+		cdef np.ndarray[np.float64_t, ndim=4] grout
+		if grad: grout = np.empty((nx, ny, nz, 3), dtype=np.float64, order='C')
+
 		cdef double f = 0.0, xx, yy, zz
 		cdef point crd
+		cdef point gpoint
+		cdef point *gfp = <point *>NULL
+
+		if grad: gfp = &gpoint
 
 		for ix in range(nx):
 			crd.x = cx[ix]
@@ -1186,8 +1256,13 @@ cdef class Interpolator3D:
 				crd.y = cy[iy]
 				for iz in range(nz):
 					crd.z = cz[iz]
-					if not self._evaluate(&f, NULL, crd):
+					if not self._evaluate(&f, gfp, crd):
 						raise ValueError('Cannot evaluate image at %s' % (pt2tup(crd),))
 					out[ix,iy,iz] = f
+					if grad:
+						grout[ix,iy,iz,0] = gfp.x
+						grout[ix,iy,iz,1] = gfp.y
+						grout[ix,iy,iz,2] = gfp.z
 
-		return out
+		if not grad: return out
+		return out, grout
