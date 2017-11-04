@@ -311,7 +311,8 @@ cdef class HermiteInterpolator3D(Interpolator3D):
 
 		# Capture a convenient view on the coefficient storage
 		cdef double[:,:,:,:] coeffs
-		cdef double[:,:,:] cnvimg
+		cdef double[:,:,:] cimg
+		cdef unsigned long lx, ly, lz, i, j, k, l, ii, jj, kk
 
 		# Try to build the coefficient matrix
 		try:
@@ -320,19 +321,40 @@ cdef class HermiteInterpolator3D(Interpolator3D):
 				# Use finite differences for the derivatives
 				HermiteInterpolator3D.img2coeffs(coeffs, img)
 			else:
-				from scipy.ndimage.filters import convolve
-				# Use Savitzky-Golay for function and derivatives
-				b, bx, by, bz = savgol(*sgfilt)
-				# Compute the image and its derivatives
-				cnvimg = convolve(image, b, mode='reflect')
-				coeffs[:,:,:,0] = cnvimg
-				# Convolve adds wrong sign to antisymmetric derivatives
-				cnvimg = -convolve(image, bx, mode='reflect')
-				coeffs[:,:,:,1] = cnvimg
-				cnvimg = -convolve(image, by, mode='reflect')
-				coeffs[:,:,:,2] = cnvimg
-				cnvimg = -convolve(image, bz, mode='reflect')
-				coeffs[:,:,:,3] = cnvimg
+				try:
+					import pyfftw
+				except ImportError:
+					from scipy.fftpack import fftn, ifftn
+					empty = np.empty
+				else:
+					fftn = pyfftw.interfaces.scipy_fftpack.fftn
+					ifftn = pyfftw.interfaces.scipy_fftpack.ifftn
+					empty = pyfftw.empty_aligned
+
+					pyfftw.interfaces.cache.enable()
+					pyfftw.interfaces.cache.set_keepalive_time(5.)
+
+				from scipy.signal import correlate
+
+				# Use unfiltered image near boundary,
+				# but let derivatives roll off smoothly
+				coeffs[:,:,:,0] = img
+				coeffs[:,:,:,1:4] = 0.
+
+				l = 0
+				for ba in savgol(*sgfilt):
+					cimg = correlate(image, ba, mode='valid')
+					lx = (coeffs.shape[0] - cimg.shape[0]) // 2
+					ly = (coeffs.shape[1] - cimg.shape[1]) // 2
+					lz = (coeffs.shape[2] - cimg.shape[2]) // 2
+					for i in range(cimg.shape[0]):
+						ii = i + lx
+						for j in range(cimg.shape[1]):
+							jj = j + ly
+							for k in range(cimg.shape[2]):
+								kk = k + lz
+								coeffs[ii,jj,kk,l] = cimg[i,j,k]
+					l += 1
 		except Exception:
 			PyMem_Free(self.coeffs)
 			self.coeffs = <double *>NULL
