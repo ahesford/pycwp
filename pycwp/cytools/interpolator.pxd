@@ -69,4 +69,5 @@ cdef class CubicInterpolator3D(Interpolator3D):
 
 
 cdef class LinearInterpolator3D(Interpolator3D):
+	cdef unsigned long nval
 	cdef bint _evaluate(self, double *f, point *grad, point p) nogil
