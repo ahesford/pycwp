@@ -89,3 +89,11 @@ def rolling_std(x, n):
 	along the last axis of x.
 	'''
 	return numpy.std(rolling_window(x, n), axis=-1)
+
+
+def rolling_rms(x, n):
+	'''
+	Compute the RMS value, over a sliding window of length n, along the
+	last axis of x.
+	'''
+	return numpy.sqrt(numpy.sum(rolling_window(x**2, n) / n, axis=-1))
