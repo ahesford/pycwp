@@ -22,13 +22,13 @@ def findpeaks(vec):
 	has a key col at index kidx such that vec[kidx] = kval, and a "subcol"
 	at index sidx such that vec[sidx] = sval.
 
-	Each peak may have a lowest point between it and a higher peak to the
-	left (a left col) along with a lowest point between it and a higher
-	peak to the right (a right col). Either may be None if there are no
-	higher peaks to one side or the other. Both will be None iff the peak
-	is the highest peak in the signal. A peak's key col is the higher of
-	its left and right cols (if both exist). The "subcol" is the col that
-	is NOT the key col.
+	Each peak may have a lowest point between it and a peak at least as
+	high to the left (a left col) along with a lowest point between it and
+	a peak at least as high to the right (a right col). Either may be None
+	if there are no higher peaks to one side or the other. Both will be
+	None iff the peak is the highest peak in the signal. A peak's key col
+	is the higher of its left and right cols (if both exist). The "subcol"
+	is the col that is NOT the key col.
 
 	Typically, the peak's prominence is defined as vec[pidx] - vec[kidx].
 	The width of the peak can be defined as either abs(pidx - kidx), or as
@@ -104,11 +104,11 @@ def findpeaks(vec):
 				# Skip to next maximum for further processing
 				continue
 			# Analyze subsequent maxima
-			if ival > jval:
+			if ival >= jval:
 				# Set the left col for the rightward peak
 				jh = j // 2
 				lcols[jh] = col
-			else:
+			if ival <= jval:
 				# Set the right col for the leftward peak
 				rcols[i] = col
 				# No need to walk past a larger peak
