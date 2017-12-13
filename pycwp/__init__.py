@@ -8,10 +8,10 @@ data.
 # Restrictions are listed in the LICENSE file distributed with this package.
 
 __all__ = [
-		'aca', 'boxer', 'cutil', 'cltools', 'cytools', 'fdtd', 'focusing',
-		'geom', 'harmonic', 'imgtools', 'iterative', 'mio', 'process',
-		'poly', 'quad', 'scattering', 'segmentation', 'shtransform',
-		'signal', 'stats', 'util', 'wavetools',
+		'aca', 'boxer', 'cutil', 'cltools', 'cytools', 'fdtd', 'filter',
+		'focusing', 'geom', 'harmonic', 'imgtools', 'iterative', 'mio',
+		'process', 'poly', 'quad', 'scattering', 'segmentation',
+		'shtransform', 'signal', 'stats', 'util', 'wavetools',
 	]
 
 from . import *

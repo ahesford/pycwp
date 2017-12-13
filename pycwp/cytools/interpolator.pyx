@@ -19,65 +19,6 @@ from cpython.mem cimport PyMem_Malloc, PyMem_Free
 from ptutils cimport *
 from interpolator cimport *
 
-cdef int sgimgcoeffs(double[:,:,:,:] coeffs, double[:,:,:] img, sgfilt) except -1:
-	'''
-	Given a 3-D image img of shape (nx, ny, nz) and an output array coeffs
-	with dimensions of at least (nx, ny, nz, 4), use a Savitzky-Golay
-	filter from savgol(*sgfilt) compute the filtered image and first
-	derivatives, with
-
-	  * coeffs[:nx,:ny,:nz,0] holding the filtered image,
-	  * coeffs[:nx,:ny,:nz,i] holding the derivative wrt axis i (1, 2 or 3)
-
-	Any values at or beyond (nx, ny, nz, 4) in coeffs are untouched.
-	'''
-	try:
-		import pyfftw
-	except ImportError:
-		from scipy.fftpack import fftn, ifftn
-	else:
-		fftn = pyfftw.interfaces.scipy_fftpack.fftn
-		ifftn = pyfftw.interfaces.scipy_fftpack.ifftn
-		
-		pyfftw.interfaces.cache.enable()
-		pyfftw.interfaces.cache.set_keepalive_time(5.)
-
-	nx, ny, nz = img.shape[0], img.shape[1], img.shape[2]
-
-	if (coeffs.shape[0] < nx or coeffs.shape[1] < ny 
-			or coeffs.shape[2] < nz or coeffs.shape[3] < 4):
-		raise ValueError('Shape of coeffs must be at least %s' % ((nx, ny, nz, 4),))
-
-	from scipy.signal import correlate
-
-	# Use unfiltered image near boundary, but let derivatives roll off smoothly
-	coeffs[:nx,:ny,:nz,0] = img
-	coeffs[:nx,:ny,:nz,1:4] = 0.
-
-	cdef double[:,:,:] cimg
-	cdef unsigned long lx, ly, lz, i, j, k, l, ii, jj, kk
-	cdef np.ndarray[np.float64_t, ndim=3] image
-
-	image = np.asarray(img)
-
-	l = 0
-	for ba in savgol(*sgfilt):
-		cimg = correlate(image, ba, mode='valid')
-		lx = (coeffs.shape[0] - cimg.shape[0]) // 2
-		ly = (coeffs.shape[1] - cimg.shape[1]) // 2
-		lz = (coeffs.shape[2] - cimg.shape[2]) // 2
-		for i in range(cimg.shape[0]):
-			ii = i + lx
-			for j in range(cimg.shape[1]):
-				jj = j + ly
-				for k in range(cimg.shape[2]):
-					kk = k + lz
-					coeffs[ii,jj,kk,l] = cimg[i,j,k]
-		l += 1
-
-	return 0
-
-
 cdef double lint3d(double *c, double tx, double ty, double tz,
 			unsigned long sx, unsigned long sy, unsigned long sz) nogil:
 	'''
@@ -118,36 +59,6 @@ cdef double lint3d(double *c, double tx, double ty, double tz,
 	c1 = c01 * mty + c11 * ty
 
 	return c0 * (1. - tz) + c1 * tz
-
-
-def savgol(n, order=2):
-	'''
-	Compute a Savitzky-Golay filter for a cubic tile of half-width n with
-	the given interpolating order. The tile size n and order must satisfy
-
-		2 * n + 1 > order.
-
-	The return value is a four-tuple of filter stencils (b, bx, by, bz),
-	where convolution of an image with b yields the filtered image and
-	convolution of the image with bx, by or bz yields the x, y or z
-	derivatives of the filtered image, respectively.
-	'''
-	if 2 * n + 1 <= order:
-		raise ValueError('Tile size n must satisfy 2 * n + 1 > order')
-
-	a = [ ]
-
-	for x, y, z in itertools.product(range(-n, n+1), repeat=3):
-		ar = [ ]
-		for i, j, k in itertools.product(range(order+1), repeat=3):
-			ar.append(x**i * y**j * z**k)
-		a.append(ar)
-
-	b = np.linalg.pinv(a)
-
-	# Row indices of the function and first-derivative filters
-	dfidx = [ 0, (order + 1)**2, (order + 1), 1 ]
-	return tuple(b[r].reshape((2 * n + 1,)*3, order='C') for r in dfidx)
 
 
 cdef class LagrangeInterpolator3D(Interpolator3D):
@@ -293,7 +204,7 @@ cdef class LagrangeInterpolator3D(Interpolator3D):
 		if self.coeffs == <double *>NULL:
 			return Interpolator3D._evaluate(self, f, grad, p)
 
-		# Hermite coefficient shape is (nx, ny, nz, self.nval)
+		# Lagrange coefficient shape is (nx, ny, nz, self.nval)
 		nx, ny, nz = self.ncx, self.ncy, self.ncz
 
 		# Find fractional and integer parts of the coordinates
@@ -369,41 +280,51 @@ cdef class LagrangeInterpolator3D(Interpolator3D):
 cdef class HermiteInterpolator3D(Interpolator3D):
 	'''
 	An Interpolator3D that implements local interpolation with cubic
-	Hermite splines. A degree of monotonicity is enforced by forcing first
-	derivatives at each sample to match the smaller of the left and right
-	differences (if they are of the same sign; zero if they are of
-	different sizes). All cross derivatives (xy, xz, yz, xyz) are forced to
-	zero.
-
-	*** NOTE: These constraints do not guarantee global monotonicity. ***
+	Hermite splines.
 	'''
 	@cython.wraparound(False)
 	@cython.boundscheck(False)
 	@cython.embedsignature(True)
-	def __init__(self, image, default=None, sgfilt=None):
+	def __init__(self, image, default=None):
 		'''
 		Construct a constrained Hermite cubic interpolator for the
-		given 3-D floating-point image.
+		given floating-point image.
 
-		If sgfilt is not None, it should be a tuple (n, order) passed
-		as arguments to the savgol filter function. The function and
-		derivative filters returned by savgol(*sgfilt) will be used to
-		produce the values and derivatives used to define the Hermite
-		interpolation.
+		If the image is three-dimensional, first derivatives are
+		approximated by finite differences. A degree of monotonicity is
+		enforced by forcing first derivatives at each sample to match
+		the smaller of the left and right differences (if they are of
+		the same sign; zero if they are of different sizes).
+
+		NOTE: These constraints do not guarantee global monotonicity.
+
+		If the image is four-dimensional with shape (nx, ny, nz, 4),
+		the image is specified in [:,:,:,0] and the x, y and z
+		derivatives are specified, respectively, in [:,:,:,1],
+		[:,:,:,2] and [:,:,:,3].
+
+		All cross derivatives (xy, xz, yz, xyz) are always assumed to
+		be zero.
 		'''
 		# Make sure the image is a valid Numpy array
 		image = np.asarray(image, dtype=np.float64)
 
-		cdef double [:,:,:] img = image
+		if not 2 < image.ndim < 5:
+			raise ValueError('Argument "image" must be 3- or 4-dimensional')
+
 		cdef unsigned long nx, ny, nz
-		nx, ny, nz = img.shape[0], img.shape[1], img.shape[2]
+		nx, ny, nz = image.shape[0], image.shape[1], image.shape[2]
 
 		if nx < 2 or ny < 2 or nz < 2:
 			raise ValueError('Size of image must be at least (2, 2, 2)')
 
 		self.ncx, self.ncy, self.ncz = nx, ny, nz
+
 		# Each sample gets four values: function and first-order derivatives
 		self.nval = 4
+
+		if image.ndim == 4 and image.shape[3] != self.nval:
+			raise ValueError(f'Fourth dimension of image must have length {self.nval}')
 
 		# Allocate coefficients
 		self.coeffs = <double *>PyMem_Malloc(nx * ny * nz * self.nval * sizeof(double))
@@ -411,19 +332,15 @@ cdef class HermiteInterpolator3D(Interpolator3D):
 			raise MemoryError('Unable to allocate storage for coefficients')
 
 		# Capture a convenient view on the coefficient storage
-		cdef double[:,:,:,:] coeffs
-		cdef double[:,:,:] cimg
-		cdef unsigned long lx, ly, lz, i, j, k, l, ii, jj, kk
+		cdef np.ndarray[np.float64_t, ndim=4] cfarr
 
-		# Try to build the coefficient matrix
 		try:
-			coeffs = <double[:nx,:ny,:nz,:self.nval:1]>self.coeffs
-			if not sgfilt:
-				# Use finite differences for the derivatives
-				HermiteInterpolator3D.img2coeffs(coeffs, img)
+			cfarr = np.asarray(<double[:nx,:ny,:nz,:self.nval:1]>self.coeffs)
+			if image.ndim == 4:
+				cfarr[:,:,:,:] = image
 			else:
-				# Use Savitzky-Golay to filter and find derivatives
-				sgimgcoeffs(coeffs, img, sgfilt)
+				# Use finite differences for the derivatives
+				HermiteInterpolator3D.img2coeffs(cfarr, image)
 		except Exception:
 			PyMem_Free(self.coeffs)
 			self.coeffs = <double *>NULL
@@ -1036,46 +953,49 @@ cdef class LinearInterpolator3D(Interpolator3D):
 	@cython.embedsignature(True)
 	def __init__(self, image, default=None, sgfilt=None):
 		'''
-		Construct a trilinear interpolator for the given 3-D
-		floating-point image and an optional default value.
+		Construct a trilinear interpolator for the given floating-point
+		image and an optional default value.
 
-		If sgfilt is not None, it should be a tuple (n, order) passed
-		as arguments to the savgol filter function. The function and
-		derivative filters returned by savgol(*sgfilt) will be used to
-		produce the values and derivatives that will be linearly
-		interpolated.
+		If the image is three-dimensional, first derivatives are
+		approximated by finite differences.
 
-		With no sgfilt argument, the function will be linearly
-		interpolated and the derivatives will be approximated from
-		finite differences.
+		If the image is four-dimensional with shape (nx, ny, nz, 4),
+		the image is specified in [:,:,:,0] and the x, y and z
+		derivatives are specified, respectively, in [:,:,:,1:4].
 		'''
 		image = np.asarray(image, dtype=np.float64)
-		cdef double[:,:,:] img = image
+
+		if not 2 < image.ndim < 5:
+			raise ValueError('Argument "image" must be 3- or 4-dimensional')
+
 		cdef unsigned long nx, ny, nz
-		nx, ny, nz = img.shape[0], img.shape[1], img.shape[2]
+		nx, ny, nz = image.shape[0], image.shape[1], image.shape[2]
 
 		if nx < 2 or ny < 2 or nz < 2:
 			raise ValueError('Size of image must be at least (2, 2, 2)')
 
 		self.ncx, self.ncy, self.ncz = nx, ny, nz
+
 		# Each sample gets four values: function and first-order derivatives
 		self.nval = 4
+		if image.ndim == 4 and image.shape[3] != self.nval:
+			raise ValueError(f'Fourth dimension of image must have length {self.nval}')
 
 		# Allocate coefficients and prepopulate image
 		self.coeffs = <double *>PyMem_Malloc(nx * ny * nz * self.nval * sizeof(double))
 		if self.coeffs == <double *>NULL:
 			raise MemoryError('Unable to allocate storage for coefficients')
 
-		cdef double[:,:,:,:] coeffs
 		cdef np.ndarray[np.float64_t, ndim=4] cfarr
 
 		try:
 			# For convenience, treat the buffer as a 3-D array
-			coeffs = <double[:nx,:ny,:nz,:self.nval:1]>self.coeffs
+			cfarr = np.asarray(<double[:nx,:ny,:nz,:self.nval:1]>self.coeffs)
 
-			if not sgfilt:
+			if image.ndim == 4:
+				cfarr[:,:,:,:] = image
+			else:
 				# Copy image as linear interpolation coefficients
-				cfarr = np.asarray(coeffs)
 				cfarr[:,:,:,0] = image
 				# Use central differencing for derivatives where possible
 				# Revert to one-sided differning at edges
@@ -1090,9 +1010,6 @@ cdef class LinearInterpolator3D(Interpolator3D):
 				cfarr[:,:,1:-1,3] = 0.5 * (image[:,:,2:] - image[:,:,:-2])
 				cfarr[:,:,0,3] = image[:,:,1] - image[:,:,0]
 				cfarr[:,:,-1,3] = image[:,:,-1] - image[:,:,-2]
-			else:
-				# Use Savitzky-Golay to filter and find derivatives
-				sgimgcoeffs(coeffs, img, sgfilt)
 		except Exception:
 			PyMem_Free(self.coeffs)
 			self.coeffs = <double *>NULL
