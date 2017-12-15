@@ -22,38 +22,64 @@ def sgimgcoeffs(img, *args, **kwargs):
 	if not stencils: raise ValueError('Savitzky-Golay stencil list is empty')
 
 	# Make sure the array is in double precision
-	img = np.asarray(img, dtype=np.float64)
-	if img.ndim != 3:
-		raise ValueError('Image img must be three-dimensional')
+	img = np.asarray(img)
+	if img.ndim != 3: raise ValueError('Image img must be three-dimensional')
 
 	try:
 		import pyfftw
+		from pyfftw.interfaces.numpy_fft import rfftn, irfftn
 	except ImportError:
-		from scipy.fftpack import fftn, ifftn
+		from numpy.fft import rfftn, irfftn
+		empty = np.empty
 	else:
-		fftn = pyfftw.interfaces.scipy_fftpack.fftn
-		ifftn = pyfftw.interfaces.scipy_fftpack.ifftn
-		
+		# Cache PyFFTW planning for 5 seconds
 		pyfftw.interfaces.cache.enable()
-		pyfftw.interfaces.cache.set_keepalive_time(5.)
+		pyfftw.interfaces.cache.set_keepalive_time(5.0)
+		empty = pyfftw.empty_aligned
 
-	from scipy.signal import correlate
+	# If possible, find the next-larger efficient size
+	try: from scipy.fftpack.helper import next_fast_len
+	except ImportError: next_fast_len = lambda x: x
 
-	# Use unfiltered image near boundary, but let derivatives roll off smoothly
-	coeffs = np.zeros(img.shape + (len(stencils),), dtype=np.float64)
-	coeffs[:,:,:,0] = img
+	# Half-sizes of kernels along each axis
+	hsizes = tuple(bsz // 2 for bsz in stencils[0].shape)
 
-	# If image is smaller than stencil, it is all boundary
-	if any(bsz > isz for isz, bsz in zip(img.shape, stencils[0].shape)):
-		return coeffs
-	
-	for l, ba in enumerate(stencils):
-		cimg = correlate(img, ba, mode='valid')
-		mx, my, mz = cimg.shape
-		lx, ly, lz = ((nv - mv) // 2 for nv, mv in zip(img.shape, cimg.shape))
-		coeffs[lx:lx+mx,ly:ly+my,lz:lz+mz,l] = cimg
+	# Padded shape for FFT convolution and the R2C FFT output
+	pshape = tuple(next_fast_len(isz + 2 * bsz)
+			for isz, bsz in zip(img.shape, hsizes))
+	rshape = pshape[:-1] + (pshape[-1] // 2 + 1,)
 
-	return coeffs
+	# Build working and output arrays
+	kernel = empty(pshape, dtype=np.float64)
+	output = empty(img.shape + (len(stencils),), dtype=np.float64)
+
+	i,j,k = hsizes
+	m,n,p = img.shape
+	t,u,v = stencils[0].shape
+
+	# Copy the image, leaving space for boundaries
+	kernel[:,:,:] = 0.
+	# Ignore extra padding that may have been added for efficiency
+	kernel[:m,:n,:p] = img
+	# Mirror left boundaries
+	kernel[-i:,:,:] = kernel[i:0:-1,:,:]
+	kernel[:,-j:,:] = kernel[:,j:0:-1,:]
+	kernel[:,:,-k:] = kernel[:,:,k:0:-1]
+	# Mirror right boundaries
+	kernel[m:m+i,:,:] = kernel[m-2:m-i-2:-1,:,:]
+	kernel[:,n:n+j,:] = kernel[:,n-2:n-j-2:-1,:]
+	kernel[:,:,p:p+k] = kernel[:,:,p-2:p-k-2:-1]
+
+	# Compute the image FFT
+	imfft = rfftn(kernel)
+
+	for l, stencil in enumerate(stencils):
+		# Clear the kernel storage and copy the stencil
+		kernel[:,:,:] = 0.
+		kernel[:t,:u,:v] = stencil[::-1,::-1,::-1]
+		output[:,:,:,l] = irfftn(rfftn(kernel) * imfft)[i:i+m,j:j+n,k:k+p]
+
+	return output
 
 
 def savgol(size, order=2):
