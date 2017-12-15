@@ -65,10 +65,10 @@ def sgimgcoeffs(img, *args, **kwargs):
 	kernel[-i:,:,:] = kernel[i:0:-1,:,:]
 	kernel[:,-j:,:] = kernel[:,j:0:-1,:]
 	kernel[:,:,-k:] = kernel[:,:,k:0:-1]
-	# Mirror right boundaries
-	kernel[m:m+i,:,:] = kernel[m-2:m-i-2:-1,:,:]
-	kernel[:,n:n+j,:] = kernel[:,n-2:n-j-2:-1,:]
-	kernel[:,:,p:p+k] = kernel[:,:,p-2:p-k-2:-1]
+	# Right boundaries (double indexing avoids negative index problems)
+	if m > i: kernel[m:m+i,:,:] = kernel[m-i-1:m-1,:,:][::-1,:,:]
+	if n > j: kernel[:,n:n+j,:] = kernel[:,n-j-1:n-1,:][:,::-1,:]
+	if p > k: kernel[:,:,p:p+k] = kernel[:,:,p-k-1:p-1][:,:,::-1]
 
 	# Compute the image FFT
 	imfft = rfftn(kernel)
