@@ -53,26 +53,35 @@ def sgimgcoeffs(img, *args, **kwargs):
 	kernel = empty(pshape, dtype=np.float64)
 	output = empty(img.shape + (len(stencils),), dtype=np.float64)
 
-	i,j,k = hsizes
 	m,n,p = img.shape
-	t,u,v = stencils[0].shape
 
 	# Copy the image, leaving space for boundaries
 	kernel[:,:,:] = 0.
-	# Ignore extra padding that may have been added for efficiency
 	kernel[:m,:n,:p] = img
-	# Mirror left boundaries
-	kernel[-i:,:,:] = kernel[i:0:-1,:,:]
-	kernel[:,-j:,:] = kernel[:,j:0:-1,:]
-	kernel[:,:,-k:] = kernel[:,:,k:0:-1]
-	# Right boundaries (double indexing avoids negative index problems)
-	if m > i: kernel[m:m+i,:,:] = kernel[m-i-1:m-1,:,:][::-1,:,:]
-	if n > j: kernel[:,n:n+j,:] = kernel[:,n-j-1:n-1,:][:,::-1,:]
-	if p > k: kernel[:,:,p:p+k] = kernel[:,:,p-k-1:p-1][:,:,::-1]
+
+	# For right boundaries, watch for running off left end with small arrays
+	for ax, (ld, hl)  in enumerate(zip(img.shape, hsizes)):
+		# Build the slice for boundary values
+		lslices = [slice(None)]*3
+		rslices = [slice(None)]*3
+
+		# Left boundaries are straightforward
+		lslices[ax] = slice(hl, 0, -1)
+		rslices[ax] = slice(-hl, None)
+		kernel[rslices] = kernel[lslices]
+
+		# Don't walk off left edge when mirroring right boundary
+		hi = ld - 1
+		lo = max(hi - hl, 0)
+		lslices[ax] = slice(lo, hi)
+		rslices[ax] = slice(2 * hi - lo, hi, -1)
+		kernel[rslices] = kernel[lslices]
 
 	# Compute the image FFT
 	imfft = rfftn(kernel)
 
+	i,j,k = hsizes
+	t,u,v = stencils[0].shape
 	for l, stencil in enumerate(stencils):
 		# Clear the kernel storage and copy the stencil
 		kernel[:,:,:] = 0.
