@@ -30,15 +30,15 @@ cdef class Integrable:
 	@staticmethod
 	cdef IntegrableStatus _gkweights(double *, unsigned int, double) nogil
 
-	cdef IntegrableStatus gausskron(self, double *, unsigned int,
-					double, double, double, double, void *) nogil
+	cdef IntegrableStatus gausskron(self, double *, unsigned int, double,
+					double, double, double, int, void *) nogil
 	cdef IntegrableStatus _geval(self, double *, double *, double *, unsigned int,
 				double, double, double, double, void *) nogil
 
 	cdef IntegrableStatus simpson(self, double *, unsigned int,
-					double, double, void *, double *) nogil
+					double, double, int, void *, double *) nogil
 	cdef IntegrableStatus _simpaux(self, double *, unsigned int, double,
-					double, double, double, void *,
+					double, double, double, int, void *,
 					double*, double *, double *) nogil
 
 	cdef IntegrableStatus integrand(self, double *, double, void *) nogil

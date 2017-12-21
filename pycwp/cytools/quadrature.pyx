@@ -177,8 +177,9 @@ cdef class Integrable:
 		return wtlist
 
 
-	cdef IntegrableStatus gausskron(self, double *results, unsigned int nval,
-			double atol, double rtol, double ua, double ub, void *ctx) nogil:
+	cdef IntegrableStatus gausskron(self, double *results,
+			unsigned int nval, double atol, double rtol,
+			double ua, double ub, int reclimit, void *ctx) nogil:
 		'''
 		Exactly as self.simpson, except Gauss-Kronrod quadrature of
 		order 15 is used in place of Simpson quadrature and the
@@ -261,15 +262,19 @@ cdef class Integrable:
 				cnv = False
 				break
 
-		# If converged or interval collapsed, integration is done
-		if uc <= ua or ub <= uc or cnv: return IntegrableStatus.OK
+		# Finish on convergence, interval collaps or recursion limit
+		if uc <= ua or ub <= uc or reclimit == 0 or cnv:
+			return IntegrableStatus.OK
+
+		# Adjust the recursion limit if one exists
+		if reclimit > 0: reclimit -= 1
 
 		# Otherwise, drill down left and right
 		# Absolute tolerance must be split between sides
 		atol /= 2
-		rcode = self.gausskron(fv, nval, atol, rtol, ua, uc, ctx)
+		rcode = self.gausskron(fv, nval, atol, rtol, ua, uc, reclimit, ctx)
 		if rcode != IntegrableStatus.OK: return rcode
-		rcode = self.gausskron(gint, nval, atol, rtol, uc, ub, ctx)
+		rcode = self.gausskron(gint, nval, atol, rtol, uc, ub, reclimit, ctx)
 		if rcode != IntegrableStatus.OK: return rcode
 
 		for i in range(nval): results[i] = fv[i] + gint[i]
@@ -297,8 +302,9 @@ cdef class Integrable:
 		return IntegrableStatus.OK
 
 
-	cdef IntegrableStatus simpson(self, double *results, unsigned int nval,
-			double atol, double rtol, void *ctx, double *ends) nogil:
+	cdef IntegrableStatus simpson(self, double *results,
+			unsigned int nval, double atol, double rtol,
+			int reclimit, void *ctx, double *ends) nogil:
 		'''
 		Perform adaptive Simpson quadrature of self.integrand along
 		the interval [0, 1]. The function is evaluated by calling
@@ -322,6 +328,11 @@ cdef class Integrable:
 		returning the failure code, leaving results in an indeterminate
 		state. If self.integrand never fails, this routine will return
 		OK, and the values stored in results are guranteed to be valid.
+
+		The recursion limit reclimit determines the maximum number of
+		times the interval will be recursively bisected to seek
+		convergence. A limit of 0 means the the whole interval will
+		never be subdivided. If reclimit is negative, it is ignored.
 
 		If ends is not NULL, it should point to an array of length
 		2 * nval that holds, in elements 0 through (nval - 1), the
@@ -368,7 +379,8 @@ cdef class Integrable:
 		for i in range(nval):
 			results[i] = isimpson(fa[i], fb[i], fc[i], 1.)
 
-		return self._simpaux(results, nval, atol, rtol, 0., 1., ctx, fa, fb, fc)
+		return self._simpaux(results, nval, atol, rtol,
+				0., 1., reclimit, ctx, fa, fb, fc)
 
 
 	cdef IntegrableStatus integrand(self, double *results, double u, void *ctx) nogil:
@@ -378,9 +390,10 @@ cdef class Integrable:
 		return IntegrableStatus.NOT_IMPLEMENTED
 
 
-	cdef IntegrableStatus _simpaux(self, double *results, unsigned int nval,
-				double atol, double rtol, double ua, double ub,
-				void *ctx, double *fa, double *fb, double *fc) nogil:
+	cdef IntegrableStatus _simpaux(self, double *results,
+			unsigned int nval, double atol, double rtol,
+			double ua, double ub, int reclimit, void *ctx,
+			double *fa, double *fb, double *fc) nogil:
 		'''
 		A recursive helper for simpson.
 		'''
@@ -404,6 +417,10 @@ cdef class Integrable:
 
 			unsigned int i
 			IntegrableStatus rcode
+
+		# Nothing to do if recursion limit has been reached
+		# Caller has already set results
+		if reclimit == 0: return IntegrableStatus.OK
 
 		if not 1 <= nval <= 32:
 			return IntegrableStatus.INTEGRAND_TOO_MANY_DIMS
@@ -448,9 +465,13 @@ cdef class Integrable:
 		# Otherwise, drill down left and right
 		# Absolute tolerance is split between sides
 		atol /= 2
-		rcode = self._simpaux(sl, nval, atol, rtol, ua, uc, ctx, fa, fc, fd)
+		# Adjust recursion limit if necessary
+		if reclimit > 0: reclimit -= 1
+		rcode = self._simpaux(sl, nval, atol, rtol,
+				ua, uc, reclimit, ctx, fa, fc, fd)
 		if rcode != IntegrableStatus.OK: return rcode
-		rcode = self._simpaux(sr, nval, atol, rtol, uc, ub, ctx, fc, fb, fe)
+		rcode = self._simpaux(sr, nval, atol, rtol,
+				uc, ub, reclimit, ctx, fc, fb, fe)
 		if rcode != IntegrableStatus.OK: return rcode
 
 		# Merge two-sided integrals
