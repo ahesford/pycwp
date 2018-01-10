@@ -10,7 +10,7 @@ import numpy as np
 import itertools
 import functools
 
-def sgimgcoeffs(img, *args, use_pyfftw=True, **kwargs):
+def sgimgcoeffs(img, *args, **kwargs):
 	'''
 	Given a 3-D image img with shape (nx, ny, nz), use Savitzky-Golay
 	stencils from savgol(*args, **kwargs) to compute compute the filtered
@@ -20,9 +20,8 @@ def sgimgcoeffs(img, *args, use_pyfftw=True, **kwargs):
 	If the image is of single precision, the filter correlation will be done
 	in single-precision; otherwise, double precision will be used.
 
-	If the keyword-only argument use_pyfftw is True, the pyfftw module will
-	be used (if available) to accelerate FFT correlations. Otherwise, the
-	stock Numpy FFT will be used. The argument is not passed to savgol.
+	The pyfftw module will be used, if available, to accelerate FFT
+	correlations. Otherwise, the stock Numpy FFT will be used.
 	'''
 	# Create the stencils first
 	stencils = savgol(*args, **kwargs)
@@ -49,7 +48,6 @@ def sgimgcoeffs(img, *args, use_pyfftw=True, **kwargs):
 		ftype, ctype = np.dtype('float64'), np.dtype('complex128')
 
 	try:
-		if not use_pyfftw: raise ImportError
 		import pyfftw
 	except ImportError:
 		from numpy.fft import rfftn, irfftn
@@ -118,7 +116,6 @@ def sgimgcoeffs(img, *args, use_pyfftw=True, **kwargs):
 	return output
 
 
-@functools.lru_cache(maxsize=32)
 def savgol(size, order=2):
 	'''
 	Compute a Savitzky-Golay filter for a cubic tile of width size with
@@ -129,9 +126,6 @@ def savgol(size, order=2):
 	where convolution of an image with b yields the filtered image and
 	convolution of the image with bx, by or bz yields the x, y or z
 	derivatives of the filtered image, respectively.
-
-	This function is memoized with functools.lru_cache; it will save the
-	results of the most recent 32 calls for efficiency.
 	'''
 	size = int(size)
 	if size <= order or not size % 2:
