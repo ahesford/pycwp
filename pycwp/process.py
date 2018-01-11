@@ -49,7 +49,7 @@ class ProcessPool(object):
 		Initialize the thread pool.
 		'''
 		self._procs = []
-	
+
 
 	def addtask(self, **kwargs):
 		'''
@@ -68,25 +68,52 @@ class ProcessPool(object):
 			p.start()
 
 
-	def wait(self):
+	@property
+	def unjoined(self):
+		'''
+		Return the number of processes that have not yet terminated and
+		been joined.
+
+		This will be nonzero from the moment addtask() is called until
+		self.wait is called and successfully joins every process. (A
+		call to join with a limit of None may leave some processes
+		unjoined, which will leave this property nonzero.)
+		'''
+		return len(self._procs)
+
+
+	def wait(self, timeout=0.1, limit=None):
 		'''
 		Repeatedly join each process until all processes have finished.
-		Each join has a 1-second timeout. This allows the process table
-		to be cleaned as each process dies instead of leaving zombies
-		until all are dead.
+		Each join has the specified timeout, which must be a valid
+		argument to multiprocessing.Process.join.
+
+		If limit is not None, it indicates the maximum number of times
+		per process that a join will be allowed to timeout. If limit is
+		None, each timed-out join will be retried until a successful
+		join has been performed.
+
+		Calling wait allows the process table to be cleaned as each
+		process dies instead of leaving zombies until all are dead.
 
 		Each process is removed from the pool as it dies.
 		'''
+		count = 0
 		while len(self._procs):
 			livingprocs = []
 			for p in self._procs:
-				p.join(1.0)
+				p.join(timeout)
 				if p.is_alive():
 					livingprocs.append(p)
 			# If the list of living processes shrunk, replace
 			# the pool's process list with only those living
 			if len(livingprocs) != len(self._procs):
 				self._procs = livingprocs
+
+			# Check to see if the join limit has been reached
+			if limit is not None:
+				count += 1
+				if count >= limit: break
 
 
 	def __enter__(self):
