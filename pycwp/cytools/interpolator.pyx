@@ -951,7 +951,7 @@ cdef class LinearInterpolator3D(Interpolator3D):
 	@cython.wraparound(False)
 	@cython.boundscheck(False)
 	@cython.embedsignature(True)
-	def __init__(self, image, default=None, sgfilt=None):
+	def __init__(self, image, default=None):
 		'''
 		Construct a trilinear interpolator for the given floating-point
 		image and an optional default value.
