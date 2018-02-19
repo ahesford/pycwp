@@ -117,7 +117,6 @@ cdef class Segment3D:
 		results[0] = ptnrm(axpy(results[1], n, ap))
 		return 0
 
-	@cython.embedsignature(True)
 	def ptdist(self, p, bint bounded=False):
 		'''
 		For p, a sequence of 3 floats, calculate and return:
@@ -145,7 +144,6 @@ cdef class Segment3D:
 		self._ptdist(results, pt, bounded)
 		return results[0], results[1]
 
-	@cython.embedsignature(True)
 	def cartesian(self, double t):
 		'''
 		For a given signed length t, return the Cartesian point on the
@@ -154,7 +152,6 @@ cdef class Segment3D:
 		return pt2tup(lintp(t, self._start, self._end))
 
 
-	@cython.embedsignature(True)
 	def bbox(self):
 		'''
 		A Box3D instance that bounds the segment.
@@ -363,7 +360,6 @@ cdef class Triangle3D:
 		'''
 		return dot(self._normal, p) + self.offset
 
-	@cython.embedsignature
 	def planedist(self, p):
 		'''
 		Returns a double representing the distance from a 3-D point p
@@ -378,7 +374,6 @@ cdef class Triangle3D:
 		return self._planedist(pp)
 
 
-	@cython.embedsignature(True)
 	def bbox(self):
 		'''
 		A Box3D instance that bounds the triangle.
@@ -430,7 +425,6 @@ cdef class Triangle3D:
 		return x0, x1, 1 - x0 - x1
 
 
-	@cython.embedsignature(True)
 	def cartesian(self, p):
 		'''
 		For a point p in barycentric coordinates (a tuple of 3 floats),
@@ -447,7 +441,6 @@ cdef class Triangle3D:
 		return vx, vy, vz
 
 
-	@cython.embedsignature(True)
 	@cython.cdivision(True)
 	def perpangle(self, unsigned int d, n not None):
 		'''
@@ -487,7 +480,6 @@ cdef class Triangle3D:
 		return acos(min(1.0, max(-1.0, dot(a, b) / an / bn)))
 
 
-	@cython.embedsignature(True)
 	def contains(self, p):
 		'''
 		Returns True iff the 3-D point p is contained in this triangle.
@@ -520,7 +512,6 @@ cdef class Triangle3D:
 		return not(min(px, py, pz) > r or max(px, py, pz) < -r)
 
 
-	@cython.embedsignature(True)
 	def overlaps(self, Box3D b not None):
 		'''
 		Returns True iff the Box3D b overlaps with this triangle.
@@ -600,7 +591,6 @@ cdef class Triangle3D:
 
 
 	@cython.cdivision(True)
-	@cython.embedsignature(True)
 	def intersection(self, Segment3D seg not None, bint halfline=False):
 		'''
 		Return the intersection of the segment seg with this triangle
@@ -773,7 +763,6 @@ cdef class Box3D:
 
 		return ptcell
 
-	@cython.embedsignature(True)
 	def cart2cell(self, double x, double y, double z):
 		'''
 		Convert the 3-D Cartesian coordinates (x, y, z) into grid
@@ -794,7 +783,6 @@ cdef class Box3D:
 
 		return ptcrd
 
-	@cython.embedsignature(True)
 	def cell2cart(self, double i, double j, double k):
 		'''
 		Convert the (possibly fractional) 3-D cell-index coordinates
@@ -816,7 +804,6 @@ cdef class Box3D:
 		hi[0] = self._cell2cart(i + 1, j + 1, k + 1)
 
 
-	@cython.embedsignature(True)
 	cpdef Box3D getCell(self, long i, long j, long k):
 		'''
 		Return a Box3D representing the cell that contains 3-D index c
@@ -828,7 +815,6 @@ cdef class Box3D:
 		return Box3D(pt2tup(lo), pt2tup(hi))
 
 
-	@cython.embedsignature(True)
 	def allIndices(self):
 		'''
 		Return a generator that produces every 3-D cell index within
@@ -841,7 +827,6 @@ cdef class Box3D:
 					yield i, j, k
 
 
-	@cython.embedsignature(True)
 	def allCells(self, bint enum=False):
 		'''
 		Return a generator that produces every cell in the grid defined
@@ -857,7 +842,6 @@ cdef class Box3D:
 			if not enum: yield box
 			else: yield ((i, j, k), box)
 
-	@cython.embedsignature(True)
 	def overlaps(self, Box3D b not None):
 		'''
 		Returns True iff the Box3D b overlaps with this box.
@@ -881,7 +865,6 @@ cdef class Box3D:
 				and (p.z >= self._lo.z) and (p.z <= self._hi.z))
 
 
-	@cython.embedsignature(True)
 	def contains(self, p):
 		'''
 		Returns True iff the 3-D point p is contained in the box.
@@ -942,7 +925,6 @@ cdef class Box3D:
 		t[1] = tmax
 		return True
 
-	@cython.embedsignature(True)
 	def intersection(self, Segment3D seg not None, bint halfline=False):
 		'''
 		Returns the lengths tmin and tmax along the given Segment3D seg
@@ -970,7 +952,6 @@ cdef class Box3D:
 	@cython.boundscheck(False)
 	@cython.wraparound(False)
 	@cython.cdivision(True)
-	@cython.embedsignature(True)
 	def descent(self, start, end, Interpolator3D field,
 			unsigned long cycles = 1,
 			double step=1.0, double tol=1e-3,
@@ -1091,7 +1072,6 @@ cdef class Box3D:
 		else: return hits
 
 
-	@cython.embedsignature(True)
 	cdef object _raymarcher(self, point start, point end, double step=REALEPS):
 		'''
 		Helper for Box3D.raymarcher that performs a single march for a
@@ -1148,7 +1128,6 @@ cdef class Box3D:
 
 		return intersections
 
-	@cython.embedsignature(True)
 	def raymarcher(self, p, double step=REALEPS):
 		'''
 		Marches along the given p, which is either a single Segment3D
@@ -1214,7 +1193,6 @@ cdef class Box3D:
 
 	@cython.wraparound(False)
 	@cython.boundscheck(False)
-	@cython.embedsignature(True)
 	def fresnel(self, p, double l):
 		'''
 		Find the first Fresnel zone of a path p, which is either a
@@ -1436,7 +1414,6 @@ cdef class Box3D:
 		if nval > oval: hits[key] = nval
 		return 1
 
-	@cython.embedsignature(True)
 	def neighborhood(self, p, length):
 		'''
 		For a single cell index triplet or collection of cell index

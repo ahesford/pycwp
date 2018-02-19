@@ -31,7 +31,8 @@ if __name__ == '__main__':
 			platforms=["any"], license="Closed",
 			packages=find_packages(),
 			scripts=glob('shell/*.py'),
-			ext_modules=cythonize('**/*.pyx'),
+			ext_modules=cythonize('**/*.pyx',
+				compiler_directives={'embedsignature': True}),
 			include_dirs=[np.get_include()],
 			package_data={ 'pycwp.cytools': ['*.pxd'] }
 			)

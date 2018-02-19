@@ -49,7 +49,6 @@ class FastSweep(object):
 	method in Zhao, "A fast sweeping method for Eikonal equations", Math.
 	Comp. 74 (2005), 603--627.
 	'''
-	@cython.embedsignature(True)
 	def __init__(self, box):
 		'''
 		Initialize the fast sweeping method on a pycwp.boxer.Box3D grid

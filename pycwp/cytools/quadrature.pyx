@@ -35,7 +35,6 @@ cdef class QuadPair:
 	'''
 	A simple class to encapsulate a quadrature node and weight.
 	'''
-	@cython.embedsignature(True)
 	def __init__(self, double theta, double weight):
 		'''
 		Initialize the quadrature pair with node cos(theta) and weight.
@@ -45,7 +44,6 @@ cdef class QuadPair:
 		self.theta = theta
 		self.weight = weight
 
-	@cython.embedsignature(True)
 	cpdef double x(self):
 		'''
 		The quadture node cos(self.theta).
@@ -59,7 +57,6 @@ cdef class QuadPair:
 		return '%s(%r, %r)' % (self.__class__.__name__, self.theta, self.weight)
 
 
-@cython.embedsignature(True)
 def glpair(size_t n, size_t k):
 	'''
 	Compute and return, as a QuadPair instance, the k-th node and weight of
@@ -136,7 +133,6 @@ cdef class Integrable:
 
 
 	@staticmethod
-	@cython.embedsignature(True)
 	def gkweights(unsigned int order, double tol):
 		'''
 		Return a list of elements (x, kw, gw), where x is a

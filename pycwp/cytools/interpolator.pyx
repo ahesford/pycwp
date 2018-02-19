@@ -68,7 +68,6 @@ cdef class LagrangeInterpolator3D(Interpolator3D):
 	'''
 	@cython.wraparound(False)
 	@cython.boundscheck(False)
-	@cython.embedsignature(True)
 	def __init__(self, image, default=None):
 		'''
 		Construct a piecewise Lagrange interpolator of degree 3 for the
@@ -284,7 +283,6 @@ cdef class HermiteInterpolator3D(Interpolator3D):
 	'''
 	@cython.wraparound(False)
 	@cython.boundscheck(False)
-	@cython.embedsignature(True)
 	def __init__(self, image, default=None):
 		'''
 		Construct a constrained Hermite cubic interpolator for the
@@ -632,7 +630,6 @@ cdef class CubicInterpolator3D(Interpolator3D):
 	'''
 	@cython.wraparound(False)
 	@cython.boundscheck(False)
-	@cython.embedsignature(True)
 	def __init__(self, image, default=None):
 		'''
 		Construct a tricubic interpolator for the given 3-D
@@ -950,7 +947,6 @@ cdef class LinearInterpolator3D(Interpolator3D):
 	'''
 	@cython.wraparound(False)
 	@cython.boundscheck(False)
-	@cython.embedsignature(True)
 	def __init__(self, image, default=None):
 		'''
 		Construct a trilinear interpolator for the given floating-point
@@ -1194,7 +1190,6 @@ cdef class Interpolator3D:
 		return False
 
 
-	@cython.embedsignature(True)
 	def evaluate(self, double x, double y, double z, bint grad=True):
 		'''
 		Evaluate and return the value of the image and, if grad is
@@ -1216,7 +1211,6 @@ cdef class Interpolator3D:
 		else: return f
 
 
-	@cython.embedsignature(True)
 	def gridimage(self, x, y, z, bint grad=False):
 		'''
 		Evalute and return the interpolated image on the grid defined
