@@ -13,14 +13,14 @@ DOCLINES = __doc__.split("\n")
 VERSION = '3.1'
 
 if __name__ == '__main__':
-	try: import wheel
-	except ImportError: pass
-
-	from setuptools import setup, find_packages
+	from setuptools import setup, find_packages, Extension
 	from Cython.Build import cythonize
 	from glob import glob
 
 	import numpy as np
+
+	ext_includes = [ np.get_include() ]
+	extensions = [ Extension('*', ['**/*.pyx'], include_dirs=ext_includes) ]
 
 	setup(name="pycwp",
 			version=VERSION,
@@ -31,8 +31,8 @@ if __name__ == '__main__':
 			platforms=["any"], license="Closed",
 			packages=find_packages(),
 			scripts=glob('shell/*.py'),
-			ext_modules=cythonize('**/*.pyx',
+			ext_modules=cythonize(extensions,
 				compiler_directives={'embedsignature': True}),
-			include_dirs=[np.get_include()],
+			include_dirs=ext_includes,
 			package_data={ 'pycwp.cytools': ['*.pxd'] }
 			)
