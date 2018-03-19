@@ -129,7 +129,9 @@ def vecnormalize(x, ord=None, axis=None):
 def waterc(t, p=1.01325):
 	'''
 	Return the sound speed in water at a temperature of t degrees Celsius
-	and an ambient pressure p in bar (1e5 Pa). Units are mm/microsec.
+	and an ambient pressure p in bar (1e5 Pa). Units are mm/microsec. The
+	pressure should be absolute, and not gauge pressure (which is absolute
+	pressure less the equilibrium pressure p=1.01325 bar).
 
 	From "Fundamentals of Acoustics", Kinsler and Frey, et al., Eq. (5.22).
 	'''
@@ -137,7 +139,7 @@ def waterc(t, p=1.01325):
 	t = t / 100.
 	f1 = ((135. * t - 482.) * t + 488.) * t + 1402.7
 	f2 = (2.4 * t + 2.8) * t + 15.9
-	c = f1 + f2 * p / 100.
+	c = f1 + f2 * (p - 1.01325) / 100.
 	return c / 1000.0
 
 
