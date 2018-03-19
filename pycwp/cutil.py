@@ -143,6 +143,31 @@ def waterc(t, p=1.01325):
 	return c / 1000.0
 
 
+def watert(c, p=1.01325):
+	'''
+	Return the temperature in degrees Celsius of water at an ambient
+	pressure p in bar (1e5 Pa) that has a sound speed of c mm/microsec. The
+	temperature is found by inverting the cubic model in waterc.
+
+	Because inversion of the cubic model leads to multiple roots, a list of
+	temperatures, each corresponding to an (approximately) real root, will
+	be returned. An approximately real root is one that satisfies
+
+		abs(imag(v)) < abs(real(v)) * sqrt(sys.float_info.epsilon).
+	'''
+	from numpy import roots
+	# Convert to m/s (force double precision)
+	c = 1000. * float(c)
+	# Gauge pressure term
+	pg = (float(p) - 1.01325) / 100
+	# Find cubic cofficients
+	p = 135., 2.4 * pg - 482., 2.8 * pg + 488., 15.9 * pg + 1402.7 - c
+	# Temperature is scaled by 100; scale real-valued roots
+	eps = math.sqrt(sys.float_info.epsilon)
+	return tuple(100 * v.real for v in roots(p)
+			if abs(v.imag) < abs(v.real) * eps)
+
+
 def numdigits(m):
 	'''
 	Return the number of digits required to represent int(m).
