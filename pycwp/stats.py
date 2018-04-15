@@ -109,7 +109,7 @@ def rolling_var(x, n):
 	ca[n:] -= ca[:-n]
 	cb[n:] -= cb[:-n]
 
-	return (cb[n - 1:] - ca[n - 1:]**2 / n) / n
+	return ((cb[n - 1:] - ca[n - 1:]**2 / n) / n).astype(x.dtype, copy=False)
 
 
 def rolling_std(x, n):
