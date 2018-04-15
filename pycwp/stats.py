@@ -68,27 +68,56 @@ def rolling_window(x, n):
 	return numpy.lib.stride_tricks.as_strided(x, shape=shape, strides=strides)
 
 
+def _largest_type(dtype):
+	'''
+	If dtype is a complex datatype, return numpy.complex128. Otherwise,
+	return numpy.float64.
+	'''
+	if numpy.issubdtype(dtype, numpy.complexfloating):
+		return numpy.dtype('complex128')
+	else: return numpy.dtype('float64')
+
+
 def rolling_mean(x, n):
 	'''
-	Compute the rolling mean of length n along the last axis of x.
+	Compute the rolling mean of length n along x as a flattened Numpy
+	array.
 	'''
-	return numpy.mean(rolling_window(x, n), axis=-1)
+	if n < 1: raise ValueError('Value of n must be nonnegative')
+	x = numpy.asarray(x)
+	dtype = _largest_type(x.dtype)
+
+	mx = numpy.mean(x, dtype=dtype)
+	ca = numpy.cumsum(x - mx, dtype=dtype)
+	ca[n:] -= ca[:-n]
+	return (mx + ca[n - 1:] / n).astype(x.dtype, copy=False)
 
 
-def rolling_variance(x, n):
+def rolling_var(x, n):
 	'''
-	Compute the variance, over a sliding window of length n, along the last
-	axis of x.
+	Compute the variance, over a sliding window of length n, along x as a
+	flattened Numpy array.
 	'''
-	return numpy.var(rolling_window(x, n), axis=-1)
+	if n < 1: raise ValueError('Value of n must be nonnegative')
+	x = numpy.asarray(x)
+	dtype = _largest_type(x.dtype)
+
+	mx = numpy.mean(x, dtype=dtype)
+	ca = numpy.cumsum(x - mx, dtype=dtype)
+	cb = numpy.cumsum((x - mx)**2, dtype=dtype)
+
+	ca[n:] -= ca[:-n]
+	cb[n:] -= cb[:-n]
+
+	return (cb[n - 1:] - ca[n - 1:]**2 / n) / n
 
 
 def rolling_std(x, n):
 	'''
 	Compute the standard deviation, over a sliding window of length n,
-	along the last axis of x.
+	along x as a flattened Numpy array.
 	'''
-	return numpy.std(rolling_window(x, n), axis=-1)
+	return numpy.sqrt(rolling_var(x, n))
 
 
 def rolling_rms(x, n):
@@ -96,4 +125,4 @@ def rolling_rms(x, n):
 	Compute the RMS value, over a sliding window of length n, along the
 	last axis of x.
 	'''
-	return numpy.sqrt(numpy.sum(rolling_window(x**2, n) / n, axis=-1))
+	return numpy.sqrt(rolling_mean(x**2, n))
