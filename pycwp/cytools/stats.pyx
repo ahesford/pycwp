@@ -37,8 +37,6 @@
 import cython
 cimport cython
 
-from cython cimport floating
-
 import numpy as np
 cimport numpy as np
 
@@ -80,44 +78,47 @@ cdef inline double calc_mean(long nobs, double sum_x, long neg_ct) nogil:
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-def rolling_mean(floating[:] a, unsigned long n):
+def rolling_mean(a, unsigned long n):
 	'''
-	Compute the rolling average of width n of the 1-D array a.
+	Compute the rolling average of width n of a, which must be compatible
+	with a 1-D floating-point Numpy array.
 
 	Values of n must fall in the interval [0, a.shape[0]] and, as a special
 	case, the value 0 has the same interpretation as the value a.shape[0].
 
-	The return value is an array r with shape a.shape and values
+	The return value is a 1-D double-precision array out of length len(a)
+	such that
 
-	  r[i] = mean(x[:i+1]) for 0 <= i < n,
-	  r[i] = mean(x[i-n:i]) for n <= i < len(x).
+	  out[i] = mean(x[:i+1]) for 0 <= i < n, (the "expanding" region)
+	  out[i] = mean(x[i-n:i]) for n <= i < len(x) (the "rolling" region).
 	'''
 	cdef:
-		np.ndarray[np.float64_t, ndim=1] r
+		np.ndarray[np.float64_t, ndim=1] arr
+		np.ndarray[np.float64_t, ndim=1] out
 		double sum_x = 0
 		long i, nobs = 0, neg_ct = 0
 
-	if n > a.shape[0]:
-		raise ValueError('Value of n must be in range [0, a.shape[0]]')
+	arr = np.asarray(a, dtype=np.float64)
 
-	r = np.empty((a.shape[0],), dtype='float64')
+	if n > arr.shape[0]:
+		raise ValueError('Value of n must be in range [0, len(a)]')
+	elif n == 0: n = arr.shape[0]
+
+	out = np.empty_like(arr)
 
 	with nogil:
-		if n == 0: n = a.shape[0]
-
 		for i in range(n):
 			# Accumulate the values in the growing window region
-			add_mean(a[i], &nobs, &sum_x, &neg_ct)
-			r[i] = calc_mean(nobs, sum_x, neg_ct)
+			add_mean(arr[i], &nobs, &sum_x, &neg_ct)
+			out[i] = calc_mean(nobs, sum_x, neg_ct)
 
-		for i in range(n, a.shape[0]):
+		for i in range(n, arr.shape[0]):
 			# Accumulate and remove values in the sliding window region
-			add_mean(a[i], &nobs, &sum_x, &neg_ct)
-			rem_mean(a[i - n], &nobs, &sum_x, &neg_ct)
-			r[i] = calc_mean(nobs, sum_x, neg_ct)
+			add_mean(arr[i], &nobs, &sum_x, &neg_ct)
+			rem_mean(arr[i - n], &nobs, &sum_x, &neg_ct)
+			out[i] = calc_mean(nobs, sum_x, neg_ct)
 
-	if floating is cython.double: return r
-	else: return r.astype('float32')
+	return out
 
 @cython.cdivision(True)
 cdef inline void add_var(double val, long *nobs,
@@ -175,37 +176,38 @@ cdef inline double calc_var(long ddof, long nobs, double ssqdm_x) nogil:
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-def rolling_var(floating[:] a, unsigned long n, unsigned long ddof=0):
+def rolling_var(a, unsigned long n, unsigned long ddof=0):
 	'''
-	Compute the rolling variance of width n of the 1-D array a. The
-	arguments a and n, together with output (r) are interpreted as in
-	rolling_mean, except the variance (with ddof degrees of freedom) is
-	computed in place of the mean. Any output indices i <= ddof will have a
-	NaN value.
+	Compute the rolling variance of width n of a. The arguments a and n,
+	together with output (r) are interpreted as in rolling_mean, except the
+	variance (with ddof degrees of freedom) is computed in place of the
+	mean. Any output indices i <= ddof will have a NaN value.
 
 	Adapted from pandas.
 	'''
 	cdef:
-		np.ndarray[np.float64_t, ndim=1] r
+		np.ndarray[np.float64_t, ndim=1] arr
+		np.ndarray[np.float64_t, ndim=1] out
 		double val, prev, delta, dobs, mean_x_old, mean_x = 0, ssqdm_x = 0
 		long i, nobs = 0
 
-	if n > a.shape[0]:
-		raise ValueError('Value of n must be in range [0, a.shape[0]]')
+	arr = np.asarray(a, dtype=np.float64)
 
-	r = np.empty((a.shape[0],), dtype='float64')
+	if n > arr.shape[0]:
+		raise ValueError('Value of n must be in range [0, len(a)]')
+	elif n == 0: n = arr.shape[0]
+
+	out = np.empty_like(arr)
 
 	with nogil:
-		if n == 0: n = a.shape[0]
-
 		for i in range(n):
 			# Accumulate the values in the growing window region
-			add_var(a[i], &nobs, &mean_x, &ssqdm_x)
-			r[i] = calc_var(ddof, nobs, ssqdm_x)
+			add_var(arr[i], &nobs, &mean_x, &ssqdm_x)
+			out[i] = calc_var(ddof, nobs, ssqdm_x)
 
-		for i in range(n, a.shape[0]):
-			val = a[i]
-			prev = a[i - n]
+		for i in range(n, arr.shape[0]):
+			val = arr[i]
+			prev = arr[i - n]
 
 			# Handle simultaneous add and remove
 			if val == val:
@@ -219,11 +221,10 @@ def rolling_var(floating[:] a, unsigned long n, unsigned long ddof=0):
 							+ (dobs + 1) * prev
 							- 2 * nobs * mean_x_old) / dobs
 				else:
-					add_var(a[i], &nobs, &mean_x, &ssqdm_x)
+					add_var(arr[i], &nobs, &mean_x, &ssqdm_x)
 			elif prev == prev:
-				rem_var(a[i - n], &nobs, &mean_x, &ssqdm_x)
+				rem_var(arr[i - n], &nobs, &mean_x, &ssqdm_x)
 
-			r[i] = calc_var(ddof, nobs, ssqdm_x)
+			out[i] = calc_var(ddof, nobs, ssqdm_x)
 
-	if floating is cython.double: return r
-	else: return r.astype('float32')
+	return out

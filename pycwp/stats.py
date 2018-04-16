@@ -8,7 +8,7 @@ Routines used for basic statistical analysis.
 import numpy
 from numpy import ma
 
-from .cytools.stats import rolling_mean as rma, rolling_var as rva
+from .cytools import stats 
 
 def mask_outliers(s, m=1.5):
 	'''
@@ -68,30 +68,41 @@ def rolling_window(x, n):
 	return numpy.lib.stride_tricks.as_strided(x, shape=shape, strides=strides)
 
 
-def _validate_rolling_inputs(x, n):
+def _rolling_cython_wrapper(func_name, x, n, expand=False):
 	'''
-	Verify that n is None or a nonnegative integer and x can be represented
-	as a Numpy array, then return (xa, nv), where xa is the array
-	representation of x; and nv is len(xa) if n is None, n otherwise.
+	A wrapper to use the named Cython-accelerated rolling-statistics
+	function with arguments x and n, convert the output type to match the
+	input type if possible and reasonable, and return the appropriate
+	portion of the output (with the "expanding" region if expand is True).
 	'''
-	n = n or 0
-	if n < 0 or n != int(n):
-		raise ValueError('Value "n" must be None or a nonnegative integer')
+	try:
+		cfunc = getattr(stats, func_name)
+	except AttributeError:
+		raise ValueError(f'pycwp.stats contains no function "{func_name}"')
 
-	# Make sure the array is writeable and has a floating-point type
-	x = numpy.asarray(x)
-	if not numpy.issubdtype(x.dtype, numpy.floating):
-		x = x.astype('float64')
-	if not x.flags['WRITEABLE']: x = x.copy()
+	# Invoke the rolling-stats function
+	mx = cfunc(x, n)
 
-	if n is None: n = len(x)
-	return x, n
+	# Convert the output type if desired and possible
+	try:
+		dtype = x.dtype
+	except AttributeError:
+		pass
+	else:
+		if numpy.issubdtype(dtype, numpy.inexact):
+			mx = mx.astype(dtype, copy=False)
+
+	# Return the appropriate chunk of the output
+	if not expand: return mx[n - 1:]
+	return mx
 
 
 def rolling_mean(x, n, expand=False):
 	'''
-	Compute the rolling mean of length n along x as a flattened Numpy
-	array.
+	Compute the rolling mean of length n along the 1-D array x. All
+	calculations are done in double-precision arithmetic. If x has a
+	"dtype" parameter and it is inexact, the output will have dtype
+	x.dtype. Otherwise, the output will have a float64 dtype.
 
 	When expand=False, only the valid region of the rolling mean is
 	returned; for R = rolling_mean(x, n, expand=False),
@@ -103,10 +114,7 @@ def rolling_mean(x, n, expand=False):
 	  R[i] = mean(x[:i+1]) for 0 <= i < n,
 	  R[i] = mean(x[i-n:i]) for n <= i < len(x).
 	'''
-	x, n = _validate_rolling_inputs(x, n)
-	mx = rma(x, n)
-	if not expand: return mx[n - 1:]
-	return mx
+	return _rolling_cython_wrapper('rolling_mean', x, n, expand)
 
 
 def rolling_var(x, n, expand=False):
@@ -114,12 +122,7 @@ def rolling_var(x, n, expand=False):
 	Performs rolling computations as described in rolling_mean, except the
 	variance is computed in place of the mean.
 	'''
-	x, n = _validate_rolling_inputs(x, n)
-
-	# Compute cumulative mean and mean squared
-	vx = rva(x, n)
-	if not expand: return vx[n - 1:]
-	return vx
+	return _rolling_cython_wrapper('rolling_var', x, n, expand)
 
 
 def rolling_std(*args, **kwargs):
