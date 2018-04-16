@@ -8,7 +8,7 @@ Routines used for basic statistical analysis.
 import numpy
 from numpy import ma
 
-
+from .cytools.stats import rolling_mean as rma, rolling_var as rva
 
 def mask_outliers(s, m=1.5):
 	'''
@@ -70,21 +70,22 @@ def rolling_window(x, n):
 
 def _validate_rolling_inputs(x, n):
 	'''
-	Verify that n is None or a positive integer and x can be represented as
-	a Numpy array, then return (xa, nv, dtype), where xa is the array
-	representation of x; nv is len(xa) if n is None, n otherwise; and dtype
-	is complex128 when xa.dtype is a complex type, float64 otherwise.
+	Verify that n is None or a nonnegative integer and x can be represented
+	as a Numpy array, then return (xa, nv), where xa is the array
+	representation of x; and nv is len(xa) if n is None, n otherwise.
 	'''
-	if n is not None and (n < 1 or n != int(n)):
-		raise ValueError('Value "n" must be None a nonnegative integer')
+	n = n or 0
+	if n < 0 or n != int(n):
+		raise ValueError('Value "n" must be None or a nonnegative integer')
 
+	# Make sure the array is writeable and has a floating-point type
 	x = numpy.asarray(x)
-	if n is None: n = len(x)
+	if not numpy.issubdtype(x.dtype, numpy.floating):
+		x = x.astype('float64')
+	if not x.flags['WRITEABLE']: x = x.copy()
 
-	if numpy.issubdtype(x.dtype, numpy.complexfloating):
-		dtype = numpy.dtype('complex128')
-	else: dtype = numpy.dtype('float64')
-	return x, n, dtype
+	if n is None: n = len(x)
+	return x, n
 
 
 def rolling_mean(x, n, expand=False):
@@ -102,20 +103,10 @@ def rolling_mean(x, n, expand=False):
 	  R[i] = mean(x[:i+1]) for 0 <= i < n,
 	  R[i] = mean(x[i-n:i]) for n <= i < len(x).
 	'''
-	x, n, dtype = _validate_rolling_inputs(x, n)
-
-	mx = numpy.mean(x, dtype=dtype)
-	ca = numpy.cumsum(x - mx, dtype=dtype)
-	ca[n:] -= ca[:-n]
-
-	nm1 = n - 1
-	ca[nm1:] = mx + ca[nm1:] / n
-
-	if not expand: return ca[nm1:].astype(x.dtype, copy=False)
-
-	# In "expand" mode, use expanding window before validity region
-	ca[:nm1] = mx + ca[:nm1] / numpy.arange(1, n)
-	return ca.astype(x.dtype, copy=False)
+	x, n = _validate_rolling_inputs(x, n)
+	mx = rma(x, n)
+	if not expand: return mx[n - 1:]
+	return mx
 
 
 def rolling_var(x, n, expand=False):
@@ -123,27 +114,12 @@ def rolling_var(x, n, expand=False):
 	Performs rolling computations as described in rolling_mean, except the
 	variance is computed in place of the mean.
 	'''
-	x, n, dtype = _validate_rolling_inputs(x, n)
+	x, n = _validate_rolling_inputs(x, n)
 
 	# Compute cumulative mean and mean squared
-	mx = numpy.mean(x, dtype=dtype)
-	ca = numpy.cumsum(x - mx, dtype=dtype)
-	cb = numpy.cumsum((x - mx)**2, dtype=dtype)
-
-	# Convert cumulative values to rolling values
-	ca[n:] -= ca[:-n]
-	cb[n:] -= cb[:-n]
-
-	# Convert rolling mean-squared values to variance in valid region
-	nm1 = n - 1
-	cb[nm1:] = (cb[nm1:] - ca[nm1:]**2 / n) / n
-
-	if not expand: return cb[nm1:].astype(x.dtype, copy=False)
-
-	# In "expand" mode, use expand window before validity region
-	nv = numpy.arange(1, n)
-	cb[:nm1] = (cb[:nm1] -  ca[:nm1]**2 / nv) / nv
-	return cb.astype(x.dtype, copy=False)
+	vx = rva(x, n)
+	if not expand: return vx[n - 1:]
+	return vx
 
 
 def rolling_std(*args, **kwargs):

@@ -5,4 +5,4 @@ build
 dist
 *.egg-info
 setup.cfg
-pycwp/cytools/{boxer,eikonal,interpolator,regularize,quadrature,ptutils}.c
+pycwp/cytools/{boxer,eikonal,interpolator,regularize,quadrature,ptutils,stats}.c
