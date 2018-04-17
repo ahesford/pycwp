@@ -68,12 +68,15 @@ def rolling_window(x, n):
 	return numpy.lib.stride_tricks.as_strided(x, shape=shape, strides=strides)
 
 
-def _rolling_cython_wrapper(func_name, x, n, expand=False):
+def _rolling_cython_wrapper(func_name, x, n, expand=False, *args, **kwargs):
 	'''
 	A wrapper to use the named Cython-accelerated rolling-statistics
 	function with arguments x and n, convert the output type to match the
 	input type if possible and reasonable, and return the appropriate
 	portion of the output (with the "expanding" region if expand is True).
+
+	Additional args and kwargs are passed through to the underlying Cython
+	routine.
 	'''
 	try:
 		cfunc = getattr(stats, func_name)
@@ -81,7 +84,7 @@ def _rolling_cython_wrapper(func_name, x, n, expand=False):
 		raise ValueError(f'pycwp.stats contains no function "{func_name}"')
 
 	# Invoke the rolling-stats function
-	mx = cfunc(x, n)
+	mx = cfunc(x, n, *args, **kwargs)
 
 	# Convert the output type if desired and possible
 	try:
@@ -97,7 +100,7 @@ def _rolling_cython_wrapper(func_name, x, n, expand=False):
 	return mx
 
 
-def rolling_mean(x, n, expand=False):
+def rolling_mean(x, n, expand=False, *args, **kwargs):
 	'''
 	Compute the rolling mean of length n along the 1-D array x. All
 	calculations are done in double-precision arithmetic. If x has a
@@ -113,16 +116,26 @@ def rolling_mean(x, n, expand=False):
 
 	  R[i] = mean(x[:i+1]) for 0 <= i < n,
 	  R[i] = mean(x[i-n:i]) for n <= i < len(x).
+
+	This method uses pycwp.cytools.stats.rolling_mean to compute the
+	rolling mean as if expand were True, then strips out the expanding part
+	if expand is False. (The Cython routine does not provide the option to
+	strip the expanding part.) Additional arguments are passed through to
+	
+	  pycwp.cytools.stats.rolling_mean(x, n, *args, **kwargs).
 	'''
-	return _rolling_cython_wrapper('rolling_mean', x, n, expand)
+	return _rolling_cython_wrapper('rolling_mean', x, n, expand, *args, **kwargs)
 
 
-def rolling_var(x, n, expand=False):
+def rolling_var(x, n, expand=False, *args, **kwargs):
 	'''
 	Performs rolling computations as described in rolling_mean, except the
-	variance is computed in place of the mean.
+	variance is computed in place of the mean. Additional arguments are
+	passed through to
+
+	  pycwp.cytools.stats.rolling_var(x, n, *args, **kwargs).
 	'''
-	return _rolling_cython_wrapper('rolling_var', x, n, expand)
+	return _rolling_cython_wrapper('rolling_var', x, n, expand, *args, **kwargs)
 
 
 def rolling_std(*args, **kwargs):

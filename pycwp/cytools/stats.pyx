@@ -40,30 +40,36 @@ cimport cython
 import numpy as np
 cimport numpy as np
 
-from libc.math cimport signbit
+from libc.math cimport signbit, frexp
 
 cdef double NaN = <double>np.NaN
 
-cdef inline void add_mean(double val, long *nobs, double *sum_x, long *neg_ct) nogil:
+cdef inline bint check_exp(const double lval, const double rval, const int jump) nogil:
+	'''
+	Return True if jump is less than 1 or if the binary exponent of rval is
+	at least jump binary orders of magnitude larger than lval, False
+	otherwise.
+	'''
+	cdef int lexp, rexp
+
+	if jump < 1: return True
+
+	frexp(lval, &lexp)
+	frexp(rval, &rexp)
+
+	return rexp >= lexp + jump
+
+cdef inline void add_mean(const double val, long * const nobs,
+			double * const sum_x, long * const neg_ct) nogil:
 	'''
 	A helper to add a value from rolling_mean. Taken from pandas.
 	'''
-	if val == val:
-		nobs[0] += 1
-		sum_x[0] += val
-		if signbit(val): neg_ct[0] += 1
+	nobs[0] += 1
+	sum_x[0] += val
+	if signbit(val): neg_ct[0] += 1
 
-cdef inline void rem_mean(double val, long *nobs, double *sum_x, long *neg_ct) nogil:
-	'''
-	A helper to remove a value from rolling_mean. Taken from pandas.
-	'''
-	if val == val:
-		nobs[0] -= 1
-		sum_x[0] -= val
-		if signbit(val): neg_ct[0] -= 1
-
-@cython.cdivision(True)
-cdef inline double calc_mean(long nobs, double sum_x, long neg_ct) nogil:
+cdef inline double calc_mean(const long nobs,
+			const double sum_x, const long neg_ct) nogil:
 	'''
 	A helper to evaluate the running mean from rolling_mean.
 
@@ -78,7 +84,7 @@ cdef inline double calc_mean(long nobs, double sum_x, long neg_ct) nogil:
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-def rolling_mean(a, unsigned long n):
+def rolling_mean(a, const unsigned long n, const int rstmag=12):
 	'''
 	Compute the rolling average of width n of a, which must be compatible
 	with a 1-D floating-point Numpy array.
@@ -91,12 +97,22 @@ def rolling_mean(a, unsigned long n):
 
 	  out[i] = mean(x[:i+1]) for 0 <= i < n, (the "expanding" region)
 	  out[i] = mean(x[i-n:i]) for n <= i < len(x) (the "rolling" region).
+
+	The rolling calculation involves adding and subtracting values in a as
+	elements move into and out of the window, respectively. When elements
+	have very different magnitudes, catastrophic cancellation can destroy
+	accuracy. To help avoid this, the rolling accumulators will be reset
+	whenever, for a given window position, the value to be removed is
+	larger than the value to be added by the binary order of magnitude
+	rstmag. If rstmag is less than 1, the reset will happen for every
+	window position, converting the rolling calculation to a less efficient
+	but more accurate brute-force approach.
 	'''
 	cdef:
 		np.ndarray[np.float64_t, ndim=1] arr
 		np.ndarray[np.float64_t, ndim=1] out
-		double sum_x = 0
-		long i, nobs = 0, neg_ct = 0
+		double sum_x = 0, val, prev
+		long i, nobs = 0, neg_ct = 0, nextidx
 
 	arr = np.asarray(a, dtype=np.float64)
 
@@ -108,55 +124,62 @@ def rolling_mean(a, unsigned long n):
 
 	with nogil:
 		for i in range(n):
-			# Accumulate the values in the growing window region
+			# Accumulate the values in expanding region (don't verify)
 			add_mean(arr[i], &nobs, &sum_x, &neg_ct)
 			out[i] = calc_mean(nobs, sum_x, neg_ct)
 
-		for i in range(n, arr.shape[0]):
-			# Accumulate and remove values in the sliding window region
-			add_mean(arr[i], &nobs, &sum_x, &neg_ct)
-			rem_mean(arr[i - n], &nobs, &sum_x, &neg_ct)
-			out[i] = calc_mean(nobs, sum_x, neg_ct)
+		# Switch to rolling region, allowing for resets
+		nextidx = n
+		while True: 
+			while nextidx < arr.shape[0]:
+				# Accumulate and remove values
+				val = arr[nextidx]
+				prev = arr[nextidx - n]
+
+				# Reset if removal is too large compared to addition
+				if check_exp(val, prev, rstmag): break
+
+				# Simultaneously add and remove values
+				sum_x += (val - prev)
+				# Track count of negative values
+				if signbit(val): neg_ct += 1
+				if signbit(prev): neg_ct -= 1
+
+				out[nextidx] = calc_mean(nobs, sum_x, neg_ct)
+				nextidx += 1
+
+			# No need to restart when all inputs processed
+			if nextidx >= arr.shape[0]: break
+
+			nobs = neg_ct = 0
+			sum_x = 0
+			for i in range(nextidx - n + 1, nextidx + 1):
+				add_mean(arr[i], &nobs, &sum_x, &neg_ct)
+			out[nextidx] = calc_mean(nobs, sum_x, neg_ct)
+			nextidx += 1
 
 	return out
 
-@cython.cdivision(True)
-cdef inline void add_var(double val, long *nobs,
-			double *mean_x, double *ssqdm_x) nogil:
+cdef inline void add_var(const double val, long * const nobs,
+			double * const mean_x, double * const ssqdm_x) nogil:
 	'''
-	A helper to add a value from rolling_var. Taken from pandas.
-	'''
-	cdef double delta, dobs
+	A helper to add a value from rolling_var. Returns False if verify is
+	True and roundoff or catastrophic cancellation may have occurred, True
+	otherwise.
 
-	if val == val:
-		nobs[0] += 1
-		dobs = <double>(nobs[0])
-
-		delta = val - mean_x[0]
-		mean_x[0] += delta / dobs
-		ssqdm_x[0] += ((dobs - 1) * delta**2) / dobs
-
-@cython.cdivision(True)
-cdef inline void rem_var(double val, long *nobs,
-			double *mean_x, double *ssqdm_x) nogil:
-	'''
-	A helper to remove a value from rolling_var. Taken from pandas.
+	Taken from pandas.
 	'''
 	cdef double delta, dobs
 
-	if val == val:
-		nobs[0] -= 1
-		dobs = <double>(nobs[0])
-		if nobs[0]:
-			delta = val - mean_x[0]
-			mean_x[0] -= delta / dobs
-			ssqdm_x[0] -= ((dobs + 1) * delta**2) / dobs
-		else:
-			mean_x[0] = 0
-			ssqdm_x[0] = 0
+	nobs[0] += 1
+	dobs = <double>(nobs[0])
 
-@cython.cdivision(True)
-cdef inline double calc_var(long ddof, long nobs, double ssqdm_x) nogil:
+	delta = val - mean_x[0]
+	mean_x[0] += delta / dobs
+	ssqdm_x[0] += (dobs - 1) * delta**2 / dobs
+
+cdef inline double calc_var(const long ddof,
+			const long nobs, const double ssqdm_x) nogil:
 	'''
 	A helper to calculate the variance from rolling_var.
 
@@ -166,30 +189,31 @@ cdef inline double calc_var(long ddof, long nobs, double ssqdm_x) nogil:
 
 	if nobs <= ddof: return NaN
 
-	if nobs == 1:
-		result = 0
-	else:
-		result = ssqdm_x / <double>(nobs - ddof)
-		if result < 0: result = 0
+	if nobs == 1: return 0
+
+	result = ssqdm_x / <double>(nobs - ddof)
+	if result < 0: result = 0
 
 	return result
 
+@cython.cdivision(True)
 @cython.boundscheck(False)
 @cython.wraparound(False)
-def rolling_var(a, unsigned long n, unsigned long ddof=0):
+def rolling_var(a, const unsigned long n,
+		const unsigned long ddof=0, const int rstmag=12):
 	'''
-	Compute the rolling variance of width n of a. The arguments a and n,
-	together with output (r) are interpreted as in rolling_mean, except the
-	variance (with ddof degrees of freedom) is computed in place of the
-	mean. Any output indices i <= ddof will have a NaN value.
+	Compute the rolling variance of width n of a. The arguments a, n, and
+	rstmag, together with output (r) are interpreted as in rolling_mean,
+	except the variance (with ddof degrees of freedom) is computed in place
+	of the mean. Any output indices i <= ddof will have a NaN value.
 
 	Adapted from pandas.
 	'''
 	cdef:
 		np.ndarray[np.float64_t, ndim=1] arr
 		np.ndarray[np.float64_t, ndim=1] out
-		double val, prev, delta, dobs, mean_x_old, mean_x = 0, ssqdm_x = 0
-		long i, nobs = 0
+		double val, prev, mean_x = 0, ssqdm_x = 0, delta, dobs
+		long iprev, i, nobs = 0, nextidx
 
 	arr = np.asarray(a, dtype=np.float64)
 
@@ -199,32 +223,55 @@ def rolling_var(a, unsigned long n, unsigned long ddof=0):
 
 	out = np.empty_like(arr)
 
+	if n == 0:
+		# n == 0 <==> len(a) == 0, nothing to do
+		return out
+	elif n == 1:
+		# When n is unity, variance is identically 0
+		out[:] = 0
+		return out
+
 	with nogil:
 		for i in range(n):
-			# Accumulate the values in the growing window region
+			# Accumulate the values in expanding region (don't verify)
 			add_var(arr[i], &nobs, &mean_x, &ssqdm_x)
 			out[i] = calc_var(ddof, nobs, ssqdm_x)
 
-		for i in range(n, arr.shape[0]):
-			val = arr[i]
-			prev = arr[i - n]
+		# Switch to the rolling region, allowing for resets
+		nextidx = n
+		while True:
+			# Number of observations is constant in rolling region
+			dobs = <double>nobs
+			while nextidx < arr.shape[0]:
+				val = arr[nextidx]
+				prev = arr[nextidx - n]
 
-			# Handle simultaneous add and remove
-			if val == val:
-				if prev == prev:
-					delta = val - prev
-					mean_x_old = mean_x
-					dobs = <double>nobs
+				# Reset if values are too disparate
+				if check_exp(val, prev, rstmag): break
 
-					mean_x += delta / dobs
-					ssqdm_x += delta * ((dobs - 1) * val
-							+ (dobs + 1) * prev
-							- 2 * nobs * mean_x_old) / dobs
-				else:
-					add_var(arr[i], &nobs, &mean_x, &ssqdm_x)
-			elif prev == prev:
-				rem_var(arr[i - n], &nobs, &mean_x, &ssqdm_x)
+				# Simultaneous addition and removal
+				delta = val - prev
 
-			out[i] = calc_var(ddof, nobs, ssqdm_x)
+				# Sum-of-squares update depends on old mean
+				ssqdm_x += delta * (dobs * (val + prev) - delta
+							- 2 * dobs * mean_x) / dobs
+				# Now update the mean
+				mean_x += delta / dobs
+
+				out[nextidx] = calc_var(ddof, nobs, ssqdm_x)
+				nextidx += 1
+
+			# There is no need to restart; all input was processed
+			if nextidx >= arr.shape[0]: break
+
+			# Restart the accumulation to populate the next index
+			nobs = 0
+			ssqdm_x = mean_x = 0
+
+			for i in range(nextidx - n + 1, nextidx + 1):
+				add_var(arr[i], &nobs, &mean_x, &ssqdm_x)
+
+			out[nextidx] = calc_var(ddof, nobs, ssqdm_x)
+			nextidx += 1
 
 	return out
