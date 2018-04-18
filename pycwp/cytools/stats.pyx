@@ -40,9 +40,25 @@ cimport cython
 import numpy as np
 cimport numpy as np
 
-from libc.math cimport signbit, frexp
+from libc.math cimport signbit, frexp, fabs
 
 cdef double NaN = <double>np.NaN
+
+cdef inline double neumaier(double * const s, const double v, double * const c) nogil:
+	'''
+	To *s, add the value of v and accumulate a Neumaier compensation in *c.
+	The value of *c should be 0 upon first invocation in an accumulation.
+	This function will update the compensation in *c, which should be
+	passed unmodified for subsequent calls.
+	
+	The compensated sum, *s + *c, is returned.
+	'''
+	cdef double t = s[0] + v
+	if fabs(s[0]) >= fabs(v): c[0] += (s[0] - t) + v
+	else: c[0] += (v - t) + s[0]
+	s[0] = t
+	return t + c[0]
+
 
 cdef inline bint check_exp(const double lval, const double rval, const int jump) nogil:
 	'''
@@ -60,12 +76,13 @@ cdef inline bint check_exp(const double lval, const double rval, const int jump)
 	return rexp >= lexp + jump
 
 cdef inline void add_mean(const double val, long * const nobs,
-			double * const sum_x, long * const neg_ct) nogil:
+			double * const sum_x, double * const sum_c, 
+			long * const neg_ct) nogil:
 	'''
 	A helper to add a value from rolling_mean. Taken from pandas.
 	'''
 	nobs[0] += 1
-	sum_x[0] += val
+	neumaier(sum_x, val, sum_c)
 	if signbit(val): neg_ct[0] += 1
 
 cdef inline double calc_mean(const long nobs,
@@ -111,7 +128,7 @@ def rolling_mean(a, const unsigned long n, const int rstmag=12):
 	cdef:
 		np.ndarray[np.float64_t, ndim=1] arr
 		np.ndarray[np.float64_t, ndim=1] out
-		double sum_x = 0, val, prev
+		double sum_x = 0, sum_c = 0, cs, val, prev
 		long i, nobs = 0, neg_ct = 0, nextidx
 
 	arr = np.asarray(a, dtype=np.float64)
@@ -124,9 +141,9 @@ def rolling_mean(a, const unsigned long n, const int rstmag=12):
 
 	with nogil:
 		for i in range(n):
-			# Accumulate the values in expanding region (don't verify)
-			add_mean(arr[i], &nobs, &sum_x, &neg_ct)
-			out[i] = calc_mean(nobs, sum_x, neg_ct)
+			# Accumulate the values in expanding region
+			add_mean(arr[i], &nobs, &sum_x, &sum_c, &neg_ct)
+			out[i] = calc_mean(nobs, sum_x + sum_c, neg_ct)
 
 		# Switch to rolling region, allowing for resets
 		nextidx = n
@@ -140,28 +157,29 @@ def rolling_mean(a, const unsigned long n, const int rstmag=12):
 				if check_exp(val, prev, rstmag): break
 
 				# Simultaneously add and remove values
-				sum_x += (val - prev)
+				cs = neumaier(&sum_x, val - prev, &sum_c)
 				# Track count of negative values
 				if signbit(val): neg_ct += 1
 				if signbit(prev): neg_ct -= 1
 
-				out[nextidx] = calc_mean(nobs, sum_x, neg_ct)
+				out[nextidx] = calc_mean(nobs, cs, neg_ct)
 				nextidx += 1
 
 			# No need to restart when all inputs processed
 			if nextidx >= arr.shape[0]: break
 
 			nobs = neg_ct = 0
-			sum_x = 0
+			sum_x = sum_c = 0
 			for i in range(nextidx - n + 1, nextidx + 1):
-				add_mean(arr[i], &nobs, &sum_x, &neg_ct)
-			out[nextidx] = calc_mean(nobs, sum_x, neg_ct)
+				add_mean(arr[i], &nobs, &sum_x, &sum_c, &neg_ct)
+			out[nextidx] = calc_mean(nobs, sum_x + sum_c, neg_ct)
 			nextidx += 1
 
 	return out
 
 cdef inline void add_var(const double val, long * const nobs,
-			double * const mean_x, double * const ssqdm_x) nogil:
+			double * const mean_x, double * const ssqdm_x,
+			double * const mean_c, double * const ssqdm_c) nogil:
 	'''
 	A helper to add a value from rolling_var. Returns False if verify is
 	True and roundoff or catastrophic cancellation may have occurred, True
@@ -175,8 +193,8 @@ cdef inline void add_var(const double val, long * const nobs,
 	dobs = <double>(nobs[0])
 
 	delta = val - mean_x[0]
-	mean_x[0] += delta / dobs
-	ssqdm_x[0] += (dobs - 1) * delta**2 / dobs
+	neumaier(mean_x, delta / dobs, mean_c)
+	neumaier(ssqdm_x, (dobs - 1) * delta**2 / dobs, ssqdm_c)
 
 cdef inline double calc_var(const long ddof,
 			const long nobs, const double ssqdm_x) nogil:
@@ -212,7 +230,9 @@ def rolling_var(a, const unsigned long n,
 	cdef:
 		np.ndarray[np.float64_t, ndim=1] arr
 		np.ndarray[np.float64_t, ndim=1] out
-		double val, prev, mean_x = 0, ssqdm_x = 0, delta, dobs
+		np.ndarray[np.float64_t, ndim=1] mean
+		double mean_x = 0, ssqdm_x = 0, mean_c = 0, ssqdm_c = 0
+		double val, prev, delta, dobs, upd, mu, ssq
 		long iprev, i, nobs = 0, nextidx
 
 	arr = np.asarray(a, dtype=np.float64)
@@ -233,15 +253,19 @@ def rolling_var(a, const unsigned long n,
 
 	with nogil:
 		for i in range(n):
-			# Accumulate the values in expanding region (don't verify)
-			add_var(arr[i], &nobs, &mean_x, &ssqdm_x)
-			out[i] = calc_var(ddof, nobs, ssqdm_x)
+			# Accumulate the values in expanding region
+			add_var(arr[i], &nobs, &mean_x, &ssqdm_x, &mean_c, &ssqdm_c)
+			out[i] = calc_var(ddof, nobs, ssqdm_x + ssqdm_c)
 
 		# Switch to the rolling region, allowing for resets
 		nextidx = n
 		while True:
 			# Number of observations is constant in rolling region
 			dobs = <double>nobs
+
+			# Initial Neumaier-corrected mean for loop
+			mu = mean_x + mean_c
+
 			while nextidx < arr.shape[0]:
 				val = arr[nextidx]
 				prev = arr[nextidx - n]
@@ -252,13 +276,17 @@ def rolling_var(a, const unsigned long n,
 				# Simultaneous addition and removal
 				delta = val - prev
 
-				# Sum-of-squares update depends on old mean
-				ssqdm_x += delta * (dobs * (val + prev) - delta
-							- 2 * dobs * mean_x) / dobs
-				# Now update the mean
-				mean_x += delta / dobs
+				# Do sum-of-squares first; it depends on old mean
+				upd = val + prev
+				upd = delta * (dobs * (upd - 2 * mu) - delta) / dobs
+				ssq = neumaier(&ssqdm_x, upd, &ssqdm_c)
+				# Sum-of-squares should be positive; reset
+				if ssq < 0: break
 
-				out[nextidx] = calc_var(ddof, nobs, ssqdm_x)
+				# Now update the mean
+				mu = neumaier(&mean_x, delta / dobs, &mean_c)
+
+				out[nextidx] = calc_var(ddof, nobs, ssq)
 				nextidx += 1
 
 			# There is no need to restart; all input was processed
@@ -266,12 +294,13 @@ def rolling_var(a, const unsigned long n,
 
 			# Restart the accumulation to populate the next index
 			nobs = 0
-			ssqdm_x = mean_x = 0
+			ssqdm_x = mean_x = ssqdm_c = mean_c = 0
 
 			for i in range(nextidx - n + 1, nextidx + 1):
-				add_var(arr[i], &nobs, &mean_x, &ssqdm_x)
+				add_var(arr[i], &nobs, &mean_x,
+						&ssqdm_x, &mean_c, &ssqdm_c)
 
-			out[nextidx] = calc_var(ddof, nobs, ssqdm_x)
+			out[nextidx] = calc_var(ddof, nobs, ssqdm_x + ssqdm_c)
 			nextidx += 1
 
 	return out
