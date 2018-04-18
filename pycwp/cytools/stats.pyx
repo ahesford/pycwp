@@ -76,7 +76,7 @@ cdef inline bint check_exp(const double lval, const double rval, const int jump)
 	return rexp >= lexp + jump
 
 cdef inline void add_mean(const double val, long * const nobs,
-			double * const sum_x, double * const sum_c, 
+			double * const sum_x, double * const sum_c,
 			long * const neg_ct) nogil:
 	'''
 	A helper to add a value from rolling_mean. Taken from pandas.
@@ -147,7 +147,7 @@ def rolling_mean(a, const unsigned long n, const int rstmag=12):
 
 		# Switch to rolling region, allowing for resets
 		nextidx = n
-		while True: 
+		while True:
 			while nextidx < arr.shape[0]:
 				# Accumulate and remove values
 				val = arr[nextidx]
@@ -221,18 +221,21 @@ def rolling_var(a, const unsigned long n,
 		const unsigned long ddof=0, const int rstmag=12):
 	'''
 	Compute the rolling variance of width n of a. The arguments a, n, and
-	rstmag, together with output (r) are interpreted as in rolling_mean,
-	except the variance (with ddof degrees of freedom) is computed in place
-	of the mean. Any output indices i <= ddof will have a NaN value.
+	rstmag are interpreted as in rolling_mean. The output is an array of
+	double-precision floating-point values with shape (len(a), 2); the
+	first column contains the rolling variance and the second contains the
+	rolling mean as would be computed by rolling_mean.
+
+	The variance is computed with ddof degrees of freedom; the variance
+	column of the output will be NaN for indices i <= ddof.
 
 	Adapted from pandas.
 	'''
 	cdef:
 		np.ndarray[np.float64_t, ndim=1] arr
-		np.ndarray[np.float64_t, ndim=1] out
-		np.ndarray[np.float64_t, ndim=1] mean
+		np.ndarray[np.float64_t, ndim=2] out
 		double mean_x = 0, ssqdm_x = 0, mean_c = 0, ssqdm_c = 0
-		double val, prev, delta, dobs, upd, mu, ssq
+		double val, prev, delta, dobs, upd, sigma, mu, ssq
 		long iprev, i, nobs = 0, nextidx
 
 	arr = np.asarray(a, dtype=np.float64)
@@ -241,21 +244,23 @@ def rolling_var(a, const unsigned long n,
 		raise ValueError('Value of n must be in range [0, len(a)]')
 	elif n == 0: n = arr.shape[0]
 
-	out = np.empty_like(arr)
+	out = np.empty((arr.shape[0], 2), dtype=np.float64)
 
 	if n == 0:
 		# n == 0 <==> len(a) == 0, nothing to do
 		return out
 	elif n == 1:
-		# When n is unity, variance is identically 0
-		out[:] = 0
+		# When n is unity, variance is zero and mean is input
+		out[:,0] = 0
+		out[:,1] = arr
 		return out
 
 	with nogil:
 		for i in range(n):
 			# Accumulate the values in expanding region
 			add_var(arr[i], &nobs, &mean_x, &ssqdm_x, &mean_c, &ssqdm_c)
-			out[i] = calc_var(ddof, nobs, ssqdm_x + ssqdm_c)
+			out[i,0] = calc_var(ddof, nobs, ssqdm_x + ssqdm_c)
+			out[i,1] = mean_x + mean_c
 
 		# Switch to the rolling region, allowing for resets
 		nextidx = n
@@ -275,10 +280,10 @@ def rolling_var(a, const unsigned long n,
 
 				# Simultaneous addition and removal
 				delta = val - prev
+				sigma = val + prev
 
 				# Do sum-of-squares first; it depends on old mean
-				upd = val + prev
-				upd = delta * (dobs * (upd - 2 * mu) - delta) / dobs
+				upd = delta * ((sigma - 2 * mu) - delta / dobs)
 				ssq = neumaier(&ssqdm_x, upd, &ssqdm_c)
 				# Sum-of-squares should be positive; reset
 				if ssq < 0: break
@@ -286,7 +291,8 @@ def rolling_var(a, const unsigned long n,
 				# Now update the mean
 				mu = neumaier(&mean_x, delta / dobs, &mean_c)
 
-				out[nextidx] = calc_var(ddof, nobs, ssq)
+				out[nextidx,0] = calc_var(ddof, nobs, ssq)
+				out[nextidx,1] = mu
 				nextidx += 1
 
 			# There is no need to restart; all input was processed
@@ -300,7 +306,8 @@ def rolling_var(a, const unsigned long n,
 				add_var(arr[i], &nobs, &mean_x,
 						&ssqdm_x, &mean_c, &ssqdm_c)
 
-			out[nextidx] = calc_var(ddof, nobs, ssqdm_x + ssqdm_c)
+			out[nextidx,0] = calc_var(ddof, nobs, ssqdm_x + ssqdm_c)
+			out[nextidx,1] = mu
 			nextidx += 1
 
 	return out

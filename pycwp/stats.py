@@ -96,6 +96,7 @@ def _rolling_cython_wrapper(func_name, x, n, expand=False, *args, **kwargs):
 			mx = mx.astype(dtype, copy=False)
 
 	# Return the appropriate chunk of the output
+	# Varaince has two columns, but 1-D slicing works as expected
 	if not expand: return mx[n - 1:]
 	return mx
 
@@ -109,7 +110,7 @@ def rolling_mean(x, n, expand=False, *args, **kwargs):
 
 	When expand=False, only the valid region of the rolling mean is
 	returned; for R = rolling_mean(x, n, expand=False),
-	
+
 	  R[i] = mean(x[i:n+i]), 0 <= i < len(x) - n + 1.
 
 	When expand=True and R = rolling_mean(x, n, expand=True),
@@ -121,29 +122,42 @@ def rolling_mean(x, n, expand=False, *args, **kwargs):
 	rolling mean as if expand were True, then strips out the expanding part
 	if expand is False. (The Cython routine does not provide the option to
 	strip the expanding part.) Additional arguments are passed through to
-	
+
 	  pycwp.cytools.stats.rolling_mean(x, n, *args, **kwargs).
 	'''
 	return _rolling_cython_wrapper('rolling_mean', x, n, expand, *args, **kwargs)
 
 
-def rolling_var(x, n, expand=False, *args, **kwargs):
+def rolling_var(x, n, expand=False, with_mean=False, *args, **kwargs):
 	'''
 	Performs rolling computations as described in rolling_mean, except the
-	variance is computed in place of the mean. Additional arguments are
-	passed through to
+	variance is computed in place of the mean. The variance returned by the
+	underlying function pycwp.cytools.stats.rolling_var contains two
+	columns: the first is the rolling variance, the second is the mean.
+	With with_mean is True, both columns are preserved; when false, only
+	the variance column is returned.
+
+	Additional arguments are passed through to
 
 	  pycwp.cytools.stats.rolling_var(x, n, *args, **kwargs).
 	'''
-	return _rolling_cython_wrapper('rolling_var', x, n, expand, *args, **kwargs)
+	var = _rolling_cython_wrapper('rolling_var', x, n, expand, *args, **kwargs)
+	if not with_mean: return var[:,0]
+	else: return var
 
 
 def rolling_std(*args, **kwargs):
 	'''
 	Convenience function to compute the rolling standard deviation of x as
-	sqrt(rolling_var(*args, **kwargs)).
+	sqrt(rolling_var(*args, **kwargs)). If the "with_mean" argument is
+	True, the variance has variance and mean columns; the square root is
+	applied only to the first column in this case.
 	'''
-	return numpy.sqrt(rolling_var(*args, **kwargs))
+	var = rolling_var(*args, **kwargs)
+	# If var has rank 2, the first column is variance and second is the mean
+	if var.ndim == 2: numpy.sqrt(var[:,0], out=var[:,0])
+	else: numpy.sqrt(var, out=var)
+	return var
 
 
 def rolling_rms(x, *args, **kwargs):
@@ -151,4 +165,6 @@ def rolling_rms(x, *args, **kwargs):
 	Convenience function to compute the rolling RMS of x as
 	sqrt(rolling_mean(x**2, *args, **kwargs)).
 	'''
-	return numpy.sqrt(rolling_mean(x**2, *args, **kwargs))
+	var = rolling_mean(x**2, *args, **kwargs)
+	numpy.sqrt(var, out=var)
+	return var
