@@ -255,3 +255,63 @@ def psnr (x, y):
 
 	# Compute the peak SNR in dB
 	return 10. * math.log10(maxval / err)
+
+
+def wsf(s1, s2, fl=0.0, fh=1.0):
+	'''
+	Compute and return two waveform similarity factors between signals s1
+	and s2, each as a sequence compatible with a 1-D Numpy array. The
+	lengths of s1 and s2 must be the same.
+
+	The first waveform similarity factor has the form
+
+	  WSF_1 = norm(S1 + S2) / (norm(S1) + norm(S2)),
+
+	where S1 and S2 are the complex DFTs of s1 and s2, respectively. This
+	is equivalent to the ratio of the RMS value of the signal (s1 + s2) to
+	the sum of the RMS values of s1 and s2. The second waveform similarity
+	factor has the form
+
+	  WSF_2 = 0.5 * norm(S1 + S2) / sqrt(0.5 * (norm(S1) + norm(S2))).
+
+	If fl and fh are specified, they should specify the lowest and highest
+	normalized frequencies to be included in the comparison. Specifically,
+
+	  S1 = DFT(s1)[int(fl * N):int(fh * N)],
+	  S2 = DFT(s2)[int(fl * N):int(fh * N)],
+
+	where N = len(DFT(s1)) = len(DFT(s2)) and 0 <= fl < fh <= 1.
+
+	*** NOTE: Values of fl or fh that exceed 0.5 are wrapped to (fl - 1) or
+	(fh - 1), respectively.
+	'''
+	if not 0 <= fl < fh <= 1:
+		raise ValueError('Condition 0 <= fl < fh <= 1 must hold')
+
+	s1 = numpy.asarray(s1).squeeze()
+	s2 = numpy.asarray(s2).squeeze()
+	if s1.ndim != s2.ndim or s1.ndim != 1:
+		raise ValueError('Arguments s1, s2 must be 1-D compatible')
+	elif s1.shape[0] != s2.shape[0]:
+		raise ValueError('Arguments s1, s2 must have same length')
+
+	# Convert to spectral representations
+	S1 = fft.fft(s1)
+	S2 = fft.fft(s2)
+
+	# Trim to desired frequency range
+	N = S1.shape[0]
+	l, h = int(fl * N), int(fh * N)
+	S1 = S1[l:h]
+	S2 = S2[l:h]
+
+	from numpy.linalg import norm
+
+	ns12 = norm(S1 + S2)
+	ns1 = norm(S1)
+	ns2 = norm(S2)
+
+	v1 = ns12 / (ns1 + ns2)
+	v2 = 0.5 * ns12 / numpy.sqrt(0.5 * (ns1**2 + ns2**2))
+
+	return v1, v2
