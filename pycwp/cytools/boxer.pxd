@@ -14,7 +14,7 @@ cdef class Segment3D:
 	cdef readonly double length
 
 	cdef void setends(self, point start, point end)
-	cdef int _ptdist(self, double *results, point pt, bint bounded)
+	cdef int _ptdist(self, double *results, point pt, bint bounded) nogil
 
 cdef class Triangle3D:
 	cdef point _nodes[3]
@@ -48,7 +48,4 @@ cdef class Box3D:
 	cdef bint _intersection(double *t, point l, point h,
 				point s, point e, bint halfline=*)
 
-	cdef object _raymarcher(self, point start, point end, double step=*)
-	cdef int _chkfzone(self, object hits, Segment3D seg, long *cell,
-				double l, double tlen=*, double slen=*) except -1
 	cdef void _cellForPoint(self, long *i, long *j, long *k, point p) nogil
