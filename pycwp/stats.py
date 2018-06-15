@@ -47,7 +47,7 @@ def binomial(n, k):
 	'''
 	Compute the binomial coefficient n choose k.
 	'''
-	return prod(float(n - (k - i)) / i for i in range(1, k+1))
+	return numpy.prod([float(n - (k - i)) / i for i in range(1, k+1)])
 
 
 def rolling_window(x, n):
