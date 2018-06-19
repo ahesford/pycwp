@@ -15,6 +15,7 @@ cimport numpy as np
 import itertools
 
 from cpython.mem cimport PyMem_Malloc, PyMem_Free
+from libc.math cimport fabs
 
 from ptutils cimport *
 from interpolator cimport *
@@ -1261,3 +1262,31 @@ cdef class Interpolator3D:
 
 		if not grad: return out
 		return out, grout
+
+
+	def wtsum(self, wts):
+		'''
+		Given a map wts from (possibly fractional) grid coordinates
+		(i, j, k) to integration weights, return the sum
+
+		  Sum(v * self.evaluate(*k, grad=False)
+		  	for k, v in wts.items())
+
+		computed with Neumaier summation. A ValueError will be raised
+		if any of the keys of wts specifies an out-of-points index.
+		'''
+		cdef:
+			double s = 0, c = 0, wt, f, t
+			point p
+
+		for k, v in wts.items():
+			wt = v
+			tup2pt(&p, k)
+			if not self._evaluate(&f, <point *>NULL, p):
+				raise ValueError(f'Out-of-bounds coordinates {k}')
+			f *= wt
+			t = s + f
+			if  fabs(s) >= fabs(f): c += (s - t) + f
+			else: c += (f - t) + s
+			s = t
+		return s + c
