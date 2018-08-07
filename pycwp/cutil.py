@@ -126,15 +126,20 @@ def vecnormalize(x, ord=None, axis=None):
 	return x / n[slicers]
 
 
-def waterc(t, p=1.01325):
+def waterc(t, p=1.01325, fahrenheit=False):
 	'''
 	Return the sound speed in water at a temperature of t degrees Celsius
 	and an ambient pressure p in bar (1e5 Pa). Units are mm/microsec. The
 	pressure should be absolute, and not gauge pressure (which is absolute
 	pressure less the equilibrium pressure p=1.01325 bar).
 
+	If fahrenheit is True, the input temperature is interpreted as degrees
+	Fahrenheit.
+
 	From "Fundamentals of Acoustics", Kinsler and Frey, et al., Eq. (5.22).
 	'''
+	# Compute deg F to deg C
+	if fahrenheit: t = (t - 32.) * (5. / 9.)
 	# Pressure in bar (1e5 Pa)
 	t = t / 100.
 	f1 = ((135. * t - 482.) * t + 488.) * t + 1402.7
@@ -143,7 +148,7 @@ def waterc(t, p=1.01325):
 	return c / 1000.0
 
 
-def watert(c, p=1.01325):
+def watert(c, p=1.01325, fahrenheit=False):
 	'''
 	Return the temperature in degrees Celsius of water at an ambient
 	pressure p in bar (1e5 Pa) that has a sound speed of c mm/microsec. The
@@ -154,6 +159,9 @@ def watert(c, p=1.01325):
 	be returned. An approximately real root is one that satisfies
 
 		abs(imag(v)) < abs(real(v)) * sqrt(sys.float_info.epsilon).
+
+	If fahrenheit is True, the output temperatures will be converted to
+	degrees Fahrenheit.
 	'''
 	from numpy import roots
 	# Convert to m/s (force double precision)
@@ -164,8 +172,10 @@ def watert(c, p=1.01325):
 	p = 135., 2.4 * pg - 482., 2.8 * pg + 488., 15.9 * pg + 1402.7 - c
 	# Temperature is scaled by 100; scale real-valued roots
 	eps = math.sqrt(sys.float_info.epsilon)
-	return tuple(100 * v.real for v in roots(p)
-			if abs(v.imag) < abs(v.real) * eps)
+	degc = tuple(100 * v.real for v in roots(p)
+				if abs(v.imag) < abs(v.real) * eps)
+	if not fahrenheit: return degc
+	else: return tuple(t * 9. / 5. + 32. for t in degc)
 
 
 def numdigits(m):
