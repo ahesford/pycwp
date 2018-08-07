@@ -505,7 +505,7 @@ class PinholeCamera(object):
 			raise ValueError('Input pts must be at least 1-D with a final axis of length 3')
 
 		# Pad the origin to perform camera transform
-		axpad = [np.newaxis] * (pts.ndim - 1) + [slice(None)]
+		axpad = tuple([np.newaxis] * (pts.ndim - 1) + [slice(None)])
 
 		# Shift origin and rotate to camera coordinates
 		return (pts - self.center[axpad]) @ self.rotmat.T
