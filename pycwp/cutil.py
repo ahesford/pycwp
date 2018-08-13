@@ -10,6 +10,28 @@ from itertools import count
 from functools import reduce
 
 
+def pt2line(a, b, p):
+	'''
+	Given a line that passes through points a and b (with the "positive"
+	direction pointing from a to b), return a tuple (l, n), where n is the
+	perpendicular distance from point p to the line and l is the projection
+	of p onto the line.
+	'''
+	# Compute the unit direction of the line
+	d = [bp - ap for ap, bp in zip(a, b)]
+	ld = math.sqrt(sum(dp**2 for dp in d))
+	d = [dp / ld for dp in d]
+
+	# Project the point onto the line
+	p = [pp - ap for ap, pp in zip(a, p)]
+	l = sum(dp * pp for dp, pp in zip(d, p))
+
+	# Compute the perpendicular component
+	perp = [pp - l * dp for dp, pp in zip(d, p)]
+	# Return the projection and perpendicular distance
+	return l, math.sqrt(sum(pp**2 for pp in perp))
+
+
 def overlap(lwin, rwin):
 	'''
 	For two windows lwin and rwin, each of the form (start, length), return
