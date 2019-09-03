@@ -27,8 +27,15 @@ if __name__ == '__main__':
 			description=DOCLINES[0],
 			long_description="\n".join(DOCLINES[2:]),
 			author="Andrew J. Hesford",
-			author_email="ahesford@mac.com",
-			platforms=["any"], license="Closed",
+			author_email="ajh@sideband.org",
+			platforms=["any"],
+			classifiers=[
+				'License :: OSI Approved :: BSD License',
+				'Programming Language :: Python :: 3',
+				'Intended Audience :: Developers',
+				'Topic :: Scientific/Engineering',
+				'Development Status :: 4 - Beta'
+			],
 			packages=find_packages(),
 			scripts=glob('shell/*.py'),
 			ext_modules=cythonize(extensions,
