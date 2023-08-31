@@ -1,6 +1,12 @@
 *.pyc
+*.swp
+*.swo
 build
 dist
+__pycache__
 *.egg-info
 setup.cfg
-pycwp/cytools/{boxer,eikonal,interpolator,regularize,quadrature,ptutils,stats}.c
+/pycwp/cytools/*.c
+!/pycwp/cytools/fastgl.c
+!/pycwp/cytools/kronrod.c
+/pycwp/cytools/*.html
